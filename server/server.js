@@ -12,7 +12,8 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk`;
+const APP_VERSION = process.env.APP_VERSION || '1.1.1-20260620';
+const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
   (process.env.ALLOWED_HOSTS || `${SERVER_IP},localhost,127.0.0.1`)
@@ -67,6 +68,7 @@ app.get(`${PATH_PREFIX}/health`, (req, res) => {
 app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
   res.json({
     title: '宁波三中人工智能实验室上课投屏平台',
+    apkVersion: APP_VERSION,
     apkUrl: APK_URL,
     wsPath: `${PATH_PREFIX}/ws`,
     roomTtlSeconds: Math.floor(ROOM_TTL_MS / 1000),
@@ -106,7 +108,7 @@ app.get(`${PATH_PREFIX}/myclass.apk`, (req, res) => {
       .send('myclass.apk 尚未生成，请先完成 Android 构建。');
     return;
   }
-  res.download(apkPath, 'myclass.apk');
+  res.download(apkPath, `myclass-${safeDownloadVersion(APP_VERSION)}.apk`);
 });
 
 app.use(
@@ -138,6 +140,10 @@ function normalizePrefix(prefix) {
 
 function removeTrailingSlash(value) {
   return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+function safeDownloadVersion(value) {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
 function isAllowedHost(hostHeader) {

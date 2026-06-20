@@ -15,6 +15,7 @@ const elements = {
   videoView: document.getElementById('videoView'),
   roomCode: document.getElementById('roomCode'),
   apkQr: document.getElementById('apkQr'),
+  downloadHint: document.querySelector('.download-hint'),
   statusText: document.getElementById('statusText'),
   videoStatus: document.getElementById('videoStatus'),
   remoteVideo: document.getElementById('remoteVideo')
@@ -25,7 +26,9 @@ bootstrap();
 async function bootstrap() {
   try {
     state.config = await loadConfig();
-    elements.apkQr.src = './api/apk-qrcode.svg';
+    const apkVersion = state.config?.apkVersion || 'latest';
+    elements.apkQr.src = `./api/apk-qrcode.svg?v=${encodeURIComponent(apkVersion)}`;
+    elements.downloadHint.textContent = `APP v${apkVersion}`;
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
     window.addEventListener('resize', updateVideoPresentation);

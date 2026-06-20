@@ -194,6 +194,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         root.addView(inputLayout)
         root.addView(connectButton)
         root.addView(statusText)
+        root.addView(versionLabel())
         setContentView(root)
     }
 
@@ -236,6 +237,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         root.addView(statusText)
+        root.addView(versionLabel())
         setContentView(root)
     }
 
@@ -321,6 +323,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         row.addView(stopLiveButton)
         controls.addView(row)
         controls.addView(switchButton)
+        controls.addView(versionLabel(onDark = true))
         root.addView(
             controls,
             FrameLayout.LayoutParams(
@@ -618,6 +621,26 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             true
         }
     }
+
+    private fun versionLabel(onDark: Boolean = false): TextView =
+        TextView(this).apply {
+            text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(
+                if (onDark) {
+                    Color.argb(210, 255, 255, 255)
+                } else {
+                    ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface)
+                }
+            )
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(12)
+            }
+        }
 
     private fun baseColumn(): LinearLayout =
         LinearLayout(this).apply {
