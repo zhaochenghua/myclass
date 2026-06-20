@@ -1,0 +1,14 @@
+node_modules/
+npm-debug.log*
+
+.DS_Store
+Thumbs.db
+
+web/public/myclass.apk
+
+android/AndroidStudioProject/.gradle/
+android/AndroidStudioProject/local.properties
+android/AndroidStudioProject/app/build/
+android/AndroidStudioProject/build/
+android/AndroidStudioProject/.idea/
+android/AndroidStudioProject/*.iml

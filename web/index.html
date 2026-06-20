@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>宁波三中人工智能实验室上课投屏平台</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <main class="stage" aria-live="polite">
+      <section class="join-view" id="joinView">
+        <h1 id="pageTitle">宁波三中人工智能实验室上课投屏平台</h1>
+        <div class="code-panel">
+          <div class="code-label">课堂连接码</div>
+          <div class="code-value" id="roomCode">----</div>
+          <img class="qr-code" id="apkQr" alt="APP 下载二维码">
+          <div class="download-hint">请扫描二维码安装APP</div>
+        </div>
+        <div class="status-text" id="statusText">正在创建课堂...</div>
+      </section>
+
+      <section class="video-view" id="videoView" hidden>
+        <video id="remoteVideo" autoplay playsinline muted></video>
+        <div class="video-status" id="videoStatus">等待教师连接...</div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

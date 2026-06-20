@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MyClass" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">@color/myclass_background</item>
+        <item name="android:statusBarColor">@color/myclass_background</item>
+        <item name="colorPrimary">@color/myclass_primary</item>
+        <item name="colorOnPrimary">@color/myclass_on_primary</item>
+        <item name="colorSecondary">@color/myclass_secondary</item>
+        <item name="colorSurface">@color/myclass_surface</item>
+        <item name="colorOnSurface">@color/myclass_on_surface</item>
+    </style>
+</resources>

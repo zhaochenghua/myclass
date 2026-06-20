@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="myclass_background">#071012</color>
+    <color name="myclass_surface">#102126</color>
+    <color name="myclass_primary">#38D6B3</color>
+    <color name="myclass_on_primary">#02211A</color>
+    <color name="myclass_secondary">#FFD166</color>
+    <color name="myclass_on_surface">#F4FBFF</color>
+</resources>
