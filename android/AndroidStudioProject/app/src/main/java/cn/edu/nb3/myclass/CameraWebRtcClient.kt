@@ -1,6 +1,7 @@
 package cn.edu.nb3.myclass
 
 import android.content.Context
+import android.util.Log
 import org.webrtc.Camera2Enumerator
 import org.webrtc.CameraVideoCapturer
 import org.webrtc.CandidatePairChangeEvent
@@ -45,7 +46,12 @@ class CameraWebRtcClient(
 
     init {
         initializeFactoryOnce(appContext)
+        val options = PeerConnectionFactory.Options().apply {
+            disableNetworkMonitor = BuildConfig.WEBRTC_DISABLE_NETWORK_MONITOR
+        }
+        Log.i(TAG, "Creating PeerConnectionFactory, disableNetworkMonitor=${options.disableNetworkMonitor}")
         factory = PeerConnectionFactory.builder()
+            .setOptions(options)
             .setVideoEncoderFactory(SoftwareVideoEncoderFactory())
             .setVideoDecoderFactory(SoftwareVideoDecoderFactory())
             .createPeerConnectionFactory()
@@ -88,14 +94,17 @@ class CameraWebRtcClient(
             return
         }
 
+        Log.i(TAG, "startLive: creating RTCConfiguration")
         val config = PeerConnection.RTCConfiguration(emptyList())
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         config.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
 
+        Log.i(TAG, "startLive: creating PeerConnection")
         val connection = factory.createPeerConnection(config, peerObserver())
             ?: throw IllegalStateException("无法创建 WebRTC 连接")
         peerConnection = connection
 
+        Log.i(TAG, "startLive: adding local video track")
         // Android 端只负责推送本地摄像头，浏览器端只接收。
         localVideoTrack?.let { connection.addTrack(it, listOf("myclass-stream")) }
 
@@ -104,6 +113,7 @@ class CameraWebRtcClient(
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         }
 
+        Log.i(TAG, "startLive: creating offer")
         connection.createOffer(object : SimpleSdpObserver() {
             override fun onCreateSuccess(description: SessionDescription) {
                 connection.setLocalDescription(object : SimpleSdpObserver() {
@@ -232,6 +242,7 @@ class CameraWebRtcClient(
     companion object {
         @Volatile
         private var factoryInitialized = false
+        private const val TAG = "MyClassWebRtc"
 
         private fun initializeFactoryOnce(context: Context) {
             if (factoryInitialized) {

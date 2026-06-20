@@ -6,10 +6,24 @@ plugins {
 fun String.asBuildConfigString(): String =
     "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
+fun String.asBuildConfigBoolean(name: String): String {
+    val normalized = trim().lowercase()
+    require(normalized == "true" || normalized == "false") {
+        "$name must be true or false"
+    }
+    return normalized
+}
+
 val myClassServerUrl = providers
     .gradleProperty("MYCLASS_SERVER_URL")
     .orElse("http://10.30.13.1/myclass")
     .get()
+
+val disableWebRtcNetworkMonitor = providers
+    .gradleProperty("MYCLASS_WEBRTC_DISABLE_NETWORK_MONITOR")
+    .orElse("true")
+    .get()
+    .asBuildConfigBoolean("MYCLASS_WEBRTC_DISABLE_NETWORK_MONITOR")
 
 android {
     namespace = "cn.edu.nb3.myclass"
@@ -30,6 +44,7 @@ android {
         buildConfigField("int", "VIDEO_WIDTH", "960")
         buildConfigField("int", "VIDEO_HEIGHT", "540")
         buildConfigField("int", "VIDEO_FPS", "15")
+        buildConfigField("boolean", "WEBRTC_DISABLE_NETWORK_MONITOR", disableWebRtcNetworkMonitor)
     }
 
     buildTypes {
