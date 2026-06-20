@@ -47,6 +47,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var startLiveButton: MaterialButton? = null
     private var stopLiveButton: MaterialButton? = null
     private var switchCameraButton: MaterialButton? = null
+    private var frameLockButton: MaterialButton? = null
     private var torchButton: MaterialButton? = null
     private var cameraControls: LinearLayout? = null
     private var cameraVersionLabel: TextView? = null
@@ -320,7 +321,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         switchCameraButton = cameraSecondaryButton("切换镜头").apply {
             setOnClickListener {
+                webRtcClient?.setFrameLocked(false)
+                updateFrameLockButton(isLocked = false, isEnabled = true)
                 webRtcClient?.switchCamera()
+            }
+        }
+        frameLockButton = cameraSecondaryButton("锁定画面").apply {
+            isEnabled = false
+            setOnClickListener {
+                val nextLocked = webRtcClient?.isFrameLocked() != true
+                val applied = webRtcClient?.setFrameLocked(nextLocked) == true
+                if (applied) {
+                    updateFrameLockButton(isLocked = nextLocked, isEnabled = true)
+                    toast(if (nextLocked) "画面已锁定" else "画面已恢复实时")
+                }
             }
         }
         torchButton = cameraSecondaryButton("补光灯").apply {
@@ -362,6 +376,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             )
             webRtcClient?.startPreview()
             webRtcClient?.setDeviceRotation(rawDeviceRotationDegrees)
+            updateFrameLockButton(isLocked = false, isEnabled = true)
             if (autoStartLive) {
                 startLiveFromUi()
             }
@@ -497,6 +512,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         startLiveButton = null
         stopLiveButton = null
         switchCameraButton = null
+        frameLockButton = null
         torchButton = null
         cameraControls = null
         cameraVersionLabel = null
@@ -543,16 +559,25 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    private fun updateFrameLockButton(
+        isLocked: Boolean,
+        isEnabled: Boolean = frameLockButton?.isEnabled == true
+    ) {
+        frameLockButton?.isEnabled = isEnabled
+        setCameraButtonText(frameLockButton, if (isLocked) "解除锁定" else "锁定画面")
+    }
+
     private fun updateCameraControlsLayout() {
         val controls = cameraControls ?: return
         val startButton = startLiveButton ?: return
         val stopButton = stopLiveButton ?: return
         val switchButton = switchCameraButton ?: return
+        val lockButton = frameLockButton ?: return
         val lightButton = torchButton ?: return
         val version = cameraVersionLabel ?: return
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        listOf(startButton, stopButton, switchButton, lightButton, version).forEach { view ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, version).forEach { view ->
             (view.parent as? ViewGroup)?.removeView(view)
         }
         controls.removeAllViews()
@@ -567,7 +592,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         )
 
         if (isLandscape) {
-            listOf(startButton, stopButton, switchButton, lightButton).forEach { button ->
+            listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
                 setCameraButtonTextRotation(button, -90f)
                 button.ellipsize = TextUtils.TruncateAt.END
                 button.maxLines = 1
@@ -585,7 +610,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
 
-        listOf(startButton, stopButton, switchButton, lightButton).forEach { button ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
             setCameraButtonTextRotation(button, 0f)
             button.ellipsize = TextUtils.TruncateAt.END
             button.maxLines = 1
@@ -615,12 +640,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         switchButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-            marginEnd = dp(8)
+            marginEnd = dp(6)
+        }
+        lockButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(6)
+            marginEnd = dp(6)
         }
         lightButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-            marginStart = dp(8)
+            marginStart = dp(6)
         }
         toolsRow.addView(switchButton)
+        toolsRow.addView(lockButton)
         toolsRow.addView(lightButton)
 
         version.visibility = View.VISIBLE

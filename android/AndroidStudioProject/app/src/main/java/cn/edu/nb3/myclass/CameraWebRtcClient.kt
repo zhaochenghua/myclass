@@ -158,6 +158,17 @@ class CameraWebRtcClient(
     fun isTorchSupported(): Boolean =
         videoCapturer?.isTorchSupported() == true
 
+    fun setFrameLocked(locked: Boolean): Boolean {
+        val applied = videoCapturer?.setFrameLocked(locked) == true
+        if (applied) {
+            updateStatus(if (locked) "画面已锁定" else "画面已恢复实时")
+        }
+        return applied
+    }
+
+    fun isFrameLocked(): Boolean =
+        videoCapturer?.isFrameLocked() == true
+
     fun zoomBy(scaleFactor: Float) {
         val zoomRatio = videoCapturer?.zoomBy(scaleFactor) ?: return
         updateStatus("缩放：${"%.1f".format(zoomRatio)}x")

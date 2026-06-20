@@ -54,6 +54,8 @@ class ControlledCamera2Capturer(
     private var deviceRotationDegrees = 0
     private var torchEnabled = false
     private var focusRegion: MeteringRectangle? = null
+    @Volatile
+    private var frameLocked = false
 
     override fun initialize(
         surfaceTextureHelper: SurfaceTextureHelper,
@@ -73,6 +75,7 @@ class ControlledCamera2Capturer(
                 return@runOnCameraThread
             }
             isCapturing = true
+            frameLocked = false
             zoomRatio = 1f
             torchEnabled = false
             focusRegion = null
@@ -90,6 +93,7 @@ class ControlledCamera2Capturer(
         if (handler == null) {
             val shouldNotifyStopped = isCapturing
             isCapturing = false
+            frameLocked = false
             closeCamera()
             if (shouldNotifyStopped) {
                 capturerObserver?.onCapturerStopped()
@@ -100,6 +104,7 @@ class ControlledCamera2Capturer(
         if (handler.looper.thread == Thread.currentThread()) {
             val shouldNotifyStopped = isCapturing
             isCapturing = false
+            frameLocked = false
             closeCamera()
             stopSurfaceTexture()
             if (shouldNotifyStopped) {
@@ -112,6 +117,7 @@ class ControlledCamera2Capturer(
         handler.post {
             val shouldNotifyStopped = isCapturing
             isCapturing = false
+            frameLocked = false
             closeCamera()
             stopSurfaceTexture()
             if (shouldNotifyStopped) {
@@ -154,6 +160,7 @@ class ControlledCamera2Capturer(
             zoomRatio = 1f
             torchEnabled = false
             focusRegion = null
+            frameLocked = false
             notifyCameraChanged()
             if (isCapturing) {
                 closeCamera()
@@ -178,6 +185,13 @@ class ControlledCamera2Capturer(
         updateStatus(if (torchEnabled) "补光灯已打开" else "补光灯已关闭")
         return torchEnabled
     }
+
+    fun setFrameLocked(locked: Boolean): Boolean {
+        frameLocked = locked
+        return true
+    }
+
+    fun isFrameLocked(): Boolean = frameLocked
 
     fun isTorchEnabled(): Boolean = torchEnabled
 
@@ -435,6 +449,10 @@ class ControlledCamera2Capturer(
     }
 
     private fun deliverCameraFrame(frame: VideoFrame) {
+        if (frameLocked) {
+            return
+        }
+
         val camera = currentCameraOrNull()
         val textureBuffer = frame.buffer as? VideoFrame.TextureBuffer
         if (camera == null || textureBuffer == null) {
