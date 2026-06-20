@@ -11,6 +11,7 @@ import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
+import org.webrtc.IceCandidateErrorEvent
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
@@ -229,7 +230,12 @@ class CameraWebRtcClient(
             )
         }
 
+        override fun onIceCandidateError(event: IceCandidateErrorEvent) {
+            updateStatus("ICE candidate 收集失败：${event.errorText}")
+        }
+
         override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<out MediaStream>) = Unit
+        override fun onRemoveTrack(receiver: RtpReceiver) = Unit
         override fun onTrack(transceiver: RtpTransceiver) = Unit
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) = Unit
         override fun onStandardizedIceConnectionChange(newState: PeerConnection.IceConnectionState) = Unit

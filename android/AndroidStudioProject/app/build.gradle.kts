@@ -15,6 +15,10 @@ android {
     namespace = "cn.edu.nb3.myclass"
     compileSdk = 35
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "cn.edu.nb3.myclass"
         minSdk = 26
