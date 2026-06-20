@@ -16,7 +16,8 @@ data class IceCandidatePayload(
 
 data class DeviceOrientationPayload(
     val orientation: String,
-    val rotationDegrees: Int
+    val rotationDegrees: Int,
+    val cameraFacing: String
 )
 
 class SignalingClient(
@@ -81,6 +82,7 @@ class SignalingClient(
                 .put("type", "teacher.orientation")
                 .put("orientation", orientation.orientation)
                 .put("rotationDegrees", orientation.rotationDegrees)
+                .put("cameraFacing", orientation.cameraFacing)
         )
     }
 

@@ -38,8 +38,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var startLiveButton: MaterialButton? = null
     private var stopLiveButton: MaterialButton? = null
     private var orientationListener: OrientationEventListener? = null
-    private var currentDeviceOrientation = DeviceOrientationPayload("portrait", 0)
+    private var rawDeviceRotationDegrees = 0
+    private var isUsingFrontCamera = false
+    private var currentDeviceOrientation = createDeviceOrientationPayload(0)
     private var lastSentDeviceOrientation: DeviceOrientationPayload? = null
+    private var cameraPausedForBackground = false
+    private var restartLiveOnResume = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -56,6 +60,28 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onBackPressedDispatcher.addCallback(this, backCallback)
         showConnectScreen()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (currentScreen == Screen.Camera && cameraPausedForBackground) {
+            val shouldRestartLive = restartLiveOnResume
+            cameraPausedForBackground = false
+            restartLiveOnResume = false
+            showCameraScreen(autoStartLive = shouldRestartLive)
+        }
+    }
+
+    override fun onPause() {
+        if (currentScreen == Screen.Camera && !isFinishing) {
+            cameraPausedForBackground = true
+            restartLiveOnResume = webRtcClient?.isLive() == true
+            if (restartLiveOnResume) {
+                signalingClient?.sendStop()
+            }
+            releaseCamera()
+        }
+        super.onPause()
     }
 
     override fun onDestroy() {
@@ -190,7 +216,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         setContentView(root)
     }
 
-    private fun showCameraScreen() {
+    private fun showCameraScreen(autoStartLive: Boolean = false) {
         currentScreen = Screen.Camera
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
@@ -239,19 +265,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 marginEnd = dp(8)
             }
             setOnClickListener {
-                startLiveButton?.isEnabled = false
-                stopLiveButton?.isEnabled = true
-                runCatching {
-                    sendCurrentDeviceOrientation(force = true)
-                    webRtcClient?.startLive()
-                    sendCurrentDeviceOrientation(force = true)
-                }.onFailure {
-                    stopLiveButton?.isEnabled = false
-                    startLiveButton?.isEnabled = true
-                    val message = it.message ?: "直播启动失败"
-                    updateStatus(message)
-                    toast(message)
-                }
+                startLiveFromUi()
             }
         }
         stopLiveButton = secondaryButton("停止直播").apply {
@@ -300,9 +314,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 renderer = renderer,
                 sendOffer = { signalingClient?.sendOffer(it) },
                 sendIceCandidate = { signalingClient?.sendIceCandidate(it) },
-                updateStatus = { updateStatus(it) }
+                updateStatus = { updateStatus(it) },
+                initialUseFrontCamera = isUsingFrontCamera,
+                onCameraFacingChanged = { isFrontCamera ->
+                    isUsingFrontCamera = isFrontCamera
+                    currentDeviceOrientation = createDeviceOrientationPayload(rawDeviceRotationDegrees)
+                    sendCurrentDeviceOrientation(force = true)
+                }
             )
             webRtcClient?.startPreview()
+            if (autoStartLive) {
+                startLiveFromUi()
+            }
         }.onFailure {
             updateStatus(it.message ?: "摄像头启动失败")
             toast("摄像头启动失败")
@@ -404,11 +427,29 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    private fun startLiveFromUi() {
+        startLiveButton?.isEnabled = false
+        stopLiveButton?.isEnabled = true
+        runCatching {
+            sendCurrentDeviceOrientation(force = true)
+            webRtcClient?.startLive()
+            sendCurrentDeviceOrientation(force = true)
+        }.onFailure {
+            stopLiveButton?.isEnabled = false
+            startLiveButton?.isEnabled = true
+            val message = it.message ?: "直播启动失败"
+            updateStatus(message)
+            toast(message)
+        }
+    }
+
     private fun startOrientationTracking() {
         if (orientationListener == null) {
             orientationListener = object : OrientationEventListener(this@MainActivity) {
                 override fun onOrientationChanged(orientation: Int) {
-                    val next = orientationPayloadFromDegrees(orientation) ?: return
+                    val nextRotationDegrees = rotationFromOrientationDegrees(orientation) ?: return
+                    rawDeviceRotationDegrees = nextRotationDegrees
+                    val next = createDeviceOrientationPayload(nextRotationDegrees)
                     if (next == currentDeviceOrientation) {
                         return
                     }
@@ -440,25 +481,36 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         lastSentDeviceOrientation = currentDeviceOrientation
     }
 
-    private fun orientationPayloadFromDegrees(degrees: Int): DeviceOrientationPayload? {
+    private fun rotationFromOrientationDegrees(degrees: Int): Int? {
         if (degrees == OrientationEventListener.ORIENTATION_UNKNOWN) {
             return null
         }
 
-        val rotationDegrees = when {
+        return when {
             degrees >= 315 || degrees < 45 -> 0
             degrees < 135 -> 270
             degrees < 225 -> 180
             else -> 90
         }
-        val orientation = if (rotationDegrees == 90 || rotationDegrees == 270) {
+    }
+
+    private fun createDeviceOrientationPayload(rawRotationDegrees: Int): DeviceOrientationPayload {
+        val rotationDegrees = if (!isUsingFrontCamera && rawRotationDegrees.isLandscapeRotation()) {
+            (rawRotationDegrees + 180) % 360
+        } else {
+            rawRotationDegrees
+        }
+        val orientation = if (rawRotationDegrees.isLandscapeRotation()) {
             "landscape"
         } else {
             "portrait"
         }
+        val cameraFacing = if (isUsingFrontCamera) "front" else "back"
 
-        return DeviceOrientationPayload(orientation, rotationDegrees)
+        return DeviceOrientationPayload(orientation, rotationDegrees, cameraFacing)
     }
+
+    private fun Int.isLandscapeRotation(): Boolean = this == 90 || this == 270
 
     private fun baseColumn(): LinearLayout =
         LinearLayout(this).apply {

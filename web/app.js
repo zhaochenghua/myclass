@@ -5,7 +5,8 @@ const state = {
   reconnectTimer: null,
   videoOrientation: {
     orientation: 'portrait',
-    rotationDegrees: 0
+    rotationDegrees: 0,
+    cameraFacing: 'unknown'
   }
 };
 
@@ -199,7 +200,10 @@ function handleTeacherOrientation(message) {
       message.orientation === 'landscape' || rotationDegrees === 90 || rotationDegrees === 270
         ? 'landscape'
         : 'portrait',
-    rotationDegrees
+    rotationDegrees,
+    cameraFacing: ['front', 'back'].includes(message.cameraFacing)
+      ? message.cameraFacing
+      : 'unknown'
   };
   updateVideoPresentation();
 }
@@ -212,7 +216,15 @@ function updateVideoPresentation() {
     : true;
   const shouldQuarterRotate = (rotation === 90 || rotation === 270) && videoIsPortrait;
   const shouldHalfRotate = rotation === 180 && videoIsPortrait;
-  const displayRotation = shouldQuarterRotate || shouldHalfRotate ? rotation : 0;
+  const shouldFlipLandscapeBackCamera =
+    state.videoOrientation.orientation === 'landscape' &&
+    state.videoOrientation.cameraFacing === 'back' &&
+    !videoIsPortrait;
+  const displayRotation = shouldQuarterRotate
+    ? rotation
+    : shouldHalfRotate || shouldFlipLandscapeBackCamera
+      ? 180
+      : 0;
 
   elements.videoView.classList.toggle('is-video-quarter-rotated', shouldQuarterRotate);
   elements.videoView.style.setProperty('--video-rotation', `${displayRotation}deg`);

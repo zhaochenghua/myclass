@@ -30,7 +30,9 @@ class CameraWebRtcClient(
     private val renderer: SurfaceViewRenderer,
     private val sendOffer: (String) -> Unit,
     private val sendIceCandidate: (IceCandidatePayload) -> Unit,
-    private val updateStatus: (String) -> Unit
+    private val updateStatus: (String) -> Unit,
+    private val initialUseFrontCamera: Boolean = false,
+    private val onCameraFacingChanged: (Boolean) -> Unit = {}
 ) {
     private val appContext = context.applicationContext
     private val eglBase = EglBase.create()
@@ -41,7 +43,7 @@ class CameraWebRtcClient(
     private var videoSource: VideoSource? = null
     private var localVideoTrack: VideoTrack? = null
     private var peerConnection: PeerConnection? = null
-    private var useFrontCamera = false
+    private var useFrontCamera = initialUseFrontCamera
     private var previewStarted = false
 
     init {
@@ -65,8 +67,12 @@ class CameraWebRtcClient(
         renderer.init(eglBase.eglBaseContext, null)
         renderer.setEnableHardwareScaler(true)
 
-        val capturer = createCameraCapturer()
+        val camera = createCameraCapturer()
             ?: throw IllegalStateException("未找到可用摄像头")
+        val capturer = camera.capturer
+        useFrontCamera = camera.isFrontCamera
+        renderer.setMirror(useFrontCamera)
+        onCameraFacingChanged(useFrontCamera)
 
         val textureHelper = SurfaceTextureHelper.create("MyClassCameraThread", eglBase.eglBaseContext)
         val source = factory.createVideoSource(false)
@@ -130,6 +136,8 @@ class CameraWebRtcClient(
         }, constraints)
     }
 
+    fun isLive(): Boolean = peerConnection != null
+
     fun handleAnswer(sdp: String) {
         val connection = peerConnection ?: return
         val answer = SessionDescription(SessionDescription.Type.ANSWER, sdp)
@@ -163,6 +171,7 @@ class CameraWebRtcClient(
             override fun onCameraSwitchDone(isFrontCamera: Boolean) {
                 useFrontCamera = isFrontCamera
                 renderer.setMirror(isFrontCamera)
+                onCameraFacingChanged(isFrontCamera)
                 updateStatus(if (isFrontCamera) "已切换到前置摄像头" else "已切换到后置摄像头")
             }
 
@@ -185,7 +194,7 @@ class CameraWebRtcClient(
         previewStarted = false
     }
 
-    private fun createCameraCapturer(): CameraVideoCapturer? {
+    private fun createCameraCapturer(): CameraSelection? {
         val enumerator = Camera2Enumerator(appContext)
         val names = enumerator.deviceNames
         val preferred = names.firstOrNull {
@@ -193,8 +202,18 @@ class CameraWebRtcClient(
         }
         val fallback = names.firstOrNull()
         val selected = preferred ?: fallback ?: return null
-        return enumerator.createCapturer(selected, null) as? CameraVideoCapturer
+        val capturer = enumerator.createCapturer(selected, null) as? CameraVideoCapturer
+            ?: return null
+        return CameraSelection(
+            capturer = capturer,
+            isFrontCamera = enumerator.isFrontFacing(selected)
+        )
     }
+
+    private data class CameraSelection(
+        val capturer: CameraVideoCapturer,
+        val isFrontCamera: Boolean
+    )
 
     private fun peerObserver() = object : PeerConnection.Observer {
         override fun onSignalingChange(newState: PeerConnection.SignalingState) = Unit
