@@ -2,6 +2,7 @@ package cn.edu.nb3.myclass
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
 import android.text.InputFilter
@@ -10,6 +11,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.OrientationEventListener
 import android.view.ScaleGestureDetector
+import android.view.Surface
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -63,9 +65,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        rawDeviceRotationDegrees = displayRotationDegrees()
+        currentDeviceOrientation = createDeviceOrientationPayload(rawDeviceRotationDegrees)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onBackPressedDispatcher.addCallback(this, backCallback)
         showConnectScreen()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        cameraRenderer?.requestLayout()
+        syncDeviceRotationFromDisplay(force = true)
     }
 
     override fun onResume() {
@@ -523,15 +533,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (orientationListener == null) {
             orientationListener = object : OrientationEventListener(this@MainActivity) {
                 override fun onOrientationChanged(orientation: Int) {
-                    val nextRotationDegrees = rotationFromOrientationDegrees(orientation) ?: return
-                    rawDeviceRotationDegrees = nextRotationDegrees
-                    webRtcClient?.setDeviceRotation(nextRotationDegrees)
-                    val next = createDeviceOrientationPayload(nextRotationDegrees)
-                    if (next == currentDeviceOrientation) {
-                        return
+                    if (orientation != OrientationEventListener.ORIENTATION_UNKNOWN) {
+                        syncDeviceRotationFromDisplay()
                     }
-                    currentDeviceOrientation = next
-                    sendCurrentDeviceOrientation()
                 }
             }
         }
@@ -542,7 +546,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 it.enable()
             }
         }
-        sendCurrentDeviceOrientation(force = true)
+        syncDeviceRotationFromDisplay(force = true)
     }
 
     private fun stopOrientationTracking() {
@@ -558,16 +562,24 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         lastSentDeviceOrientation = currentDeviceOrientation
     }
 
-    private fun rotationFromOrientationDegrees(degrees: Int): Int? {
-        if (degrees == OrientationEventListener.ORIENTATION_UNKNOWN) {
-            return null
+    private fun syncDeviceRotationFromDisplay(force: Boolean = false) {
+        val nextRotationDegrees = displayRotationDegrees()
+        if (!force && nextRotationDegrees == rawDeviceRotationDegrees) {
+            return
         }
+        rawDeviceRotationDegrees = nextRotationDegrees
+        webRtcClient?.setDeviceRotation(nextRotationDegrees)
+        currentDeviceOrientation = createDeviceOrientationPayload(nextRotationDegrees)
+        sendCurrentDeviceOrientation(force = force)
+    }
 
-        return when {
-            degrees >= 315 || degrees < 45 -> 0
-            degrees < 135 -> 270
-            degrees < 225 -> 180
-            else -> 90
+    @Suppress("DEPRECATION")
+    private fun displayRotationDegrees(): Int {
+        return when (windowManager.defaultDisplay.rotation) {
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
         }
     }
 
