@@ -27,9 +27,9 @@ android {
         versionName = "1.0.0"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
-        buildConfigField("Int", "VIDEO_WIDTH", "1280")
-        buildConfigField("Int", "VIDEO_HEIGHT", "720")
-        buildConfigField("Int", "VIDEO_FPS", "15")
+        buildConfigField("int", "VIDEO_WIDTH", "1280")
+        buildConfigField("int", "VIDEO_HEIGHT", "720")
+        buildConfigField("int", "VIDEO_FPS", "15")
     }
 
     buildTypes {
