@@ -57,7 +57,9 @@ class ControlledCamera2Capturer(
     @Volatile
     private var frameLocked = false
     @Volatile
-    private var lastDeliveredFrame: VideoFrame? = null
+    private var frameLockRequested = false
+    @Volatile
+    private var lockedFrame: VideoFrame? = null
 
     override fun initialize(
         surfaceTextureHelper: SurfaceTextureHelper,
@@ -78,7 +80,8 @@ class ControlledCamera2Capturer(
             }
             isCapturing = true
             frameLocked = false
-            clearLastDeliveredFrame()
+            frameLockRequested = false
+            clearLockedFrame()
             zoomRatio = 1f
             torchEnabled = false
             focusRegion = null
@@ -97,7 +100,8 @@ class ControlledCamera2Capturer(
             val shouldNotifyStopped = isCapturing
             isCapturing = false
             frameLocked = false
-            clearLastDeliveredFrame()
+            frameLockRequested = false
+            clearLockedFrame()
             closeCamera()
             if (shouldNotifyStopped) {
                 capturerObserver?.onCapturerStopped()
@@ -109,7 +113,8 @@ class ControlledCamera2Capturer(
             val shouldNotifyStopped = isCapturing
             isCapturing = false
             frameLocked = false
-            clearLastDeliveredFrame()
+            frameLockRequested = false
+            clearLockedFrame()
             closeCamera()
             stopSurfaceTexture()
             if (shouldNotifyStopped) {
@@ -123,7 +128,8 @@ class ControlledCamera2Capturer(
             val shouldNotifyStopped = isCapturing
             isCapturing = false
             frameLocked = false
-            clearLastDeliveredFrame()
+            frameLockRequested = false
+            clearLockedFrame()
             closeCamera()
             stopSurfaceTexture()
             if (shouldNotifyStopped) {
@@ -167,7 +173,8 @@ class ControlledCamera2Capturer(
             torchEnabled = false
             focusRegion = null
             frameLocked = false
-            clearLastDeliveredFrame()
+            frameLockRequested = false
+            clearLockedFrame()
             notifyCameraChanged()
             if (isCapturing) {
                 closeCamera()
@@ -194,11 +201,17 @@ class ControlledCamera2Capturer(
     }
 
     fun setFrameLocked(locked: Boolean): Boolean {
-        frameLocked = locked
+        if (locked) {
+            frameLockRequested = true
+        } else {
+            frameLockRequested = false
+            frameLocked = false
+            clearLockedFrame()
+        }
         return true
     }
 
-    fun isFrameLocked(): Boolean = frameLocked
+    fun isFrameLocked(): Boolean = frameLocked || frameLockRequested
 
     fun resendLockedFrameBurst(repeatCount: Int = 12, intervalMs: Long = 250L) {
         val handler = surfaceTextureHelper?.handler
@@ -477,7 +490,7 @@ class ControlledCamera2Capturer(
         val camera = currentCameraOrNull()
         val textureBuffer = frame.buffer as? VideoFrame.TextureBuffer
         if (camera == null || textureBuffer == null) {
-            rememberDeliveredFrame(frame)
+            lockFrameIfRequested(frame)
             capturerObserver?.onFrameCaptured(frame)
             return
         }
@@ -500,23 +513,29 @@ class ControlledCamera2Capturer(
             frameOrientation(camera),
             frame.timestampNs
         )
-        rememberDeliveredFrame(cameraFrame)
+        lockFrameIfRequested(cameraFrame)
         capturerObserver?.onFrameCaptured(cameraFrame)
         cameraFrame.release()
     }
 
-    private fun rememberDeliveredFrame(frame: VideoFrame) {
-        frame.retain()
-        val previousFrame = lastDeliveredFrame
-        lastDeliveredFrame = frame
+    private fun lockFrameIfRequested(frame: VideoFrame) {
+        if (!frameLockRequested) {
+            return
+        }
+        val copiedBuffer = frame.buffer.toI420()
+        val copiedFrame = VideoFrame(copiedBuffer, frame.rotation, frame.timestampNs)
+        val previousFrame = lockedFrame
+        lockedFrame = copiedFrame
         previousFrame?.release()
+        frameLocked = true
+        frameLockRequested = false
     }
 
     private fun repeatLockedFrameIfNeeded() {
         if (!frameLocked) {
             return
         }
-        val frame = lastDeliveredFrame ?: return
+        val frame = lockedFrame ?: return
         frame.buffer.retain()
         val repeatedFrame = VideoFrame(
             frame.buffer,
@@ -527,9 +546,9 @@ class ControlledCamera2Capturer(
         repeatedFrame.release()
     }
 
-    private fun clearLastDeliveredFrame() {
-        lastDeliveredFrame?.release()
-        lastDeliveredFrame = null
+    private fun clearLockedFrame() {
+        lockedFrame?.release()
+        lockedFrame = null
     }
 
     private fun frameOrientation(camera: CameraInfo): Int {

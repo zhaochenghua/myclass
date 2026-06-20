@@ -593,7 +593,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
-                setCameraButtonTextRotation(button, 90f)
+                setCameraButtonTextRotation(button, 0f)
                 button.ellipsize = TextUtils.TruncateAt.END
                 button.maxLines = 2
                 button.layoutParams = LinearLayout.LayoutParams(
@@ -924,7 +924,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         private fun displayLines(): List<String> {
-            if (textRotationDegrees == 0f || displayText.length <= 2) {
+            if (maxLines <= 1 || displayText.length <= 2) {
                 return listOf(displayText)
             }
             if (displayText.endsWith("补光灯")) {
