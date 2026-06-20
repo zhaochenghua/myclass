@@ -593,9 +593,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
-                setCameraButtonTextRotation(button, -90f)
+                setCameraButtonTextRotation(button, 90f)
                 button.ellipsize = TextUtils.TruncateAt.END
-                button.maxLines = 1
+                button.maxLines = 2
                 button.layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     0,
@@ -905,16 +905,41 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             val oldAlign = paint.textAlign
             paint.color = currentTextColor
             paint.textAlign = Paint.Align.CENTER
+            val lines = displayLines()
+            val fontMetrics = paint.fontMetrics
+            val lineHeight = fontMetrics.descent - fontMetrics.ascent
+            val firstBaseline = height / 2f -
+                (lineHeight * lines.size) / 2f -
+                fontMetrics.ascent
 
             canvas.save()
             canvas.rotate(textRotationDegrees, width / 2f, height / 2f)
-            val fontMetrics = paint.fontMetrics
-            val textY = height / 2f - (fontMetrics.ascent + fontMetrics.descent) / 2f
-            canvas.drawText(displayText, width / 2f, textY, paint)
+            lines.forEachIndexed { index, line ->
+                canvas.drawText(line, width / 2f, firstBaseline + index * lineHeight, paint)
+            }
             canvas.restore()
 
             paint.color = oldColor
             paint.textAlign = oldAlign
+        }
+
+        private fun displayLines(): List<String> {
+            if (textRotationDegrees == 0f || displayText.length <= 2) {
+                return listOf(displayText)
+            }
+            if (displayText.endsWith("补光灯")) {
+                val prefix = displayText.removeSuffix("补光灯")
+                return if (prefix.isBlank()) {
+                    listOf(displayText)
+                } else {
+                    listOf(prefix, "补光灯")
+                }
+            }
+            val splitIndex = displayText.length / 2
+            return listOf(
+                displayText.substring(0, splitIndex),
+                displayText.substring(splitIndex)
+            )
         }
     }
 }

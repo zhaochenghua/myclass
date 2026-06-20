@@ -124,6 +124,7 @@ class CameraWebRtcClient(
                 configureVideoSender(sender)
             }
         }
+        resendLockedFrameBurst()
 
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
@@ -169,6 +170,12 @@ class CameraWebRtcClient(
     fun isFrameLocked(): Boolean =
         videoCapturer?.isFrameLocked() == true
 
+    private fun resendLockedFrameBurst() {
+        if (videoCapturer?.isFrameLocked() == true) {
+            videoCapturer?.resendLockedFrameBurst()
+        }
+    }
+
     fun zoomBy(scaleFactor: Float) {
         val zoomRatio = videoCapturer?.zoomBy(scaleFactor) ?: return
         updateStatus("缩放：${"%.1f".format(zoomRatio)}x")
@@ -188,6 +195,7 @@ class CameraWebRtcClient(
         connection.setRemoteDescription(object : SimpleSdpObserver() {
             override fun onSetSuccess() {
                 updateStatus("教室端已接收视频")
+                resendLockedFrameBurst()
             }
 
             override fun onSetFailure(error: String) {
@@ -276,7 +284,11 @@ class CameraWebRtcClient(
         override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<out MediaStream>) = Unit
         override fun onRemoveTrack(receiver: RtpReceiver) = Unit
         override fun onTrack(transceiver: RtpTransceiver) = Unit
-        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) = Unit
+        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
+            if (newState == PeerConnection.PeerConnectionState.CONNECTED) {
+                resendLockedFrameBurst()
+            }
+        }
         override fun onStandardizedIceConnectionChange(newState: PeerConnection.IceConnectionState) = Unit
         override fun onSelectedCandidatePairChanged(event: CandidatePairChangeEvent) = Unit
     }
