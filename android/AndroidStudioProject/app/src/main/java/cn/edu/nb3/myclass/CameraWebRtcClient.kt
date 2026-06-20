@@ -109,6 +109,7 @@ class CameraWebRtcClient(
         val config = PeerConnection.RTCConfiguration(emptyList())
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         config.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+        config.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
 
         Log.i(TAG, "startLive: creating PeerConnection")
         val connection = factory.createPeerConnection(config, peerObserver())
@@ -280,7 +281,7 @@ class CameraWebRtcClient(
         @Volatile
         private var factoryInitialized = false
         private const val TAG = "MyClassWebRtc"
-        private const val VIDEO_MIN_BITRATE_BPS = 4_000_000
+        private const val VIDEO_MIN_BITRATE_BPS = 300_000
         private const val VIDEO_MAX_BITRATE_BPS = 12_000_000
 
         private fun initializeFactoryOnce(context: Context) {

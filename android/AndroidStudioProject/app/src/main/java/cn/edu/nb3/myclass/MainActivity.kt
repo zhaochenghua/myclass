@@ -568,7 +568,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             listOf(startButton, stopButton, switchButton, lightButton).forEach { button ->
-                setCameraButtonTextRotation(button, 90f)
+                setCameraButtonTextRotation(button, -90f)
                 button.ellipsize = TextUtils.TruncateAt.END
                 button.maxLines = 1
                 button.layoutParams = LinearLayout.LayoutParams(

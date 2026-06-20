@@ -138,6 +138,7 @@ function createPeerConnection() {
 
   // 教师端推送的媒体轨到达后，浏览器立即切换到全屏视频。
   peerConnection.addEventListener('track', (event) => {
+    configureLowLatencyReceiver(event.receiver);
     const [stream] = event.streams;
     if (elements.remoteVideo.srcObject !== stream) {
       elements.remoteVideo.srcObject = stream;
@@ -171,6 +172,19 @@ function createPeerConnection() {
   });
 
   return peerConnection;
+}
+
+function configureLowLatencyReceiver(receiver) {
+  if (!receiver) {
+    return;
+  }
+  try {
+    if ('playoutDelayHint' in receiver) {
+      receiver.playoutDelayHint = 0;
+    }
+  } catch (error) {
+    console.debug('low latency receiver setup skipped', error);
+  }
 }
 
 async function addRemoteCandidate(candidate) {
