@@ -2,6 +2,7 @@ package cn.edu.nb3.myclass
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
@@ -15,6 +16,7 @@ import android.util.Size
 import android.view.Surface
 import org.webrtc.CapturerObserver
 import org.webrtc.SurfaceTextureHelper
+import org.webrtc.VideoFrame
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSink
 import java.util.concurrent.CountDownLatch
@@ -191,9 +193,8 @@ class ControlledCamera2Capturer(
     }
 
     fun setDeviceRotation(rotationDegrees: Int) {
-        deviceRotationDegrees = rotationDegrees
         runOnCameraThread {
-            applyFrameRotation()
+            deviceRotationDegrees = rotationDegrees
         }
     }
 
@@ -206,10 +207,9 @@ class ControlledCamera2Capturer(
         activeCaptureHeight = size.height
         helper.setTextureSize(activeCaptureWidth, activeCaptureHeight)
         helper.surfaceTexture.setDefaultBufferSize(activeCaptureWidth, activeCaptureHeight)
-        applyFrameRotation()
         if (!isListening) {
             helper.startListening(VideoSink { frame ->
-                capturerObserver?.onFrameCaptured(frame)
+                deliverCameraFrame(frame)
             })
             isListening = true
         }
@@ -370,16 +370,6 @@ class ControlledCamera2Capturer(
         }
     }
 
-    private fun applyFrameRotation() {
-        val camera = currentCameraOrNull() ?: return
-        val rotation = if (camera.isFrontCamera) {
-            (camera.sensorOrientation + deviceRotationDegrees) % 360
-        } else {
-            (camera.sensorOrientation - deviceRotationDegrees + 360) % 360
-        }
-        surfaceTextureHelper?.setFrameRotation(rotation)
-    }
-
     private fun currentCropRegion(): Rect? {
         val camera = currentCameraOrNull() ?: return null
         val activeArray = camera.activeArray ?: return null
@@ -412,6 +402,45 @@ class ControlledCamera2Capturer(
             Rect(left, top, right, bottom),
             MeteringRectangle.METERING_WEIGHT_MAX - 1
         )
+    }
+
+    private fun deliverCameraFrame(frame: VideoFrame) {
+        val camera = currentCameraOrNull()
+        val textureBuffer = frame.buffer as? VideoFrame.TextureBuffer
+        if (camera == null || textureBuffer == null) {
+            capturerObserver?.onFrameCaptured(frame)
+            return
+        }
+
+        val transform = Matrix().apply {
+            preTranslate(0.5f, 0.5f)
+            if (camera.isFrontCamera) {
+                preScale(-1f, 1f)
+            }
+            preRotate(-camera.sensorOrientation.toFloat())
+            preTranslate(-0.5f, -0.5f)
+        }
+        val transformedBuffer = textureBuffer.applyTransformMatrix(
+            transform,
+            textureBuffer.width,
+            textureBuffer.height
+        )
+        val cameraFrame = VideoFrame(
+            transformedBuffer,
+            frameOrientation(camera),
+            frame.timestampNs
+        )
+        capturerObserver?.onFrameCaptured(cameraFrame)
+        cameraFrame.release()
+    }
+
+    private fun frameOrientation(camera: CameraInfo): Int {
+        val deviceOrientation = if (camera.isFrontCamera) {
+            deviceRotationDegrees
+        } else {
+            (360 - deviceRotationDegrees) % 360
+        }
+        return (camera.sensorOrientation + deviceOrientation) % 360
     }
 
     private fun runOnCameraThread(block: () -> Unit) {
