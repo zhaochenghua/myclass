@@ -12,7 +12,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.1.6-20260620';
+const APP_VERSION = process.env.APP_VERSION || '1.1.7-20260620';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -74,7 +74,7 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
     roomTtlSeconds: Math.floor(ROOM_TTL_MS / 1000),
     video: {
       width: 1920,
-      height: 1080,
+      height: 1440,
       fps: 24
     },
     rtc: {

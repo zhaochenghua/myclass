@@ -228,7 +228,7 @@ class CameraWebRtcClient(
         }
         val applied = sender.setParameters(parameters)
         if (applied) {
-            updateStatus("高清发送：1080p / 最高 12Mbps")
+            updateStatus("高清发送：原始比例 / 最高 12Mbps")
         } else {
             updateStatus("高清码率设置失败，继续使用默认码率")
         }

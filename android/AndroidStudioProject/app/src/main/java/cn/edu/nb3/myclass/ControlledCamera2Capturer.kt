@@ -157,6 +157,7 @@ class ControlledCamera2Capturer(
             notifyCameraChanged()
             if (isCapturing) {
                 closeCamera()
+                startSurfaceTexture()
                 openCurrentCamera()
             }
         }
@@ -561,18 +562,31 @@ class ControlledCamera2Capturer(
             return Size(captureWidth, captureHeight)
         }
 
-        val requestedPixels = captureWidth * captureHeight
+        val targetAspect = camera?.nativeAspectSize ?: Size(captureWidth, captureHeight)
+        val maxPixels = captureWidth.toLong() * captureHeight.toLong()
         val aspectMatched = sizes.filter {
-            abs(it.width * captureHeight - it.height * captureWidth) <= max(captureWidth, captureHeight)
+            aspectError(it, targetAspect) <= NATIVE_ASPECT_TOLERANCE
         }
-        return aspectMatched
-            .ifEmpty { sizes }
-            .minWithOrNull(
-                compareBy<Size> { abs(it.width * it.height - requestedPixels) }
-                    .thenByDescending { it.width * it.height }
+        val candidates = aspectMatched.ifEmpty { sizes }
+        val withinBudget = candidates.filter { it.pixelCount() <= maxPixels }
+
+        return withinBudget
+            .minWithOrNull(compareByDescending<Size> { it.pixelCount() }.thenBy { aspectError(it, targetAspect) })
+            ?: candidates.minWithOrNull(
+                compareBy<Size> { it.pixelCount() }
+                    .thenBy { aspectError(it, targetAspect) }
             )
             ?: Size(captureWidth, captureHeight)
     }
+
+    private fun aspectError(size: Size, target: Size): Double {
+        val sizeRatio = size.width.toDouble() / size.height.toDouble()
+        val targetRatio = target.width.toDouble() / target.height.toDouble()
+        return abs(sizeRatio - targetRatio) / targetRatio
+    }
+
+    private fun Size.pixelCount(): Long =
+        width.toLong() * height.toLong()
 
     private data class CameraInfo(
         val id: String,
@@ -586,6 +600,7 @@ class ControlledCamera2Capturer(
         val outputSizes: List<Size>,
         val sensorOrientation: Int,
         val supportsTorch: Boolean,
+        val nativeAspectSize: Size? = activeArray?.let { Size(it.width(), it.height()) },
         val supportsFocus: Boolean =
             maxAfRegions > 0 &&
                 afModes.any {
@@ -593,4 +608,8 @@ class ControlledCamera2Capturer(
                         it == CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
                 }
     )
+
+    private companion object {
+        private const val NATIVE_ASPECT_TOLERANCE = 0.025
+    }
 }

@@ -37,12 +37,12 @@ android {
         applicationId = "cn.edu.nb3.myclass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2026062007
-        versionName = "1.1.6-20260620"
+        versionCode = 2026062008
+        versionName = "1.1.7-20260620"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
         buildConfigField("int", "VIDEO_WIDTH", "1920")
-        buildConfigField("int", "VIDEO_HEIGHT", "1080")
+        buildConfigField("int", "VIDEO_HEIGHT", "1440")
         buildConfigField("int", "VIDEO_FPS", "24")
         buildConfigField("boolean", "WEBRTC_DISABLE_NETWORK_MONITOR", disableWebRtcNetworkMonitor)
     }
