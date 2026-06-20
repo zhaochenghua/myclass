@@ -3,15 +3,20 @@ package cn.edu.nb3.myclass
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.os.Bundle
+import android.text.TextUtils
 import android.text.InputFilter
 import android.text.InputType
+import android.util.AttributeSet
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.OrientationEventListener
 import android.view.ScaleGestureDetector
 import android.view.Surface
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -41,7 +46,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var statusText: TextView? = null
     private var startLiveButton: MaterialButton? = null
     private var stopLiveButton: MaterialButton? = null
+    private var switchCameraButton: MaterialButton? = null
     private var torchButton: MaterialButton? = null
+    private var cameraControls: LinearLayout? = null
+    private var cameraVersionLabel: TextView? = null
     private var orientationListener: OrientationEventListener? = null
     private var rawDeviceRotationDegrees = 0
     private var isUsingFrontCamera = false
@@ -76,6 +84,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         cameraRenderer?.requestLayout()
+        updateCameraControlsLayout()
         syncDeviceRotationFromDisplay(force = true)
     }
 
@@ -292,25 +301,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setPadding(dp(16), dp(16), dp(16), dp(18))
             setBackgroundColor(Color.argb(140, 0, 0, 0))
         }
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
+        cameraControls = controls
 
-        startLiveButton = primaryButton("开始直播").apply {
+        startLiveButton = cameraPrimaryButton("开始直播").apply {
             isEnabled = roomJoined
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginEnd = dp(8)
-            }
             setOnClickListener {
                 startLiveFromUi()
             }
         }
-        stopLiveButton = secondaryButton("停止直播").apply {
+        stopLiveButton = cameraSecondaryButton("停止直播").apply {
             isEnabled = false
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginStart = dp(8)
-            }
             setOnClickListener {
                 stopLiveButton?.isEnabled = false
                 startLiveButton?.isEnabled = true
@@ -318,29 +318,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 signalingClient?.sendStop()
             }
         }
-        val toolsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(12)
-            }
-        }
-        val switchButton = secondaryButton("切换镜头").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginEnd = dp(8)
-            }
+        switchCameraButton = cameraSecondaryButton("切换镜头").apply {
             setOnClickListener {
                 webRtcClient?.switchCamera()
             }
         }
-        torchButton = secondaryButton("补光灯").apply {
+        torchButton = cameraSecondaryButton("补光灯").apply {
             isEnabled = false
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginStart = dp(8)
-            }
             setOnClickListener {
                 val nextEnabled = webRtcClient?.isTorchEnabled() != true
                 val enabled = webRtcClient?.setTorchEnabled(nextEnabled) == true
@@ -350,21 +334,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 )
             }
         }
-
-        row.addView(startLiveButton)
-        row.addView(stopLiveButton)
-        controls.addView(row)
-        toolsRow.addView(switchButton)
-        toolsRow.addView(torchButton)
-        controls.addView(toolsRow)
-        controls.addView(versionLabel(onDark = true))
+        cameraVersionLabel = versionLabel(onDark = true)
+        updateCameraControlsLayout()
         root.addView(
             controls,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM
-            )
+            controls.layoutParams ?: cameraControlsLayoutParams(isLandscape = false)
         )
 
         setContentView(root)
@@ -522,7 +496,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         cameraRenderer = null
         startLiveButton = null
         stopLiveButton = null
+        switchCameraButton = null
         torchButton = null
+        cameraControls = null
+        cameraVersionLabel = null
     }
 
     private fun updateStatus(message: String) {
@@ -558,13 +535,110 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun updateTorchButton(supportsTorch: Boolean, torchEnabled: Boolean) {
         runOnUiThread {
             torchButton?.isEnabled = supportsTorch
-            torchButton?.text = when {
+            setCameraButtonText(torchButton, when {
                 !supportsTorch -> "无补光灯"
                 torchEnabled -> "关闭补光灯"
                 else -> "打开补光灯"
-            }
+            })
         }
     }
+
+    private fun updateCameraControlsLayout() {
+        val controls = cameraControls ?: return
+        val startButton = startLiveButton ?: return
+        val stopButton = stopLiveButton ?: return
+        val switchButton = switchCameraButton ?: return
+        val lightButton = torchButton ?: return
+        val version = cameraVersionLabel ?: return
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+        listOf(startButton, stopButton, switchButton, lightButton, version).forEach { view ->
+            (view.parent as? ViewGroup)?.removeView(view)
+        }
+        controls.removeAllViews()
+        controls.layoutParams = cameraControlsLayoutParams(isLandscape)
+        controls.orientation = LinearLayout.VERTICAL
+        controls.gravity = Gravity.CENTER
+        controls.setPadding(
+            if (isLandscape) dp(8) else dp(16),
+            if (isLandscape) dp(8) else dp(16),
+            if (isLandscape) dp(8) else dp(16),
+            if (isLandscape) dp(8) else dp(18)
+        )
+
+        if (isLandscape) {
+            listOf(startButton, stopButton, switchButton, lightButton).forEach { button ->
+                setCameraButtonTextRotation(button, 90f)
+                button.ellipsize = TextUtils.TruncateAt.END
+                button.maxLines = 1
+                button.layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                ).apply {
+                    topMargin = dp(4)
+                    bottomMargin = dp(4)
+                }
+                controls.addView(button)
+            }
+            version.visibility = View.GONE
+            return
+        }
+
+        listOf(startButton, stopButton, switchButton, lightButton).forEach { button ->
+            setCameraButtonTextRotation(button, 0f)
+            button.ellipsize = TextUtils.TruncateAt.END
+            button.maxLines = 1
+        }
+
+        val liveRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        startButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginEnd = dp(8)
+        }
+        stopButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(8)
+        }
+        liveRow.addView(startButton)
+        liveRow.addView(stopButton)
+
+        val toolsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(12)
+            }
+        }
+        switchButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginEnd = dp(8)
+        }
+        lightButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(8)
+        }
+        toolsRow.addView(switchButton)
+        toolsRow.addView(lightButton)
+
+        version.visibility = View.VISIBLE
+        controls.addView(liveRow)
+        controls.addView(toolsRow)
+        controls.addView(version)
+    }
+
+    private fun cameraControlsLayoutParams(isLandscape: Boolean): FrameLayout.LayoutParams =
+        if (isLandscape) {
+            FrameLayout.LayoutParams(dp(86), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END)
+        } else {
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
+        }
 
     private fun startOrientationTracking() {
         if (orientationListener == null) {
@@ -732,10 +806,85 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
         }
 
+    private fun cameraPrimaryButton(textValue: String): MaterialButton =
+        RotatedTextMaterialButton(this).apply {
+            setCameraButtonText(this, textValue)
+            textSize = 16f
+            cornerRadius = dp(8)
+        }
+
+    private fun cameraSecondaryButton(textValue: String): MaterialButton =
+        RotatedTextMaterialButton(
+            this,
+            null,
+            com.google.android.material.R.attr.materialButtonOutlinedStyle
+        ).apply {
+            setCameraButtonText(this, textValue)
+            textSize = 16f
+            cornerRadius = dp(8)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+        }
+
+    private fun setCameraButtonText(button: MaterialButton?, textValue: String) {
+        if (button is RotatedTextMaterialButton) {
+            button.displayText = textValue
+        } else {
+            button?.text = textValue
+        }
+    }
+
+    private fun setCameraButtonTextRotation(button: MaterialButton, degrees: Float) {
+        if (button is RotatedTextMaterialButton) {
+            button.textRotationDegrees = degrees
+        }
+    }
+
     private fun toast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
+
+    private class RotatedTextMaterialButton @JvmOverloads constructor(
+        context: android.content.Context,
+        attrs: AttributeSet? = null,
+        defStyleAttr: Int = com.google.android.material.R.attr.materialButtonStyle
+    ) : MaterialButton(context, attrs, defStyleAttr) {
+        var displayText: String = ""
+            set(value) {
+                field = value
+                contentDescription = value
+                super.setText("", TextView.BufferType.NORMAL)
+                invalidate()
+            }
+
+        var textRotationDegrees: Float = 0f
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            if (displayText.isBlank()) {
+                return
+            }
+
+            val oldColor = paint.color
+            val oldAlign = paint.textAlign
+            paint.color = currentTextColor
+            paint.textAlign = Paint.Align.CENTER
+
+            canvas.save()
+            canvas.rotate(textRotationDegrees, width / 2f, height / 2f)
+            val fontMetrics = paint.fontMetrics
+            val textY = height / 2f - (fontMetrics.ascent + fontMetrics.descent) / 2f
+            canvas.drawText(displayText, width / 2f, textY, paint)
+            canvas.restore()
+
+            paint.color = oldColor
+            paint.textAlign = oldAlign
+        }
+    }
 }
