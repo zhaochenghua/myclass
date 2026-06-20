@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>宁波三中人工智能实验室上课投屏平台</title>
+    <title>上课投屏平台</title>
     <link rel="stylesheet" href="./style.css">
   </head>
   <body>
     <main class="stage" aria-live="polite">
       <section class="join-view" id="joinView">
-        <h1 id="pageTitle">宁波三中人工智能实验室上课投屏平台</h1>
+        <h1 id="pageTitle">上课投屏平台</h1>
         <div class="code-panel">
           <div class="code-label">课堂连接码</div>
           <div class="code-value" id="roomCode">----</div>
@@ -17,12 +17,20 @@
           <div class="download-hint">请扫描二维码安装APP</div>
         </div>
         <div class="status-text" id="statusText">正在创建课堂...</div>
+        <div class="maintenance-note">由宁波三中人工智能实验室开发维护</div>
       </section>
 
       <section class="video-view" id="videoView" hidden>
         <video id="remoteVideo" autoplay playsinline muted></video>
         <canvas class="annotation-canvas" id="annotationCanvas"></canvas>
         <div class="annotation-toolbar" aria-label="画笔工具">
+          <div class="annotation-colors" aria-label="画笔颜色">
+            <button class="annotation-color is-active" type="button" data-color="#ffd166" aria-label="黄色"></button>
+            <button class="annotation-color" type="button" data-color="#ff4d6d" aria-label="红色"></button>
+            <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
+            <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
+            <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
+          </div>
           <button class="annotation-button" id="undoAnnotationButton" type="button">撤销</button>
           <button class="annotation-button" id="clearAnnotationButton" type="button">清空</button>
         </div>

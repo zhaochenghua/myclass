@@ -18,7 +18,8 @@ const state = {
   },
   annotations: {
     strokes: [],
-    activeStroke: null
+    activeStroke: null,
+    currentColor: '#ffd166'
   }
 };
 
@@ -33,7 +34,8 @@ const elements = {
   remoteVideo: document.getElementById('remoteVideo'),
   annotationCanvas: document.getElementById('annotationCanvas'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
-  clearAnnotationButton: document.getElementById('clearAnnotationButton')
+  clearAnnotationButton: document.getElementById('clearAnnotationButton'),
+  annotationColorButtons: Array.from(document.querySelectorAll('.annotation-color'))
 };
 
 bootstrap();
@@ -53,7 +55,11 @@ async function bootstrap() {
     elements.annotationCanvas.addEventListener('pointercancel', finishAnnotationStroke);
     elements.undoAnnotationButton.addEventListener('click', undoAnnotationStroke);
     elements.clearAnnotationButton.addEventListener('click', clearAnnotations);
+    elements.annotationColorButtons.forEach((button) => {
+      button.addEventListener('click', () => setAnnotationColor(button.dataset.color));
+    });
     updateAnnotationButtons();
+    updateAnnotationColorButtons();
     connectSignaling();
   } catch (error) {
     setWaitingStatus('服务配置加载失败，请检查服务端是否启动');
@@ -335,7 +341,7 @@ function beginAnnotationStroke(event) {
   elements.annotationCanvas.setPointerCapture(event.pointerId);
   state.annotations.activeStroke = {
     pointerId: event.pointerId,
-    color: '#ffd166',
+    color: state.annotations.currentColor,
     width: 6,
     points: [point]
   };
@@ -392,10 +398,24 @@ function clearAnnotations() {
   updateAnnotationButtons();
 }
 
+function setAnnotationColor(color) {
+  if (!color) {
+    return;
+  }
+  state.annotations.currentColor = color;
+  updateAnnotationColorButtons();
+}
+
 function updateAnnotationButtons() {
   const hasStrokes = state.annotations.strokes.length > 0;
   elements.undoAnnotationButton.disabled = !hasStrokes;
   elements.clearAnnotationButton.disabled = !hasStrokes;
+}
+
+function updateAnnotationColorButtons() {
+  elements.annotationColorButtons.forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.color === state.annotations.currentColor);
+  });
 }
 
 function pointerEventToSourcePoint(event) {

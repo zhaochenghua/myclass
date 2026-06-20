@@ -67,7 +67,7 @@ app.get(`${PATH_PREFIX}/health`, (req, res) => {
 
 app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
   res.json({
-    title: '宁波三中人工智能实验室上课投屏平台',
+    title: '上课投屏平台',
     apkVersion: APP_VERSION,
     apkUrl: APK_URL,
     wsPath: `${PATH_PREFIX}/ws`,

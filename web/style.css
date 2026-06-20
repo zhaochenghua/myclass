@@ -53,6 +53,7 @@ body::before {
 }
 
 .join-view {
+  position: relative;
   display: grid;
   grid-template-rows: auto 1fr auto;
   align-items: center;
@@ -127,6 +128,16 @@ h1 {
   text-align: center;
 }
 
+.maintenance-note {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.9rem;
+  left: 1rem;
+  color: rgba(244, 251, 255, 0.56);
+  font-size: clamp(0.78rem, 1vw, 1rem);
+  text-align: center;
+}
+
 .video-view {
   position: fixed;
   inset: 0;
@@ -166,16 +177,57 @@ video {
 
 .annotation-toolbar {
   position: absolute;
-  top: 1rem;
   right: 1rem;
-  z-index: 3;
+  bottom: 1rem;
+  z-index: 5;
   display: flex;
+  align-items: center;
   gap: 0.6rem;
   padding: 0.5rem;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.46);
   backdrop-filter: blur(12px);
+}
+
+.annotation-colors {
+  display: flex;
+  gap: 0.35rem;
+  padding-right: 0.2rem;
+}
+
+.annotation-color {
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  background: var(--annotation-color);
+}
+
+.annotation-color[data-color="#ffd166"] {
+  --annotation-color: #ffd166;
+}
+
+.annotation-color[data-color="#ff4d6d"] {
+  --annotation-color: #ff4d6d;
+}
+
+.annotation-color[data-color="#38bdf8"] {
+  --annotation-color: #38bdf8;
+}
+
+.annotation-color[data-color="#22c55e"] {
+  --annotation-color: #22c55e;
+}
+
+.annotation-color[data-color="#ffffff"] {
+  --annotation-color: #ffffff;
+}
+
+.annotation-color.is-active {
+  border-color: #000;
+  outline: 3px solid #fff;
 }
 
 .annotation-button {
