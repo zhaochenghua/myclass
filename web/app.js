@@ -209,25 +209,7 @@ function handleTeacherOrientation(message) {
 }
 
 function updateVideoPresentation() {
-  const rotation = state.videoOrientation.rotationDegrees;
-  const hasVideoSize = elements.remoteVideo.videoWidth > 0 && elements.remoteVideo.videoHeight > 0;
-  const videoIsPortrait = hasVideoSize
-    ? elements.remoteVideo.videoHeight >= elements.remoteVideo.videoWidth
-    : true;
-  const shouldQuarterRotate = (rotation === 90 || rotation === 270) && videoIsPortrait;
-  const shouldHalfRotate = rotation === 180 && videoIsPortrait;
-  const shouldFlipLandscapeBackCamera =
-    state.videoOrientation.orientation === 'landscape' &&
-    state.videoOrientation.cameraFacing === 'back' &&
-    !videoIsPortrait;
-  const displayRotation = shouldQuarterRotate
-    ? rotation
-    : shouldHalfRotate || shouldFlipLandscapeBackCamera
-      ? 180
-      : 0;
-
-  elements.videoView.classList.toggle('is-video-quarter-rotated', shouldQuarterRotate);
-  elements.videoView.style.setProperty('--video-rotation', `${displayRotation}deg`);
+  elements.videoView.dataset.orientation = state.videoOrientation.orientation;
 }
 
 function sendMessage(payload) {

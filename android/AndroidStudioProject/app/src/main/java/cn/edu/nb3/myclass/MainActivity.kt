@@ -7,7 +7,9 @@ import android.os.Bundle
 import android.text.InputFilter
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.OrientationEventListener
+import android.view.ScaleGestureDetector
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -244,6 +246,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         val renderer = SurfaceViewRenderer(this)
+        attachCameraGestures(renderer)
         cameraRenderer = renderer
         root.addView(
             renderer,
@@ -302,7 +305,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 signalingClient?.sendStop()
             }
         }
-        val switchButton = secondaryButton("切换前后摄").apply {
+        val switchButton = secondaryButton("切换镜头").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(52)
@@ -338,13 +341,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 sendIceCandidate = { signalingClient?.sendIceCandidate(it) },
                 updateStatus = { updateStatus(it) },
                 initialUseFrontCamera = isUsingFrontCamera,
-                onCameraFacingChanged = { isFrontCamera ->
+                onCameraFacingChanged = { isFrontCamera, label ->
                     isUsingFrontCamera = isFrontCamera
                     currentDeviceOrientation = createDeviceOrientationPayload(rawDeviceRotationDegrees)
                     sendCurrentDeviceOrientation(force = true)
+                    updateStatus("已切换到$label")
                 }
             )
             webRtcClient?.startPreview()
+            webRtcClient?.setDeviceRotation(rawDeviceRotationDegrees)
             if (autoStartLive) {
                 startLiveFromUi()
             }
@@ -517,6 +522,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 override fun onOrientationChanged(orientation: Int) {
                     val nextRotationDegrees = rotationFromOrientationDegrees(orientation) ?: return
                     rawDeviceRotationDegrees = nextRotationDegrees
+                    webRtcClient?.setDeviceRotation(nextRotationDegrees)
                     val next = createDeviceOrientationPayload(nextRotationDegrees)
                     if (next == currentDeviceOrientation) {
                         return
@@ -579,6 +585,39 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun Int.isLandscapeRotation(): Boolean = this == 90 || this == 270
+
+    private fun attachCameraGestures(renderer: SurfaceViewRenderer) {
+        var touchWasScaling = false
+        val scaleDetector = ScaleGestureDetector(
+            this,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    touchWasScaling = true
+                    webRtcClient?.zoomBy(detector.scaleFactor)
+                    return true
+                }
+            }
+        )
+
+        renderer.setOnTouchListener { view, event ->
+            scaleDetector.onTouchEvent(event)
+            if (event.pointerCount > 1) {
+                touchWasScaling = true
+            }
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                touchWasScaling = false
+            }
+            if (event.actionMasked == MotionEvent.ACTION_UP && !touchWasScaling) {
+                val width = view.width
+                val height = view.height
+                if (width > 0 && height > 0) {
+                    webRtcClient?.focusAt(event.x / width, event.y / height)
+                }
+                view.performClick()
+            }
+            true
+        }
+    }
 
     private fun baseColumn(): LinearLayout =
         LinearLayout(this).apply {

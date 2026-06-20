@@ -71,8 +71,8 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
     wsPath: `${PATH_PREFIX}/ws`,
     roomTtlSeconds: Math.floor(ROOM_TTL_MS / 1000),
     video: {
-      width: 1280,
-      height: 720,
+      width: 1920,
+      height: 1080,
       fps: 24
     },
     rtc: {
