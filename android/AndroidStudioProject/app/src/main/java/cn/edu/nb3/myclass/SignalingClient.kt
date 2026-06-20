@@ -17,7 +17,13 @@ data class IceCandidatePayload(
 data class DeviceOrientationPayload(
     val orientation: String,
     val rotationDegrees: Int,
-    val cameraFacing: String
+    val cameraFacing: String,
+    val frameLocked: Boolean = false,
+    val lockedFrameZoomRatio: Float = 1f,
+    val lockedFrameCropX: Float = 0f,
+    val lockedFrameCropY: Float = 0f,
+    val lockedFrameCropWidth: Float = 1f,
+    val lockedFrameCropHeight: Float = 1f
 )
 
 class SignalingClient(
@@ -83,6 +89,12 @@ class SignalingClient(
                 .put("orientation", orientation.orientation)
                 .put("rotationDegrees", orientation.rotationDegrees)
                 .put("cameraFacing", orientation.cameraFacing)
+                .put("frameLocked", orientation.frameLocked)
+                .put("lockedFrameZoomRatio", orientation.lockedFrameZoomRatio.toDouble())
+                .put("lockedFrameCropX", orientation.lockedFrameCropX.toDouble())
+                .put("lockedFrameCropY", orientation.lockedFrameCropY.toDouble())
+                .put("lockedFrameCropWidth", orientation.lockedFrameCropWidth.toDouble())
+                .put("lockedFrameCropHeight", orientation.lockedFrameCropHeight.toDouble())
         )
     }
 

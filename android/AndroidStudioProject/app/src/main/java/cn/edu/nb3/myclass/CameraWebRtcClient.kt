@@ -170,6 +170,26 @@ class CameraWebRtcClient(
     fun isFrameLocked(): Boolean =
         videoCapturer?.isFrameLocked() == true
 
+    fun lockedFrameZoomRatio(): Float =
+        videoCapturer?.lockedFrameZoomRatio() ?: 1f
+
+    fun lockedFramePresentation(): LockedFramePresentation =
+        videoCapturer?.lockedFramePresentation()
+            ?: LockedFramePresentation(
+                zoomRatio = 1f,
+                cropX = 0f,
+                cropY = 0f,
+                cropWidth = 1f,
+                cropHeight = 1f
+            )
+
+    fun refreshLockedFramePreview() {
+        if (videoCapturer?.isFrameLocked() == true) {
+            renderer.requestLayout()
+            videoCapturer?.resendLockedFrameBurst(repeatCount = 4, intervalMs = 80L)
+        }
+    }
+
     private fun resendLockedFrameBurst() {
         if (videoCapturer?.isFrameLocked() == true) {
             videoCapturer?.resendLockedFrameBurst()
@@ -180,6 +200,9 @@ class CameraWebRtcClient(
         val zoomRatio = videoCapturer?.zoomBy(scaleFactor) ?: return
         updateStatus("缩放：${"%.1f".format(zoomRatio)}x")
     }
+
+    fun panLockedFrameBy(deltaXNormalized: Float, deltaYNormalized: Float): Boolean =
+        videoCapturer?.panLockedFrameBy(deltaXNormalized, deltaYNormalized) == true
 
     fun focusAt(normalizedX: Float, normalizedY: Float) {
         videoCapturer?.focusAt(normalizedX, normalizedY)

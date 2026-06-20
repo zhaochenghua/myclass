@@ -24,6 +24,15 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
+
+data class LockedFramePresentation(
+    val zoomRatio: Float,
+    val cropX: Float,
+    val cropY: Float,
+    val cropWidth: Float,
+    val cropHeight: Float
+)
 
 class ControlledCamera2Capturer(
     context: Context,
@@ -51,6 +60,9 @@ class ControlledCamera2Capturer(
     private var isCapturing = false
     private var isListening = false
     private var zoomRatio = 1f
+    private var lockedFrameZoomRatio = 1f
+    private var lockedFramePanX = 0f
+    private var lockedFramePanY = 0f
     private var deviceRotationDegrees = 0
     private var torchEnabled = false
     private var focusRegion: MeteringRectangle? = null
@@ -83,6 +95,8 @@ class ControlledCamera2Capturer(
             frameLockRequested = false
             clearLockedFrame()
             zoomRatio = 1f
+            lockedFrameZoomRatio = 1f
+            resetLockedFramePan()
             torchEnabled = false
             focusRegion = null
             startSurfaceTexture()
@@ -170,6 +184,8 @@ class ControlledCamera2Capturer(
             }
             currentCameraIndex = (currentCameraIndex + 1) % cameras.size
             zoomRatio = 1f
+            lockedFrameZoomRatio = 1f
+            resetLockedFramePan()
             torchEnabled = false
             focusRegion = null
             frameLocked = false
@@ -202,16 +218,38 @@ class ControlledCamera2Capturer(
 
     fun setFrameLocked(locked: Boolean): Boolean {
         if (locked) {
+            lockedFrameZoomRatio = 1f
+            resetLockedFramePan()
             frameLockRequested = true
         } else {
             frameLockRequested = false
             frameLocked = false
+            lockedFrameZoomRatio = 1f
+            resetLockedFramePan()
             clearLockedFrame()
         }
         return true
     }
 
     fun isFrameLocked(): Boolean = frameLocked || frameLockRequested
+
+    fun lockedFrameZoomRatio(): Float =
+        if (frameLocked || frameLockRequested) lockedFrameZoomRatio else 1f
+
+    fun lockedFramePresentation(): LockedFramePresentation {
+        if (!frameLocked && !frameLockRequested) {
+            return FULL_FRAME_PRESENTATION
+        }
+        val rotation = currentCameraOrNull()?.let { frameOrientation(it) } ?: lockedFrame?.rotation ?: 0
+        val crop = rotateCropForDisplay(lockedFrameCropInBuffer(), rotation)
+        return LockedFramePresentation(
+            zoomRatio = lockedFrameZoomRatio,
+            cropX = crop.x,
+            cropY = crop.y,
+            cropWidth = crop.width,
+            cropHeight = crop.height
+        )
+    }
 
     fun resendLockedFrameBurst(repeatCount: Int = 12, intervalMs: Long = 250L) {
         val handler = surfaceTextureHelper?.handler
@@ -233,6 +271,25 @@ class ControlledCamera2Capturer(
 
     fun zoomBy(scaleFactor: Float): Float {
         val camera = currentCameraOrNull() ?: return zoomRatio
+        if (frameLocked || frameLockRequested) {
+            val nextLockedZoom = (lockedFrameZoomRatio * scaleFactor).coerceIn(1f, camera.maxZoom)
+            if (nextLockedZoom == lockedFrameZoomRatio) {
+                return lockedFrameZoomRatio
+            }
+            lockedFrameZoomRatio = nextLockedZoom
+            if (lockedFrameZoomRatio <= 1.01f) {
+                resetLockedFramePan()
+            } else {
+                coerceLockedFramePan()
+            }
+            runOnCameraThread {
+                if (frameLocked) {
+                    resendLockedFrameBurst(repeatCount = 4, intervalMs = 80L)
+                }
+            }
+            return lockedFrameZoomRatio
+        }
+
         val nextZoom = (zoomRatio * scaleFactor).coerceIn(1f, camera.maxZoom)
         if (nextZoom == zoomRatio) {
             return zoomRatio
@@ -243,6 +300,35 @@ class ControlledCamera2Capturer(
             applyRepeatingRequest()
         }
         return zoomRatio
+    }
+
+    fun panLockedFrameBy(deltaXNormalized: Float, deltaYNormalized: Float): Boolean {
+        if (!frameLocked || lockedFrameZoomRatio <= 1.01f || lockedFrame == null) {
+            return false
+        }
+
+        val rotation = currentCameraOrNull()?.let { frameOrientation(it) } ?: lockedFrame?.rotation ?: 0
+        val (sourceDx, sourceDy) = displayDeltaToBufferDelta(
+            deltaXNormalized,
+            deltaYNormalized,
+            rotation
+        )
+        val previousPanX = lockedFramePanX
+        val previousPanY = lockedFramePanY
+        lockedFramePanX -= sourceDx / lockedFrameZoomRatio
+        lockedFramePanY -= sourceDy / lockedFrameZoomRatio
+        coerceLockedFramePan()
+
+        if (abs(previousPanX - lockedFramePanX) < PAN_EPSILON &&
+            abs(previousPanY - lockedFramePanY) < PAN_EPSILON
+        ) {
+            return false
+        }
+
+        runOnCameraThread {
+            repeatLockedFrameIfNeeded()
+        }
+        return true
     }
 
     fun focusAt(normalizedX: Float, normalizedY: Float) {
@@ -266,7 +352,11 @@ class ControlledCamera2Capturer(
 
     fun setDeviceRotation(rotationDegrees: Int) {
         runOnCameraThread {
+            val changed = deviceRotationDegrees != rotationDegrees
             deviceRotationDegrees = rotationDegrees
+            if (changed && frameLocked) {
+                repeatLockedFrameIfNeeded()
+            }
         }
     }
 
@@ -536,14 +626,97 @@ class ControlledCamera2Capturer(
             return
         }
         val frame = lockedFrame ?: return
-        frame.buffer.retain()
+        val rotation = currentCameraOrNull()?.let { frameOrientation(it) } ?: frame.rotation
+        val buffer = lockedFrameBuffer(frame)
         val repeatedFrame = VideoFrame(
-            frame.buffer,
-            frame.rotation,
+            buffer,
+            rotation,
             System.nanoTime()
         )
         capturerObserver?.onFrameCaptured(repeatedFrame)
         repeatedFrame.release()
+    }
+
+    private fun lockedFrameBuffer(frame: VideoFrame): VideoFrame.Buffer {
+        val buffer = frame.buffer
+        if (lockedFrameZoomRatio <= 1.01f) {
+            buffer.retain()
+            return buffer
+        }
+
+        val width = buffer.width
+        val height = buffer.height
+        val crop = lockedFrameCropInBuffer()
+        val cropWidth = (width * crop.width).roundToInt().coerceIn(1, width)
+        val cropHeight = (height * crop.height).roundToInt().coerceIn(1, height)
+        val cropX = (width * crop.x)
+            .roundToInt()
+            .coerceIn(0, width - cropWidth)
+        val cropY = (height * crop.y)
+            .roundToInt()
+            .coerceIn(0, height - cropHeight)
+        return buffer.cropAndScale(cropX, cropY, cropWidth, cropHeight, width, height)
+    }
+
+    private fun lockedFrameCropInBuffer(): NormalizedCrop {
+        val zoom = lockedFrameZoomRatio.coerceAtLeast(1f)
+        val cropWidth = (1f / zoom).coerceIn(0f, 1f)
+        val cropHeight = (1f / zoom).coerceIn(0f, 1f)
+        val maxCropX = 1f - cropWidth
+        val maxCropY = 1f - cropHeight
+        return NormalizedCrop(
+            x = (maxCropX / 2f + lockedFramePanX).coerceIn(0f, maxCropX),
+            y = (maxCropY / 2f + lockedFramePanY).coerceIn(0f, maxCropY),
+            width = cropWidth,
+            height = cropHeight
+        )
+    }
+
+    private fun rotateCropForDisplay(crop: NormalizedCrop, rotation: Int): NormalizedCrop =
+        when (((rotation % 360) + 360) % 360) {
+            90 -> NormalizedCrop(
+                x = 1f - crop.y - crop.height,
+                y = crop.x,
+                width = crop.height,
+                height = crop.width
+            )
+            180 -> NormalizedCrop(
+                x = 1f - crop.x - crop.width,
+                y = 1f - crop.y - crop.height,
+                width = crop.width,
+                height = crop.height
+            )
+            270 -> NormalizedCrop(
+                x = crop.y,
+                y = 1f - crop.x - crop.width,
+                width = crop.height,
+                height = crop.width
+            )
+            else -> crop
+        }
+
+    private fun displayDeltaToBufferDelta(
+        deltaXNormalized: Float,
+        deltaYNormalized: Float,
+        rotation: Int
+    ): Pair<Float, Float> =
+        when (((rotation % 360) + 360) % 360) {
+            90 -> Pair(deltaYNormalized, -deltaXNormalized)
+            180 -> Pair(-deltaXNormalized, -deltaYNormalized)
+            270 -> Pair(-deltaYNormalized, deltaXNormalized)
+            else -> Pair(deltaXNormalized, deltaYNormalized)
+        }
+
+    private fun coerceLockedFramePan() {
+        val limit = ((lockedFrameZoomRatio - 1f) / (2f * lockedFrameZoomRatio))
+            .coerceAtLeast(0f)
+        lockedFramePanX = lockedFramePanX.coerceIn(-limit, limit)
+        lockedFramePanY = lockedFramePanY.coerceIn(-limit, limit)
+    }
+
+    private fun resetLockedFramePan() {
+        lockedFramePanX = 0f
+        lockedFramePanY = 0f
     }
 
     private fun clearLockedFrame() {
@@ -696,7 +869,22 @@ class ControlledCamera2Capturer(
                 }
     )
 
+    private data class NormalizedCrop(
+        val x: Float,
+        val y: Float,
+        val width: Float,
+        val height: Float
+    )
+
     private companion object {
         private const val NATIVE_ASPECT_TOLERANCE = 0.025
+        private const val PAN_EPSILON = 0.0005f
+        private val FULL_FRAME_PRESENTATION = LockedFramePresentation(
+            zoomRatio = 1f,
+            cropX = 0f,
+            cropY = 0f,
+            cropWidth = 1f,
+            cropHeight = 1f
+        )
     }
 }

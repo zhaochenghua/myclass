@@ -21,6 +21,11 @@
 
       <section class="video-view" id="videoView" hidden>
         <video id="remoteVideo" autoplay playsinline muted></video>
+        <canvas class="annotation-canvas" id="annotationCanvas"></canvas>
+        <div class="annotation-toolbar" aria-label="画笔工具">
+          <button class="annotation-button" id="undoAnnotationButton" type="button">撤销</button>
+          <button class="annotation-button" id="clearAnnotationButton" type="button">清空</button>
+        </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
       </section>
     </main>

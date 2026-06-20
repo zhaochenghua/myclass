@@ -18,6 +18,7 @@ import android.view.ScaleGestureDetector
 import android.view.Surface
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -87,6 +88,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         cameraRenderer?.requestLayout()
         updateCameraControlsLayout()
         syncDeviceRotationFromDisplay(force = true)
+        refreshLockedFramePreviewAfterLayout()
     }
 
     override fun onResume() {
@@ -333,6 +335,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 val applied = webRtcClient?.setFrameLocked(nextLocked) == true
                 if (applied) {
                     updateFrameLockButton(isLocked = nextLocked, isEnabled = true)
+                    sendCurrentDeviceOrientation(force = true)
                     toast(if (nextLocked) "画面已锁定" else "画面已恢复实时")
                 }
             }
@@ -696,6 +699,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun sendCurrentDeviceOrientation(force: Boolean = false) {
+        currentDeviceOrientation = createDeviceOrientationPayload(rawDeviceRotationDegrees)
         if (!force && currentDeviceOrientation == lastSentDeviceOrientation) {
             return
         }
@@ -712,6 +716,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         webRtcClient?.setDeviceRotation(nextRotationDegrees)
         currentDeviceOrientation = createDeviceOrientationPayload(nextRotationDegrees)
         sendCurrentDeviceOrientation(force = force)
+    }
+
+    private fun refreshLockedFramePreviewAfterLayout() {
+        val renderer = cameraRenderer ?: return
+        renderer.post {
+            webRtcClient?.refreshLockedFramePreview()
+            renderer.postDelayed(
+                { webRtcClient?.refreshLockedFramePreview() },
+                120L
+            )
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -736,20 +751,47 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             "portrait"
         }
         val cameraFacing = if (isUsingFrontCamera) "front" else "back"
+        val frameLocked = webRtcClient?.isFrameLocked() == true
+        val lockedFramePresentation = webRtcClient?.lockedFramePresentation()
+            ?: LockedFramePresentation(
+                zoomRatio = 1f,
+                cropX = 0f,
+                cropY = 0f,
+                cropWidth = 1f,
+                cropHeight = 1f
+            )
 
-        return DeviceOrientationPayload(orientation, rotationDegrees, cameraFacing)
+        return DeviceOrientationPayload(
+            orientation = orientation,
+            rotationDegrees = rotationDegrees,
+            cameraFacing = cameraFacing,
+            frameLocked = frameLocked,
+            lockedFrameZoomRatio = lockedFramePresentation.zoomRatio,
+            lockedFrameCropX = lockedFramePresentation.cropX,
+            lockedFrameCropY = lockedFramePresentation.cropY,
+            lockedFrameCropWidth = lockedFramePresentation.cropWidth,
+            lockedFrameCropHeight = lockedFramePresentation.cropHeight
+        )
     }
 
     private fun Int.isLandscapeRotation(): Boolean = this == 90 || this == 270
 
     private fun attachCameraGestures(renderer: SurfaceViewRenderer) {
         var touchWasScaling = false
+        var touchWasDragging = false
+        var lastTouchX = 0f
+        var lastTouchY = 0f
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+        val touchSlopSquared = touchSlop * touchSlop
         val scaleDetector = ScaleGestureDetector(
             this,
             object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
                     touchWasScaling = true
                     webRtcClient?.zoomBy(detector.scaleFactor)
+                    if (webRtcClient?.isFrameLocked() == true) {
+                        sendCurrentDeviceOrientation(force = true)
+                    }
                     return true
                 }
             }
@@ -762,8 +804,33 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                 touchWasScaling = false
+                touchWasDragging = false
+                lastTouchX = event.x
+                lastTouchY = event.y
             }
-            if (event.actionMasked == MotionEvent.ACTION_UP && !touchWasScaling) {
+            if (event.actionMasked == MotionEvent.ACTION_MOVE &&
+                event.pointerCount == 1 &&
+                !touchWasScaling &&
+                webRtcClient?.isFrameLocked() == true
+            ) {
+                val dx = event.x - lastTouchX
+                val dy = event.y - lastTouchY
+                if (touchWasDragging || dx * dx + dy * dy >= touchSlopSquared) {
+                    val width = view.width.coerceAtLeast(1)
+                    val height = view.height.coerceAtLeast(1)
+                    if (webRtcClient?.panLockedFrameBy(dx / width, dy / height) == true) {
+                        touchWasDragging = true
+                        sendCurrentDeviceOrientation(force = true)
+                    }
+                    lastTouchX = event.x
+                    lastTouchY = event.y
+                }
+            }
+            if (event.actionMasked == MotionEvent.ACTION_UP &&
+                !touchWasScaling &&
+                !touchWasDragging &&
+                webRtcClient?.isFrameLocked() != true
+            ) {
                 val width = view.width
                 val height = view.height
                 if (width > 0 && height > 0) {
