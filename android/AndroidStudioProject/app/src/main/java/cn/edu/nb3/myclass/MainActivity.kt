@@ -43,7 +43,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (result.values.all { it }) {
             showCameraScreen()
         } else {
-            toast("需要摄像头和麦克风权限才能直播")
+            toast("需要摄像头权限才能直播")
         }
     }
 
@@ -236,7 +236,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 startLiveButton?.isEnabled = false
                 stopLiveButton?.isEnabled = true
-                webRtcClient?.startLive()
+                runCatching {
+                    webRtcClient?.startLive()
+                }.onFailure {
+                    stopLiveButton?.isEnabled = false
+                    startLiveButton?.isEnabled = true
+                    val message = it.message ?: "直播启动失败"
+                    updateStatus(message)
+                    toast(message)
+                }
             }
         }
         stopLiveButton = secondaryButton("停止直播").apply {
@@ -304,8 +312,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun ensureCameraPermissions() {
         val permissions = arrayOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO
+            Manifest.permission.CAMERA
         )
         val allGranted = permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED

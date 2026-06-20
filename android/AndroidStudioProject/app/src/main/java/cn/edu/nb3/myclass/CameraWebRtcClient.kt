@@ -1,8 +1,6 @@
 package cn.edu.nb3.myclass
 
 import android.content.Context
-import org.webrtc.AudioSource
-import org.webrtc.AudioTrack
 import org.webrtc.Camera2Enumerator
 import org.webrtc.CameraVideoCapturer
 import org.webrtc.CandidatePairChangeEvent
@@ -40,9 +38,7 @@ class CameraWebRtcClient(
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var videoCapturer: CameraVideoCapturer? = null
     private var videoSource: VideoSource? = null
-    private var audioSource: AudioSource? = null
     private var localVideoTrack: VideoTrack? = null
-    private var localAudioTrack: AudioTrack? = null
     private var peerConnection: PeerConnection? = null
     private var useFrontCamera = false
     private var previewStarted = false
@@ -81,17 +77,10 @@ class CameraWebRtcClient(
         videoTrack.setEnabled(true)
         videoTrack.addSink(renderer)
 
-        val audio = factory.createAudioSource(MediaConstraints())
-        val audioTrack = factory.createAudioTrack("myclass-audio", audio)
-        // 当前阶段音频只预留链路，默认静音，后续需要时直接打开即可。
-        audioTrack.setEnabled(false)
-
         surfaceTextureHelper = textureHelper
         videoCapturer = capturer
         videoSource = source
-        audioSource = audio
         localVideoTrack = videoTrack
-        localAudioTrack = audioTrack
         previewStarted = true
         updateStatus("摄像头预览已启动")
     }
@@ -115,7 +104,6 @@ class CameraWebRtcClient(
 
         // Android 端只负责推送本地摄像头，浏览器端只接收。
         localVideoTrack?.let { connection.addTrack(it, listOf("myclass-stream")) }
-        localAudioTrack?.let { connection.addTrack(it, listOf("myclass-stream")) }
 
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
@@ -187,9 +175,7 @@ class CameraWebRtcClient(
         videoCapturer?.dispose()
         surfaceTextureHelper?.dispose()
         localVideoTrack?.dispose()
-        localAudioTrack?.dispose()
         videoSource?.dispose()
-        audioSource?.dispose()
         factory.dispose()
         eglBase.release()
         previewStarted = false
