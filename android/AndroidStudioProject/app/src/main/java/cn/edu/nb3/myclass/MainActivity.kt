@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var statusText: TextView? = null
     private var startLiveButton: MaterialButton? = null
     private var stopLiveButton: MaterialButton? = null
+    private var torchButton: MaterialButton? = null
     private var orientationListener: OrientationEventListener? = null
     private var rawDeviceRotationDegrees = 0
     private var isUsingFrontCamera = false
@@ -317,22 +318,45 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 signalingClient?.sendStop()
             }
         }
-        val switchButton = secondaryButton("切换镜头").apply {
+        val toolsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(52)
+                ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
                 topMargin = dp(12)
             }
+        }
+        val switchButton = secondaryButton("切换镜头").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                marginEnd = dp(8)
+            }
             setOnClickListener {
                 webRtcClient?.switchCamera()
+            }
+        }
+        torchButton = secondaryButton("补光灯").apply {
+            isEnabled = false
+            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                marginStart = dp(8)
+            }
+            setOnClickListener {
+                val nextEnabled = webRtcClient?.isTorchEnabled() != true
+                val enabled = webRtcClient?.setTorchEnabled(nextEnabled) == true
+                updateTorchButton(
+                    supportsTorch = webRtcClient?.isTorchSupported() == true,
+                    torchEnabled = enabled
+                )
             }
         }
 
         row.addView(startLiveButton)
         row.addView(stopLiveButton)
         controls.addView(row)
-        controls.addView(switchButton)
+        toolsRow.addView(switchButton)
+        toolsRow.addView(torchButton)
+        controls.addView(toolsRow)
         controls.addView(versionLabel(onDark = true))
         root.addView(
             controls,
@@ -354,10 +378,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 sendIceCandidate = { signalingClient?.sendIceCandidate(it) },
                 updateStatus = { updateStatus(it) },
                 initialUseFrontCamera = isUsingFrontCamera,
-                onCameraFacingChanged = { isFrontCamera, label ->
+                onCameraFacingChanged = { isFrontCamera, label, supportsTorch, torchEnabled ->
                     isUsingFrontCamera = isFrontCamera
                     currentDeviceOrientation = createDeviceOrientationPayload(rawDeviceRotationDegrees)
                     sendCurrentDeviceOrientation(force = true)
+                    updateTorchButton(supportsTorch, torchEnabled)
                     updateStatus("已切换到$label")
                 }
             )
@@ -497,6 +522,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         cameraRenderer = null
         startLiveButton = null
         stopLiveButton = null
+        torchButton = null
     }
 
     private fun updateStatus(message: String) {
@@ -526,6 +552,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             val message = it.message ?: "直播启动失败"
             updateStatus(message)
             toast(message)
+        }
+    }
+
+    private fun updateTorchButton(supportsTorch: Boolean, torchEnabled: Boolean) {
+        runOnUiThread {
+            torchButton?.isEnabled = supportsTorch
+            torchButton?.text = when {
+                !supportsTorch -> "无补光灯"
+                torchEnabled -> "关闭补光灯"
+                else -> "打开补光灯"
+            }
         }
     }
 

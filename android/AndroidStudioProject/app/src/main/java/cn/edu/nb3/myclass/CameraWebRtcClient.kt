@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import org.webrtc.CandidatePairChangeEvent
 import org.webrtc.DataChannel
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.IceCandidateErrorEvent
@@ -12,12 +14,12 @@ import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RendererCommon
+import org.webrtc.RtpParameters
 import org.webrtc.RtpReceiver
+import org.webrtc.RtpSender
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
-import org.webrtc.SoftwareVideoDecoderFactory
-import org.webrtc.SoftwareVideoEncoderFactory
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoSource
@@ -30,7 +32,7 @@ class CameraWebRtcClient(
     private val sendIceCandidate: (IceCandidatePayload) -> Unit,
     private val updateStatus: (String) -> Unit,
     private val initialUseFrontCamera: Boolean = false,
-    private val onCameraFacingChanged: (Boolean, String) -> Unit = { _, _ -> }
+    private val onCameraFacingChanged: (Boolean, String, Boolean, Boolean) -> Unit = { _, _, _, _ -> }
 ) {
     private val appContext = context.applicationContext
     private val eglBase = EglBase.create()
@@ -40,6 +42,7 @@ class CameraWebRtcClient(
     private var videoCapturer: ControlledCamera2Capturer? = null
     private var videoSource: VideoSource? = null
     private var localVideoTrack: VideoTrack? = null
+    private var localVideoSender: RtpSender? = null
     private var peerConnection: PeerConnection? = null
     private var useFrontCamera = initialUseFrontCamera
     private var previewStarted = false
@@ -52,8 +55,8 @@ class CameraWebRtcClient(
         Log.i(TAG, "Creating PeerConnectionFactory, disableNetworkMonitor=${options.disableNetworkMonitor}")
         factory = PeerConnectionFactory.builder()
             .setOptions(options)
-            .setVideoEncoderFactory(SoftwareVideoEncoderFactory())
-            .setVideoDecoderFactory(SoftwareVideoDecoderFactory())
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
     }
 
@@ -71,10 +74,10 @@ class CameraWebRtcClient(
         val capturer = ControlledCamera2Capturer(
             context = appContext,
             initialUseFrontCamera = useFrontCamera,
-            onCameraChanged = { isFrontCamera, label ->
+            onCameraChanged = { isFrontCamera, label, supportsTorch, torchEnabled ->
                 useFrontCamera = isFrontCamera
                 renderer.setMirror(isFrontCamera)
-                onCameraFacingChanged(isFrontCamera, label)
+                onCameraFacingChanged(isFrontCamera, label, supportsTorch, torchEnabled)
             },
             updateStatus = updateStatus
         )
@@ -114,7 +117,12 @@ class CameraWebRtcClient(
 
         Log.i(TAG, "startLive: adding local video track")
         // Android 端只负责推送本地摄像头，浏览器端只接收。
-        localVideoTrack?.let { connection.addTrack(it, listOf("myclass-stream")) }
+        localVideoTrack?.let {
+            connection.addTrack(it, listOf("myclass-stream"))?.also { sender ->
+                localVideoSender = sender
+                configureVideoSender(sender)
+            }
+        }
 
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
@@ -139,6 +147,15 @@ class CameraWebRtcClient(
     }
 
     fun isLive(): Boolean = peerConnection != null
+
+    fun setTorchEnabled(enabled: Boolean): Boolean =
+        videoCapturer?.setTorchEnabled(enabled) == true
+
+    fun isTorchEnabled(): Boolean =
+        videoCapturer?.isTorchEnabled() == true
+
+    fun isTorchSupported(): Boolean =
+        videoCapturer?.isTorchSupported() == true
 
     fun zoomBy(scaleFactor: Float) {
         val zoomRatio = videoCapturer?.zoomBy(scaleFactor) ?: return
@@ -177,6 +194,7 @@ class CameraWebRtcClient(
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
+        localVideoSender = null
         updateStatus("直播已停止，摄像头预览保留")
     }
 
@@ -195,6 +213,24 @@ class CameraWebRtcClient(
         factory.dispose()
         eglBase.release()
         previewStarted = false
+    }
+
+    private fun configureVideoSender(sender: RtpSender) {
+        val parameters = sender.parameters
+        parameters.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+        parameters.encodings.forEach { encoding ->
+            encoding.active = true
+            encoding.minBitrateBps = VIDEO_MIN_BITRATE_BPS
+            encoding.maxBitrateBps = VIDEO_MAX_BITRATE_BPS
+            encoding.maxFramerate = BuildConfig.VIDEO_FPS
+            encoding.scaleResolutionDownBy = 1.0
+        }
+        val applied = sender.setParameters(parameters)
+        if (applied) {
+            updateStatus("高清发送：1080p / 最高 12Mbps")
+        } else {
+            updateStatus("高清码率设置失败，继续使用默认码率")
+        }
     }
 
     private fun peerObserver() = object : PeerConnection.Observer {
@@ -244,6 +280,8 @@ class CameraWebRtcClient(
         @Volatile
         private var factoryInitialized = false
         private const val TAG = "MyClassWebRtc"
+        private const val VIDEO_MIN_BITRATE_BPS = 4_000_000
+        private const val VIDEO_MAX_BITRATE_BPS = 12_000_000
 
         private fun initializeFactoryOnce(context: Context) {
             if (factoryInitialized) {

@@ -28,7 +28,7 @@ import kotlin.math.min
 class ControlledCamera2Capturer(
     context: Context,
     initialUseFrontCamera: Boolean,
-    private val onCameraChanged: (Boolean, String) -> Unit,
+    private val onCameraChanged: (Boolean, String, Boolean, Boolean) -> Unit,
     private val updateStatus: (String) -> Unit
 ) : VideoCapturer {
     private val appContext = context.applicationContext
@@ -52,6 +52,7 @@ class ControlledCamera2Capturer(
     private var isListening = false
     private var zoomRatio = 1f
     private var deviceRotationDegrees = 0
+    private var torchEnabled = false
     private var focusRegion: MeteringRectangle? = null
 
     override fun initialize(
@@ -73,6 +74,7 @@ class ControlledCamera2Capturer(
             }
             isCapturing = true
             zoomRatio = 1f
+            torchEnabled = false
             focusRegion = null
             startSurfaceTexture()
             openCurrentCamera()
@@ -150,6 +152,7 @@ class ControlledCamera2Capturer(
             }
             currentCameraIndex = (currentCameraIndex + 1) % cameras.size
             zoomRatio = 1f
+            torchEnabled = false
             focusRegion = null
             notifyCameraChanged()
             if (isCapturing) {
@@ -158,6 +161,26 @@ class ControlledCamera2Capturer(
             }
         }
     }
+
+    fun setTorchEnabled(enabled: Boolean): Boolean {
+        val camera = currentCameraOrNull() ?: return false
+        if (enabled && !camera.supportsTorch) {
+            torchEnabled = false
+            updateStatus("当前镜头不支持补光灯")
+            return false
+        }
+
+        torchEnabled = enabled && camera.supportsTorch
+        runOnCameraThread {
+            applyRepeatingRequest()
+        }
+        updateStatus(if (torchEnabled) "补光灯已打开" else "补光灯已关闭")
+        return torchEnabled
+    }
+
+    fun isTorchEnabled(): Boolean = torchEnabled
+
+    fun isTorchSupported(): Boolean = currentCameraOrNull()?.supportsTorch == true
 
     fun zoomBy(scaleFactor: Float): Float {
         val camera = currentCameraOrNull() ?: return zoomRatio
@@ -349,6 +372,12 @@ class ControlledCamera2Capturer(
             builder.set(CaptureRequest.SCALER_CROP_REGION, it)
         }
         val camera = currentCameraOrNull()
+        if (camera?.supportsTorch == true) {
+            builder.set(
+                CaptureRequest.FLASH_MODE,
+                if (torchEnabled) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
+            )
+        }
         focusRegion?.let {
             if ((camera?.maxAfRegions ?: 0) > 0) {
                 builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it))
@@ -454,7 +483,7 @@ class ControlledCamera2Capturer(
 
     private fun notifyCameraChanged() {
         val camera = currentCameraOrNull() ?: return
-        onCameraChanged(camera.isFrontCamera, camera.label)
+        onCameraChanged(camera.isFrontCamera, camera.label, camera.supportsTorch, torchEnabled)
     }
 
     private fun currentCameraOrNull(): CameraInfo? = cameras.getOrNull(currentCameraIndex)
@@ -486,6 +515,7 @@ class ControlledCamera2Capturer(
             val maxAfRegions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
             val maxAeRegions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
             val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            val supportsTorch = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                 ?: floatArrayOf()
             val outputSizes = characteristics
@@ -504,7 +534,8 @@ class ControlledCamera2Capturer(
                 maxAfRegions = maxAfRegions,
                 maxAeRegions = maxAeRegions,
                 outputSizes = outputSizes,
-                sensorOrientation = sensorOrientation
+                sensorOrientation = sensorOrientation,
+                supportsTorch = supportsTorch
             )
         }.ifEmpty {
             emptyList()
@@ -554,6 +585,7 @@ class ControlledCamera2Capturer(
         val maxAeRegions: Int,
         val outputSizes: List<Size>,
         val sensorOrientation: Int,
+        val supportsTorch: Boolean,
         val supportsFocus: Boolean =
             maxAfRegions > 0 &&
                 afModes.any {
