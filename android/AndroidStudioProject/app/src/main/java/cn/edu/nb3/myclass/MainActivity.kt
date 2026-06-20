@@ -42,8 +42,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var isUsingFrontCamera = false
     private var currentDeviceOrientation = createDeviceOrientationPayload(0)
     private var lastSentDeviceOrientation: DeviceOrientationPayload? = null
+    private var activeRoomCode: String? = null
+    private var roomJoined = false
     private var cameraPausedForBackground = false
     private var restartLiveOnResume = false
+    private var resumeCameraAfterJoin = false
+    private var resumeLiveAfterJoin = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -66,9 +70,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         super.onResume()
         if (currentScreen == Screen.Camera && cameraPausedForBackground) {
             val shouldRestartLive = restartLiveOnResume
+            val roomCode = activeRoomCode
             cameraPausedForBackground = false
             restartLiveOnResume = false
-            showCameraScreen(autoStartLive = shouldRestartLive)
+            if (roomCode == null) {
+                toast("请重新输入连接码")
+                showConnectScreen()
+                return
+            }
+            showCameraScreen()
+            updateStatus("正在重新连接教室端...")
+            connectToRoom(
+                code = roomCode,
+                resumeCameraAfterJoin = true,
+                resumeLiveAfterJoin = shouldRestartLive
+            )
         }
     }
 
@@ -80,6 +96,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 signalingClient?.sendStop()
             }
             releaseCamera()
+            roomJoined = false
+            signalingClient?.close()
+            signalingClient = null
         }
         super.onPause()
     }
@@ -101,6 +120,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 Screen.Menu -> {
                     signalingClient?.close()
                     signalingClient = null
+                    activeRoomCode = null
+                    roomJoined = false
                     showConnectScreen()
                 }
                 Screen.Connect -> {
@@ -261,6 +282,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         startLiveButton = primaryButton("开始直播").apply {
+            isEnabled = roomJoined
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
                 marginEnd = dp(8)
             }
@@ -332,7 +354,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    private fun connectToRoom(code: String) {
+    private fun connectToRoom(
+        code: String,
+        resumeCameraAfterJoin: Boolean = false,
+        resumeLiveAfterJoin: Boolean = false
+    ) {
+        activeRoomCode = code
+        roomJoined = false
+        this.resumeCameraAfterJoin = resumeCameraAfterJoin
+        this.resumeLiveAfterJoin = resumeLiveAfterJoin
+        startLiveButton?.isEnabled = false
         signalingClient?.close()
         signalingClient = SignalingClient(
             serverBaseUrl = BuildConfig.SERVER_BASE_URL,
@@ -357,13 +388,36 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onJoinAccepted() {
         runOnUiThread {
+            roomJoined = true
+            val shouldResumeCamera = resumeCameraAfterJoin
+            val shouldResumeLive = resumeLiveAfterJoin
+            resumeCameraAfterJoin = false
+            resumeLiveAfterJoin = false
             toast("连接成功")
-            showMenuScreen()
+
+            if (shouldResumeCamera || currentScreen == Screen.Camera) {
+                if (currentScreen != Screen.Camera || webRtcClient == null) {
+                    showCameraScreen(autoStartLive = shouldResumeLive)
+                } else {
+                    updateStatus("教室端已重新连接")
+                    startLiveButton?.isEnabled = true
+                    sendCurrentDeviceOrientation(force = true)
+                    if (shouldResumeLive) {
+                        startLiveFromUi()
+                    }
+                }
+            } else {
+                showMenuScreen()
+            }
         }
     }
 
     override fun onJoinRejected(message: String) {
         runOnUiThread {
+            activeRoomCode = null
+            roomJoined = false
+            resumeCameraAfterJoin = false
+            resumeLiveAfterJoin = false
             toast(message)
             signalingClient?.close()
             signalingClient = null
@@ -376,6 +430,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             releaseCamera()
             signalingClient?.close()
             signalingClient = null
+            activeRoomCode = null
+            roomJoined = false
             toast(message)
             showConnectScreen()
         }
@@ -386,6 +442,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             releaseCamera()
             signalingClient?.close()
             signalingClient = null
+            activeRoomCode = null
+            roomJoined = false
             toast(message)
             showConnectScreen()
         }
@@ -401,6 +459,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onSignalError(message: String) {
         runOnUiThread {
+            roomJoined = false
+            startLiveButton?.isEnabled = false
             updateStatus(message)
             toast(message)
             if (currentScreen == Screen.Connect) {
@@ -428,6 +488,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun startLiveFromUi() {
+        if (!roomJoined) {
+            updateStatus("正在重新连接教室端...")
+            toast("正在重新连接教室端")
+            startLiveButton?.isEnabled = false
+            stopLiveButton?.isEnabled = false
+            return
+        }
+
         startLiveButton?.isEnabled = false
         stopLiveButton?.isEnabled = true
         runCatching {

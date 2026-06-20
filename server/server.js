@@ -73,7 +73,7 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
     video: {
       width: 1280,
       height: 720,
-      fps: 15
+      fps: 24
     },
     rtc: {
       iceServers: []

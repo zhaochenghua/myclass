@@ -41,9 +41,9 @@ android {
         versionName = "1.0.0"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
-        buildConfigField("int", "VIDEO_WIDTH", "960")
-        buildConfigField("int", "VIDEO_HEIGHT", "540")
-        buildConfigField("int", "VIDEO_FPS", "15")
+        buildConfigField("int", "VIDEO_WIDTH", "1280")
+        buildConfigField("int", "VIDEO_HEIGHT", "720")
+        buildConfigField("int", "VIDEO_FPS", "24")
         buildConfigField("boolean", "WEBRTC_DISABLE_NETWORK_MONITOR", disableWebRtcNetworkMonitor)
     }
 
