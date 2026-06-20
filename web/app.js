@@ -2,7 +2,11 @@ const state = {
   socket: null,
   peerConnection: null,
   config: null,
-  reconnectTimer: null
+  reconnectTimer: null,
+  videoOrientation: {
+    orientation: 'portrait',
+    rotationDegrees: 0
+  }
 };
 
 const elements = {
@@ -21,6 +25,9 @@ async function bootstrap() {
   try {
     state.config = await loadConfig();
     elements.apkQr.src = './api/apk-qrcode.svg';
+    elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
+    elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
+    window.addEventListener('resize', updateVideoPresentation);
     connectSignaling();
   } catch (error) {
     setWaitingStatus('服务配置加载失败，请检查服务端是否启动');
@@ -84,6 +91,9 @@ async function handleSignalMessage(message) {
     case 'webrtc.ice-candidate':
       await addRemoteCandidate(message.candidate);
       break;
+    case 'teacher.orientation':
+      handleTeacherOrientation(message);
+      break;
     case 'teacher.stop':
       cleanupPeerConnection();
       showJoinView();
@@ -129,6 +139,7 @@ function createPeerConnection() {
       elements.remoteVideo.srcObject = stream;
     }
     showVideoView();
+    updateVideoPresentation();
     elements.videoStatus.textContent = '';
     elements.remoteVideo.play().catch(() => {
       elements.videoStatus.textContent = '点击页面开始播放视频';
@@ -175,6 +186,36 @@ function cleanupPeerConnection() {
     state.peerConnection = null;
   }
   elements.remoteVideo.srcObject = null;
+}
+
+function handleTeacherOrientation(message) {
+  const rotationDegrees = Number(message.rotationDegrees);
+  if (![0, 90, 180, 270].includes(rotationDegrees)) {
+    return;
+  }
+
+  state.videoOrientation = {
+    orientation:
+      message.orientation === 'landscape' || rotationDegrees === 90 || rotationDegrees === 270
+        ? 'landscape'
+        : 'portrait',
+    rotationDegrees
+  };
+  updateVideoPresentation();
+}
+
+function updateVideoPresentation() {
+  const rotation = state.videoOrientation.rotationDegrees;
+  const hasVideoSize = elements.remoteVideo.videoWidth > 0 && elements.remoteVideo.videoHeight > 0;
+  const videoIsPortrait = hasVideoSize
+    ? elements.remoteVideo.videoHeight >= elements.remoteVideo.videoWidth
+    : true;
+  const shouldQuarterRotate = (rotation === 90 || rotation === 270) && videoIsPortrait;
+  const shouldHalfRotate = rotation === 180 && videoIsPortrait;
+  const displayRotation = shouldQuarterRotate || shouldHalfRotate ? rotation : 0;
+
+  elements.videoView.classList.toggle('is-video-quarter-rotated', shouldQuarterRotate);
+  elements.videoView.style.setProperty('--video-rotation', `${displayRotation}deg`);
 }
 
 function sendMessage(payload) {

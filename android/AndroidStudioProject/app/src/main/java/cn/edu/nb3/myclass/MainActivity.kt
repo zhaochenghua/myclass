@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.text.InputFilter
 import android.text.InputType
 import android.view.Gravity
+import android.view.OrientationEventListener
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -36,6 +37,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var statusText: TextView? = null
     private var startLiveButton: MaterialButton? = null
     private var stopLiveButton: MaterialButton? = null
+    private var orientationListener: OrientationEventListener? = null
+    private var currentDeviceOrientation = DeviceOrientationPayload("portrait", 0)
+    private var lastSentDeviceOrientation: DeviceOrientationPayload? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -55,6 +59,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     override fun onDestroy() {
+        orientationListener?.disable()
         releaseCamera()
         signalingClient?.close()
         super.onDestroy()
@@ -237,7 +242,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 startLiveButton?.isEnabled = false
                 stopLiveButton?.isEnabled = true
                 runCatching {
+                    sendCurrentDeviceOrientation(force = true)
                     webRtcClient?.startLive()
+                    sendCurrentDeviceOrientation(force = true)
                 }.onFailure {
                     stopLiveButton?.isEnabled = false
                     startLiveButton?.isEnabled = true
@@ -285,6 +292,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         )
 
         setContentView(root)
+        startOrientationTracking()
 
         runCatching {
             webRtcClient = CameraWebRtcClient(
@@ -381,6 +389,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun releaseCamera() {
+        stopOrientationTracking()
         webRtcClient?.release()
         webRtcClient = null
         cameraRenderer?.release()
@@ -393,6 +402,62 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         runOnUiThread {
             statusText?.text = message
         }
+    }
+
+    private fun startOrientationTracking() {
+        if (orientationListener == null) {
+            orientationListener = object : OrientationEventListener(this@MainActivity) {
+                override fun onOrientationChanged(orientation: Int) {
+                    val next = orientationPayloadFromDegrees(orientation) ?: return
+                    if (next == currentDeviceOrientation) {
+                        return
+                    }
+                    currentDeviceOrientation = next
+                    sendCurrentDeviceOrientation()
+                }
+            }
+        }
+
+        lastSentDeviceOrientation = null
+        orientationListener?.let {
+            if (it.canDetectOrientation()) {
+                it.enable()
+            }
+        }
+        sendCurrentDeviceOrientation(force = true)
+    }
+
+    private fun stopOrientationTracking() {
+        orientationListener?.disable()
+        lastSentDeviceOrientation = null
+    }
+
+    private fun sendCurrentDeviceOrientation(force: Boolean = false) {
+        if (!force && currentDeviceOrientation == lastSentDeviceOrientation) {
+            return
+        }
+        signalingClient?.sendOrientation(currentDeviceOrientation)
+        lastSentDeviceOrientation = currentDeviceOrientation
+    }
+
+    private fun orientationPayloadFromDegrees(degrees: Int): DeviceOrientationPayload? {
+        if (degrees == OrientationEventListener.ORIENTATION_UNKNOWN) {
+            return null
+        }
+
+        val rotationDegrees = when {
+            degrees >= 315 || degrees < 45 -> 0
+            degrees < 135 -> 270
+            degrees < 225 -> 180
+            else -> 90
+        }
+        val orientation = if (rotationDegrees == 90 || rotationDegrees == 270) {
+            "landscape"
+        } else {
+            "portrait"
+        }
+
+        return DeviceOrientationPayload(orientation, rotationDegrees)
     }
 
     private fun baseColumn(): LinearLayout =

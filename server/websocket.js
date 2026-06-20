@@ -1,6 +1,12 @@
 const { WebSocketServer } = require('ws');
 const { RoomManager, sendJson, DEFAULT_ROOM_TTL_MS } = require('./roomManager');
 
+const TEACHER_ONLY_MESSAGE_TYPES = new Set([
+  'webrtc.offer',
+  'teacher.orientation',
+  'teacher.stop'
+]);
+
 function setupWebSocket(server, options) {
   const roomManager = new RoomManager({
     roomTtlMs: options.roomTtlMs || DEFAULT_ROOM_TTL_MS
@@ -68,6 +74,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'webrtc.offer':
     case 'webrtc.answer':
     case 'webrtc.ice-candidate':
+    case 'teacher.orientation':
     case 'teacher.stop':
       handleForward(socket, message, roomManager);
       break;
@@ -130,8 +137,8 @@ function handleForward(socket, message, roomManager) {
     return;
   }
 
-  if (message.type === 'webrtc.offer' && binding.role !== 'teacher') {
-    sendJson(socket, { type: 'error', message: '只有教师端可以发起直播' });
+  if (TEACHER_ONLY_MESSAGE_TYPES.has(message.type) && binding.role !== 'teacher') {
+    sendJson(socket, { type: 'error', message: '只有教师端可以发送该消息' });
     return;
   }
 

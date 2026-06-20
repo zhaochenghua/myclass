@@ -14,6 +14,11 @@ data class IceCandidatePayload(
     val candidate: String
 )
 
+data class DeviceOrientationPayload(
+    val orientation: String,
+    val rotationDegrees: Int
+)
+
 class SignalingClient(
     private val serverBaseUrl: String,
     private val roomCode: String,
@@ -68,6 +73,15 @@ class SignalingClient(
 
     fun sendStop() {
         sendJson(JSONObject().put("type", "teacher.stop"))
+    }
+
+    fun sendOrientation(orientation: DeviceOrientationPayload) {
+        sendJson(
+            JSONObject()
+                .put("type", "teacher.orientation")
+                .put("orientation", orientation.orientation)
+                .put("rotationDegrees", orientation.rotationDegrees)
+        )
     }
 
     fun close() {
