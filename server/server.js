@@ -146,6 +146,14 @@ app.get(`${PATH_PREFIX}/myclass.apk`, (req, res) => {
 });
 
 app.use(
+  `${PATH_PREFIX}/vendor/pdfjs`,
+  express.static(path.join(__dirname, 'node_modules', 'pdfjs-dist'), {
+    etag: true,
+    maxAge: '1h'
+  })
+);
+
+app.use(
   PATH_PREFIX,
   express.static(webRoot, {
     etag: true,

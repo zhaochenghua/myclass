@@ -25,6 +25,8 @@ const state = {
   }
 };
 
+let pdfJsPromise = null;
+
 const elements = {
   joinView: document.getElementById('joinView'),
   videoView: document.getElementById('videoView'),
@@ -34,7 +36,7 @@ const elements = {
   statusText: document.getElementById('statusText'),
   videoStatus: document.getElementById('videoStatus'),
   remoteVideo: document.getElementById('remoteVideo'),
-  coursewareFrame: document.getElementById('coursewareFrame'),
+  coursewareCanvas: document.getElementById('coursewareCanvas'),
   annotationCanvas: document.getElementById('annotationCanvas'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
   clearAnnotationButton: document.getElementById('clearAnnotationButton'),
@@ -51,7 +53,7 @@ async function bootstrap() {
     elements.downloadHint.textContent = `APP v${apkVersion}`;
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
-    window.addEventListener('resize', updateVideoPresentation);
+    window.addEventListener('resize', handleViewportResize);
     elements.annotationCanvas.addEventListener('pointerdown', beginAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointermove', continueAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointerup', finishAnnotationStroke);
@@ -266,10 +268,15 @@ function openCourseware(message) {
   state.courseware = {
     url,
     title: typeof message.title === 'string' ? message.title : '课件',
-    page: normalizePageNumber(message.page)
+    page: normalizePageNumber(message.page),
+    pageCount: 0,
+    pdfDocument: null,
+    loadingTask: null,
+    renderTask: null,
+    renderGeneration: 0
   };
   showCoursewareView();
-  renderCoursewarePage();
+  loadCoursewareDocument(state.courseware);
 }
 
 function showCoursewarePage(page) {
@@ -286,21 +293,148 @@ function showCoursewarePage(page) {
 }
 
 function closeCourseware() {
+  destroyCoursewareDocument(state.courseware);
   state.courseware = null;
-  elements.coursewareFrame.removeAttribute('src');
+  clearCoursewareCanvas();
   resetAnnotations();
   showJoinView();
   setWaitingStatus('课件播放已结束，等待教师连接...');
 }
 
-function renderCoursewarePage() {
+async function loadCoursewareDocument(courseware) {
+  const pdfjsLib = await loadPdfJs();
+  if (state.courseware !== courseware) {
+    return;
+  }
+
+  elements.videoStatus.textContent = `${courseware.title} 正在加载...`;
+  const loadingTask = pdfjsLib.getDocument({
+    url: courseware.url,
+    cMapUrl: './vendor/pdfjs/cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: './vendor/pdfjs/standard_fonts/',
+    wasmUrl: './vendor/pdfjs/wasm/'
+  });
+  courseware.loadingTask = loadingTask;
+
+  try {
+    const pdfDocument = await loadingTask.promise;
+    if (state.courseware !== courseware) {
+      pdfDocument.destroy();
+      return;
+    }
+    courseware.pdfDocument = pdfDocument;
+    courseware.pageCount = pdfDocument.numPages;
+    courseware.page = clamp(courseware.page, 1, pdfDocument.numPages);
+    renderCoursewarePage();
+  } catch (error) {
+    if (state.courseware === courseware) {
+      elements.videoStatus.textContent = '课件加载失败，请重新选择课件';
+    }
+  }
+}
+
+async function renderCoursewarePage() {
   const courseware = state.courseware;
   if (!courseware) {
     return;
   }
-  elements.coursewareFrame.src = `${courseware.url}#page=${courseware.page}&view=FitH&toolbar=0&navpanes=0`;
-  elements.videoStatus.textContent = `${courseware.title} 第 ${courseware.page} 页`;
-  updateVideoPresentation();
+
+  if (!courseware.pdfDocument) {
+    elements.videoStatus.textContent = `${courseware.title} 正在加载...`;
+    return;
+  }
+
+  courseware.page = clamp(courseware.page, 1, courseware.pageCount);
+  const generation = ++courseware.renderGeneration;
+  let renderTask = null;
+  cancelCoursewareRender(courseware);
+
+  try {
+    const page = await courseware.pdfDocument.getPage(courseware.page);
+    if (state.courseware !== courseware || generation !== courseware.renderGeneration) {
+      return;
+    }
+
+    const canvas = elements.coursewareCanvas;
+    const containerRect = elements.videoView.getBoundingClientRect();
+    const baseViewport = page.getViewport({ scale: 1 });
+    const fitScale = Math.min(
+      containerRect.width / baseViewport.width,
+      containerRect.height / baseViewport.height
+    );
+    const cssViewport = page.getViewport({ scale: fitScale });
+    const outputScale = window.devicePixelRatio || 1;
+    const renderViewport = page.getViewport({ scale: fitScale * outputScale });
+
+    canvas.width = Math.max(1, Math.round(renderViewport.width));
+    canvas.height = Math.max(1, Math.round(renderViewport.height));
+    canvas.style.width = `${Math.round(cssViewport.width)}px`;
+    canvas.style.height = `${Math.round(cssViewport.height)}px`;
+    canvas.style.left = `${Math.round((containerRect.width - cssViewport.width) / 2)}px`;
+    canvas.style.top = `${Math.round((containerRect.height - cssViewport.height) / 2)}px`;
+
+    const context = canvas.getContext('2d', { alpha: false });
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    renderTask = page.render({
+      canvasContext: context,
+      viewport: renderViewport
+    });
+    courseware.renderTask = renderTask;
+    await renderTask.promise;
+    if (state.courseware === courseware && generation === courseware.renderGeneration) {
+      elements.videoStatus.textContent =
+        `${courseware.title} 第 ${courseware.page} / ${courseware.pageCount} 页`;
+      updateVideoPresentation();
+    }
+  } catch (error) {
+    if (error?.name !== 'RenderingCancelledException' && state.courseware === courseware) {
+      elements.videoStatus.textContent = '课件页面渲染失败';
+    }
+  } finally {
+    if (state.courseware === courseware && renderTask && courseware.renderTask === renderTask) {
+      courseware.renderTask = null;
+    }
+  }
+}
+
+function loadPdfJs() {
+  if (!pdfJsPromise) {
+    pdfJsPromise = import('./vendor/pdfjs/build/pdf.min.mjs').then((pdfjsLib) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs';
+      return pdfjsLib;
+    });
+  }
+  return pdfJsPromise;
+}
+
+function cancelCoursewareRender(courseware) {
+  if (courseware?.renderTask) {
+    courseware.renderTask.cancel();
+    courseware.renderTask = null;
+  }
+}
+
+function destroyCoursewareDocument(courseware) {
+  cancelCoursewareRender(courseware);
+  if (courseware?.loadingTask) {
+    courseware.loadingTask.destroy();
+    courseware.loadingTask = null;
+  }
+  if (courseware?.pdfDocument) {
+    courseware.pdfDocument.destroy();
+    courseware.pdfDocument = null;
+  }
+}
+
+function clearCoursewareCanvas() {
+  const canvas = elements.coursewareCanvas;
+  const context = canvas.getContext('2d');
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  canvas.removeAttribute('style');
+  canvas.width = 1;
+  canvas.height = 1;
 }
 
 function normalizePageNumber(value) {
@@ -341,6 +475,16 @@ function updateVideoPresentation() {
   resizeAnnotationCanvas();
   drawAnnotations();
   updateAnnotationButtons();
+}
+
+function handleViewportResize() {
+  if (state.presentationMode === 'courseware') {
+    renderCoursewarePage();
+    resizeAnnotationCanvas();
+    drawAnnotations();
+    return;
+  }
+  updateVideoPresentation();
 }
 
 function normalizedZoomRatio(value) {
@@ -599,7 +743,7 @@ function currentFrameCrop() {
 
 function currentVideoContentRect() {
   if (state.presentationMode === 'courseware') {
-    return elements.coursewareFrame.getBoundingClientRect();
+    return elements.coursewareCanvas.getBoundingClientRect();
   }
 
   const elementRect = elements.remoteVideo.getBoundingClientRect();
@@ -639,19 +783,20 @@ function sendMessage(payload) {
 }
 
 function showJoinView() {
+  destroyCoursewareDocument(state.courseware);
   state.presentationMode = 'waiting';
   state.courseware = null;
-  elements.coursewareFrame.removeAttribute('src');
+  clearCoursewareCanvas();
   document.body.classList.remove('is-streaming');
   elements.joinView.hidden = false;
   elements.videoView.hidden = true;
   elements.remoteVideo.hidden = false;
-  elements.coursewareFrame.hidden = true;
+  elements.coursewareCanvas.hidden = true;
 }
 
 function showVideoView() {
   state.presentationMode = 'video';
-  elements.coursewareFrame.hidden = true;
+  elements.coursewareCanvas.hidden = true;
   elements.remoteVideo.hidden = false;
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
@@ -661,7 +806,7 @@ function showVideoView() {
 function showCoursewareView() {
   state.presentationMode = 'courseware';
   elements.remoteVideo.hidden = true;
-  elements.coursewareFrame.hidden = false;
+  elements.coursewareCanvas.hidden = false;
   elements.videoView.dataset.orientation = 'landscape';
   elements.videoView.dataset.lockedZoomed = 'false';
   document.body.classList.add('is-streaming');
