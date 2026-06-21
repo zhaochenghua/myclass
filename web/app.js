@@ -21,7 +21,16 @@ const state = {
   annotations: {
     strokes: [],
     activeStroke: null,
-    currentColor: '#ffd166'
+    currentColor: '#ffd166',
+    tool: 'pen'
+  },
+  coursewarePan: {
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startOffsetX: 0,
+    startOffsetY: 0
   }
 };
 
@@ -38,6 +47,8 @@ const elements = {
   remoteVideo: document.getElementById('remoteVideo'),
   coursewareCanvas: document.getElementById('coursewareCanvas'),
   annotationCanvas: document.getElementById('annotationCanvas'),
+  penToolButton: document.getElementById('penToolButton'),
+  panToolButton: document.getElementById('panToolButton'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
   clearAnnotationButton: document.getElementById('clearAnnotationButton'),
   annotationColorButtons: Array.from(document.querySelectorAll('.annotation-color'))
@@ -58,6 +69,8 @@ async function bootstrap() {
     elements.annotationCanvas.addEventListener('pointermove', continueAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointerup', finishAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointercancel', finishAnnotationStroke);
+    elements.penToolButton.addEventListener('click', () => setAnnotationTool('pen'));
+    elements.panToolButton.addEventListener('click', () => setAnnotationTool('pan'));
     elements.undoAnnotationButton.addEventListener('click', undoAnnotationStroke);
     elements.clearAnnotationButton.addEventListener('click', clearAnnotations);
     elements.annotationColorButtons.forEach((button) => {
@@ -65,6 +78,7 @@ async function bootstrap() {
     });
     updateAnnotationButtons();
     updateAnnotationColorButtons();
+    updateAnnotationToolButtons();
     connectSignaling();
   } catch (error) {
     setWaitingStatus('服务配置加载失败，请检查服务端是否启动');
@@ -133,6 +147,9 @@ async function handleSignalMessage(message) {
       break;
     case 'courseware.open':
       openCourseware(message);
+      break;
+    case 'courseware.navigate':
+      navigateCourseware(message.delta);
       break;
     case 'courseware.page':
       showCoursewarePage(message.page);
@@ -265,10 +282,21 @@ function openCourseware(message) {
 
   cleanupPeerConnection();
   resetAnnotations();
+  setAnnotationTool('pen');
   state.courseware = {
     url,
     title: typeof message.title === 'string' ? message.title : '课件',
     page: normalizePageNumber(message.page),
+    screen: normalizePageNumber(message.screen),
+    screenCount: 1,
+    offsetX: 0,
+    offsetY: 0,
+    maxOffsetX: 0,
+    maxOffsetY: 0,
+    pageStepY: 0,
+    fitMode: 'fit-page',
+    cssWidth: 1,
+    cssHeight: 1,
     pageCount: 0,
     pdfDocument: null,
     loadingTask: null,
@@ -288,6 +316,36 @@ function showCoursewarePage(page) {
     return;
   }
   state.courseware.page = nextPage;
+  state.courseware.screen = 1;
+  state.courseware.offsetY = 0;
+  resetAnnotations();
+  renderCoursewarePage();
+}
+
+function navigateCourseware(deltaValue) {
+  const courseware = state.courseware;
+  if (!courseware?.pdfDocument) {
+    return;
+  }
+
+  const delta = Number(deltaValue) < 0 ? -1 : 1;
+  if (courseware.screenCount > 1) {
+    const nextScreen = courseware.screen + delta;
+    if (nextScreen >= 1 && nextScreen <= courseware.screenCount) {
+      setCoursewareScreen(nextScreen);
+      return;
+    }
+  }
+
+  const nextPage = courseware.page + delta;
+  if (nextPage < 1 || nextPage > courseware.pageCount) {
+    sendCoursewareState();
+    return;
+  }
+
+  courseware.page = nextPage;
+  courseware.screen = delta > 0 ? 1 : Number.MAX_SAFE_INTEGER;
+  courseware.offsetY = 0;
   resetAnnotations();
   renderCoursewarePage();
 }
@@ -359,20 +417,32 @@ async function renderCoursewarePage() {
     const canvas = elements.coursewareCanvas;
     const containerRect = elements.videoView.getBoundingClientRect();
     const baseViewport = page.getViewport({ scale: 1 });
-    const fitScale = Math.min(
-      containerRect.width / baseViewport.width,
-      containerRect.height / baseViewport.height
-    );
+    const isPortraitDocumentPage = baseViewport.height > baseViewport.width * 1.15;
+    const fitScale = isPortraitDocumentPage
+      ? containerRect.width / baseViewport.width
+      : Math.min(
+          containerRect.width / baseViewport.width,
+          containerRect.height / baseViewport.height
+        );
     const cssViewport = page.getViewport({ scale: fitScale });
-    const outputScale = window.devicePixelRatio || 1;
+    const outputScale = Math.min(window.devicePixelRatio || 1, 2);
     const renderViewport = page.getViewport({ scale: fitScale * outputScale });
 
     canvas.width = Math.max(1, Math.round(renderViewport.width));
     canvas.height = Math.max(1, Math.round(renderViewport.height));
-    canvas.style.width = `${Math.round(cssViewport.width)}px`;
-    canvas.style.height = `${Math.round(cssViewport.height)}px`;
-    canvas.style.left = `${Math.round((containerRect.width - cssViewport.width) / 2)}px`;
-    canvas.style.top = `${Math.round((containerRect.height - cssViewport.height) / 2)}px`;
+    courseware.fitMode = isPortraitDocumentPage ? 'width-fill' : 'fit-page';
+    courseware.cssWidth = Math.round(cssViewport.width);
+    courseware.cssHeight = Math.round(cssViewport.height);
+    courseware.maxOffsetX = Math.max(0, courseware.cssWidth - containerRect.width);
+    courseware.maxOffsetY = Math.max(0, courseware.cssHeight - containerRect.height);
+    courseware.pageStepY = Math.max(1, Math.round(containerRect.height * 0.9));
+    courseware.screenCount = courseware.maxOffsetY > 0
+      ? Math.ceil(courseware.maxOffsetY / courseware.pageStepY) + 1
+      : 1;
+    courseware.screen = clamp(courseware.screen || 1, 1, courseware.screenCount);
+    courseware.offsetX = clamp(courseware.offsetX || 0, 0, courseware.maxOffsetX);
+    courseware.offsetY = offsetYForCoursewareScreen(courseware, courseware.screen);
+    updateCoursewareCanvasPlacement();
 
     const context = canvas.getContext('2d', { alpha: false });
     context.fillStyle = '#fff';
@@ -384,8 +454,8 @@ async function renderCoursewarePage() {
     courseware.renderTask = renderTask;
     await renderTask.promise;
     if (state.courseware === courseware && generation === courseware.renderGeneration) {
-      elements.videoStatus.textContent =
-        `${courseware.title} 第 ${courseware.page} / ${courseware.pageCount} 页`;
+      updateCoursewareStatus();
+      sendCoursewareState();
       updateVideoPresentation();
     }
   } catch (error) {
@@ -407,6 +477,83 @@ function loadPdfJs() {
     });
   }
   return pdfJsPromise;
+}
+
+function setCoursewareScreen(screen) {
+  const courseware = state.courseware;
+  if (!courseware) {
+    return;
+  }
+
+  courseware.screen = clamp(Math.round(screen), 1, courseware.screenCount);
+  courseware.offsetY = offsetYForCoursewareScreen(courseware, courseware.screen);
+  updateCoursewareCanvasPlacement();
+  updateCoursewareStatus();
+  sendCoursewareState();
+  drawAnnotations();
+}
+
+function offsetYForCoursewareScreen(courseware, screen) {
+  if (courseware.screenCount <= 1) {
+    return 0;
+  }
+  return clamp((screen - 1) * courseware.pageStepY, 0, courseware.maxOffsetY);
+}
+
+function screenForCoursewareOffset(courseware) {
+  if (courseware.screenCount <= 1 || courseware.pageStepY <= 0) {
+    return 1;
+  }
+  return clamp(Math.round(courseware.offsetY / courseware.pageStepY) + 1, 1, courseware.screenCount);
+}
+
+function updateCoursewareCanvasPlacement() {
+  const courseware = state.courseware;
+  if (!courseware) {
+    return;
+  }
+
+  const canvas = elements.coursewareCanvas;
+  const containerRect = elements.videoView.getBoundingClientRect();
+  const left = courseware.maxOffsetX > 0
+    ? -courseware.offsetX
+    : (containerRect.width - courseware.cssWidth) / 2;
+  const top = courseware.maxOffsetY > 0
+    ? -courseware.offsetY
+    : (containerRect.height - courseware.cssHeight) / 2;
+  canvas.style.width = `${courseware.cssWidth}px`;
+  canvas.style.height = `${courseware.cssHeight}px`;
+  canvas.style.left = `${Math.round(left)}px`;
+  canvas.style.top = `${Math.round(top)}px`;
+}
+
+function updateCoursewareStatus() {
+  const courseware = state.courseware;
+  if (!courseware) {
+    return;
+  }
+
+  const pageText = `第 ${courseware.page} / ${courseware.pageCount} 页`;
+  const screenText = courseware.screenCount > 1
+    ? `，第 ${courseware.screen} / ${courseware.screenCount} 屏`
+    : '';
+  elements.videoStatus.textContent = `${courseware.title} ${pageText}${screenText}`;
+}
+
+function sendCoursewareState() {
+  const courseware = state.courseware;
+  if (!courseware) {
+    return;
+  }
+
+  sendMessage({
+    type: 'courseware.state',
+    page: courseware.page,
+    pageCount: courseware.pageCount,
+    screen: courseware.screen,
+    screenCount: courseware.screenCount,
+    fitMode: courseware.fitMode
+  });
 }
 
 function cancelCoursewareRender(courseware) {
@@ -542,6 +689,10 @@ function beginAnnotationStroke(event) {
   if (!event.isPrimary) {
     return;
   }
+  if (state.presentationMode === 'courseware' && state.annotations.tool === 'pan') {
+    beginCoursewarePan(event);
+    return;
+  }
   const point = pointerEventToSourcePoint(event);
   if (!point) {
     return;
@@ -558,6 +709,10 @@ function beginAnnotationStroke(event) {
 }
 
 function continueAnnotationStroke(event) {
+  if (state.coursewarePan.active && state.coursewarePan.pointerId === event.pointerId) {
+    continueCoursewarePan(event);
+    return;
+  }
   const stroke = state.annotations.activeStroke;
   if (!stroke || stroke.pointerId !== event.pointerId) {
     return;
@@ -576,6 +731,10 @@ function continueAnnotationStroke(event) {
 }
 
 function finishAnnotationStroke(event) {
+  if (state.coursewarePan.active && state.coursewarePan.pointerId === event.pointerId) {
+    finishCoursewarePan(event);
+    return;
+  }
   const stroke = state.annotations.activeStroke;
   if (!stroke || stroke.pointerId !== event.pointerId) {
     return;
@@ -592,6 +751,57 @@ function finishAnnotationStroke(event) {
   runCatching(() => elements.annotationCanvas.releasePointerCapture(event.pointerId));
   drawAnnotations();
   updateAnnotationButtons();
+}
+
+function beginCoursewarePan(event) {
+  const courseware = state.courseware;
+  if (!courseware || (courseware.maxOffsetX <= 0 && courseware.maxOffsetY <= 0)) {
+    return;
+  }
+  event.preventDefault();
+  elements.annotationCanvas.setPointerCapture(event.pointerId);
+  state.coursewarePan = {
+    active: true,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    startOffsetX: courseware.offsetX,
+    startOffsetY: courseware.offsetY
+  };
+  elements.annotationCanvas.classList.add('is-panning');
+}
+
+function continueCoursewarePan(event) {
+  const courseware = state.courseware;
+  if (!courseware) {
+    return;
+  }
+  event.preventDefault();
+  const deltaX = event.clientX - state.coursewarePan.startX;
+  const deltaY = event.clientY - state.coursewarePan.startY;
+  courseware.offsetX = clamp(
+    state.coursewarePan.startOffsetX - deltaX,
+    0,
+    courseware.maxOffsetX
+  );
+  courseware.offsetY = clamp(
+    state.coursewarePan.startOffsetY - deltaY,
+    0,
+    courseware.maxOffsetY
+  );
+  courseware.screen = screenForCoursewareOffset(courseware);
+  updateCoursewareCanvasPlacement();
+  updateCoursewareStatus();
+  drawAnnotations();
+}
+
+function finishCoursewarePan(event) {
+  event.preventDefault();
+  runCatching(() => elements.annotationCanvas.releasePointerCapture(event.pointerId));
+  state.coursewarePan.active = false;
+  state.coursewarePan.pointerId = null;
+  elements.annotationCanvas.classList.remove('is-panning');
+  sendCoursewareState();
 }
 
 function undoAnnotationStroke() {
@@ -617,6 +827,18 @@ function setAnnotationColor(color) {
   }
   state.annotations.currentColor = color;
   updateAnnotationColorButtons();
+}
+
+function setAnnotationTool(tool) {
+  state.annotations.tool = tool === 'pan' ? 'pan' : 'pen';
+  updateAnnotationToolButtons();
+}
+
+function updateAnnotationToolButtons() {
+  const isPan = state.annotations.tool === 'pan';
+  elements.penToolButton.classList.toggle('is-active', !isPan);
+  elements.panToolButton.classList.toggle('is-active', isPan);
+  elements.annotationCanvas.classList.toggle('is-pan-tool', isPan);
 }
 
 function updateAnnotationButtons() {
@@ -796,6 +1018,7 @@ function showJoinView() {
 
 function showVideoView() {
   state.presentationMode = 'video';
+  setAnnotationTool('pen');
   elements.coursewareCanvas.hidden = true;
   elements.remoteVideo.hidden = false;
   document.body.classList.add('is-streaming');

@@ -181,6 +181,14 @@ video {
   cursor: crosshair;
 }
 
+.annotation-canvas.is-pan-tool {
+  cursor: grab;
+}
+
+.annotation-canvas.is-panning {
+  cursor: grabbing;
+}
+
 .annotation-toolbar {
   position: absolute;
   right: 1rem;
@@ -194,6 +202,27 @@ video {
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.46);
   backdrop-filter: blur(12px);
+}
+
+.annotation-modes {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.annotation-mode {
+  height: 2.5rem;
+  padding: 0 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font: inherit;
+  font-size: 1rem;
+}
+
+.annotation-mode.is-active {
+  border-color: #fff;
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .annotation-colors {

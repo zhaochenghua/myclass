@@ -96,6 +96,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var isPickingImageForProjection = false
     private var openImagePickerAfterPermission = false
     private var coursewarePage = 1
+    private var coursewarePageCount = 1
+    private var coursewareScreen = 1
+    private var coursewareScreenCount = 1
     private var coursewareTitle = ""
     private var coursewareUrl = ""
     private var coursewareUploadInProgress = false
@@ -480,6 +483,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareTitle = fileName
         coursewareUrl = ""
         coursewarePage = 1
+        coursewarePageCount = 1
+        coursewareScreen = 1
+        coursewareScreenCount = 1
         showCoursewareScreen(title = fileName, isUploading = true)
 
         Thread {
@@ -492,11 +498,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     }
                     coursewareUploadInProgress = false
                     coursewarePage = 1
+                    coursewarePageCount = 1
+                    coursewareScreen = 1
+                    coursewareScreenCount = 1
                     coursewareTitle = result.title
                     coursewareUrl = result.url
                     if (roomJoined) {
                         signalingClient?.sendStop()
-                        signalingClient?.sendCoursewareOpen(result.url, result.title, coursewarePage)
+                        signalingClient?.sendCoursewareOpen(
+                            result.url,
+                            result.title,
+                            coursewarePage,
+                            coursewareScreen
+                        )
                         toast("课件已打开")
                     } else {
                         reconnectSignalingForCurrentRoom()
@@ -607,7 +621,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             } else if (!roomJoined) {
                 "$title\n正在重新连接教室端..."
             } else {
-                "$title\n第 $coursewarePage 页"
+                coursewareStatusText(title)
             }
         ).apply {
             gravity = Gravity.CENTER
@@ -630,7 +644,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 topMargin = dp(32)
             }
         }
-        pageRow.addView(secondaryButton("上一页").apply {
+        pageRow.addView(secondaryButton("上一屏").apply {
             isEnabled = !isUploading && roomJoined
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                 marginEnd = dp(8)
@@ -639,7 +653,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 changeCoursewarePage(-1)
             }
         })
-        pageRow.addView(primaryButton("下一页").apply {
+        pageRow.addView(primaryButton("下一屏").apply {
             isEnabled = !isUploading && roomJoined
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                 marginStart = dp(8)
@@ -665,6 +679,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         setContentView(root)
     }
 
+    private fun coursewareStatusText(title: String): String {
+        val pageText = "第 $coursewarePage / $coursewarePageCount 页"
+        val screenText = if (coursewareScreenCount > 1) {
+            "，第 $coursewareScreen / $coursewareScreenCount 屏"
+        } else {
+            ""
+        }
+        return "$title\n$pageText$screenText"
+    }
+
     private fun changeCoursewarePage(delta: Int) {
         if (coursewareUploadInProgress) {
             return
@@ -674,15 +698,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             updateStatus("$coursewareTitle\n正在重新连接教室端...")
             return
         }
-        coursewarePage = (coursewarePage + delta).coerceAtLeast(1)
-        signalingClient?.sendCoursewarePage(coursewarePage)
-        updateStatus("$coursewareTitle\n第 $coursewarePage 页")
+        signalingClient?.sendCoursewareNavigate(delta)
+        updateStatus("$coursewareTitle\n正在切换...")
     }
 
     private fun closeCoursewareAndReturnMenu() {
         signalingClient?.sendCoursewareClose()
         coursewareUploadInProgress = false
         coursewarePage = 1
+        coursewarePageCount = 1
+        coursewareScreen = 1
+        coursewareScreenCount = 1
         coursewareTitle = ""
         coursewareUrl = ""
         showMenuScreen()
@@ -897,7 +923,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             resumeLiveAfterJoin = false
             if (currentScreen == Screen.Courseware) {
                 if (!coursewareUploadInProgress && coursewareUrl.isNotBlank()) {
-                    signalingClient?.sendCoursewareOpen(coursewareUrl, coursewareTitle, coursewarePage)
+                    signalingClient?.sendCoursewareOpen(
+                        coursewareUrl,
+                        coursewareTitle,
+                        coursewarePage,
+                        coursewareScreen
+                    )
                     showCoursewareScreen(title = coursewareTitle, isUploading = false)
                     toast("课件控制已重新连接")
                 } else if (coursewareUploadInProgress) {
@@ -971,6 +1002,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onRemoteIceCandidate(candidate: IceCandidatePayload) {
         webRtcClient?.addRemoteIceCandidate(candidate)
+    }
+
+    override fun onCoursewareState(state: CoursewareStatePayload) {
+        runOnUiThread {
+            if (currentScreen != Screen.Courseware) {
+                return@runOnUiThread
+            }
+            coursewarePage = state.page
+            coursewarePageCount = state.pageCount
+            coursewareScreen = state.screen
+            coursewareScreenCount = state.screenCount
+            updateStatus(coursewareStatusText(coursewareTitle))
+        }
     }
 
     override fun onSignalError(message: String) {

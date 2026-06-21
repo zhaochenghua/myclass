@@ -26,6 +26,14 @@ data class DeviceOrientationPayload(
     val lockedFrameCropHeight: Float = 1f
 )
 
+data class CoursewareStatePayload(
+    val page: Int,
+    val pageCount: Int,
+    val screen: Int,
+    val screenCount: Int,
+    val fitMode: String
+)
+
 class SignalingClient(
     private val serverBaseUrl: String,
     private val roomCode: String,
@@ -39,6 +47,7 @@ class SignalingClient(
         fun onServerClosed(message: String)
         fun onAnswer(sdp: String)
         fun onRemoteIceCandidate(candidate: IceCandidatePayload)
+        fun onCoursewareState(state: CoursewareStatePayload)
         fun onSignalError(message: String)
     }
 
@@ -82,13 +91,22 @@ class SignalingClient(
         sendJson(JSONObject().put("type", "teacher.stop"))
     }
 
-    fun sendCoursewareOpen(url: String, title: String, page: Int = 1) {
+    fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1) {
         sendJson(
             JSONObject()
                 .put("type", "courseware.open")
                 .put("url", url)
                 .put("title", title)
                 .put("page", page)
+                .put("screen", screen)
+        )
+    }
+
+    fun sendCoursewareNavigate(delta: Int) {
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.navigate")
+                .put("delta", if (delta < 0) -1 else 1)
         )
     }
 
@@ -146,6 +164,7 @@ class SignalingClient(
             "room.expired" -> callback.onServerClosed(message.optString("message", "课堂已断开"))
             "webrtc.answer" -> callback.onAnswer(message.optString("sdp"))
             "webrtc.ice-candidate" -> parseIceCandidate(message)?.let(callback::onRemoteIceCandidate)
+            "courseware.state" -> parseCoursewareState(message)?.let(callback::onCoursewareState)
             "error" -> callback.onSignalError(message.optString("message", "信令错误"))
         }
     }
@@ -190,6 +209,16 @@ class SignalingClient(
             sdpMid = candidate.optString("sdpMid"),
             sdpMLineIndex = candidate.optInt("sdpMLineIndex"),
             candidate = candidate.optString("candidate")
+        )
+    }
+
+    private fun parseCoursewareState(message: JSONObject): CoursewareStatePayload? {
+        return CoursewareStatePayload(
+            page = message.optInt("page", 1).coerceAtLeast(1),
+            pageCount = message.optInt("pageCount", 1).coerceAtLeast(1),
+            screen = message.optInt("screen", 1).coerceAtLeast(1),
+            screenCount = message.optInt("screenCount", 1).coerceAtLeast(1),
+            fitMode = message.optString("fitMode", "fit-page")
         )
     }
 
