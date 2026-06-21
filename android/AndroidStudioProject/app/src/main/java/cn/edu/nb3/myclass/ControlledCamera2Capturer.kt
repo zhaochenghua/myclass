@@ -2,8 +2,12 @@ package cn.edu.nb3.myclass
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -15,10 +19,12 @@ import android.os.Handler
 import android.util.Size
 import android.view.Surface
 import org.webrtc.CapturerObserver
+import org.webrtc.JavaI420Buffer
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoFrame
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSink
+import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -63,6 +69,13 @@ class ControlledCamera2Capturer(
     private var lockedFrameZoomRatio = 1f
     private var lockedFramePanX = 0f
     private var lockedFramePanY = 0f
+    private var imageBitmap: Bitmap? = null
+    private var imageFrameWidth = 1920
+    private var imageFrameHeight = 1440
+    private var imageZoomRatio = 1f
+    private var imagePanX = 0f
+    private var imagePanY = 0f
+    private var imageFrameGeneration = 0
     private var deviceRotationDegrees = 0
     private var torchEnabled = false
     private var focusRegion: MeteringRectangle? = null
@@ -97,6 +110,7 @@ class ControlledCamera2Capturer(
             zoomRatio = 1f
             lockedFrameZoomRatio = 1f
             resetLockedFramePan()
+            clearImageProjectionInternal()
             torchEnabled = false
             focusRegion = null
             startSurfaceTexture()
@@ -116,6 +130,7 @@ class ControlledCamera2Capturer(
             frameLocked = false
             frameLockRequested = false
             clearLockedFrame()
+            clearImageProjectionInternal()
             closeCamera()
             if (shouldNotifyStopped) {
                 capturerObserver?.onCapturerStopped()
@@ -129,6 +144,7 @@ class ControlledCamera2Capturer(
             frameLocked = false
             frameLockRequested = false
             clearLockedFrame()
+            clearImageProjectionInternal()
             closeCamera()
             stopSurfaceTexture()
             if (shouldNotifyStopped) {
@@ -144,6 +160,7 @@ class ControlledCamera2Capturer(
             frameLocked = false
             frameLockRequested = false
             clearLockedFrame()
+            clearImageProjectionInternal()
             closeCamera()
             stopSurfaceTexture()
             if (shouldNotifyStopped) {
@@ -186,6 +203,7 @@ class ControlledCamera2Capturer(
             zoomRatio = 1f
             lockedFrameZoomRatio = 1f
             resetLockedFramePan()
+            clearImageProjectionInternal()
             torchEnabled = false
             focusRegion = null
             frameLocked = false
@@ -233,10 +251,53 @@ class ControlledCamera2Capturer(
 
     fun isFrameLocked(): Boolean = frameLocked || frameLockRequested
 
+    fun isImageProjectionActive(): Boolean = imageBitmap != null
+
+    fun isStaticPresentationActive(): Boolean = imageBitmap != null || isFrameLocked()
+
+    fun setImageProjection(bitmap: Bitmap): Boolean {
+        runOnCameraThreadBlocking {
+            clearImageProjectionInternal()
+            frameLocked = false
+            frameLockRequested = false
+            clearLockedFrame()
+            zoomRatio = 1f
+            focusRegion = null
+            imageBitmap = bitmap
+            val size = imageOutputFrameSize()
+            imageFrameWidth = size.width
+            imageFrameHeight = size.height
+            imageZoomRatio = 1f
+            resetImagePan()
+            resendImageFrameBurst()
+        }
+        return true
+    }
+
+    fun clearImageProjection() {
+        runOnCameraThreadBlocking(atFront = true) {
+            clearImageProjectionInternal()
+        }
+    }
+
     fun lockedFrameZoomRatio(): Float =
-        if (frameLocked || frameLockRequested) lockedFrameZoomRatio else 1f
+        when {
+            imageBitmap != null -> imageZoomRatio
+            frameLocked || frameLockRequested -> lockedFrameZoomRatio
+            else -> 1f
+        }
 
     fun lockedFramePresentation(): LockedFramePresentation {
+        imageBitmap?.let {
+            val crop = imageCrop()
+            return LockedFramePresentation(
+                zoomRatio = imageZoomRatio,
+                cropX = crop.x,
+                cropY = crop.y,
+                cropWidth = crop.width,
+                cropHeight = crop.height
+            )
+        }
         if (!frameLocked && !frameLockRequested) {
             return FULL_FRAME_PRESENTATION
         }
@@ -252,6 +313,10 @@ class ControlledCamera2Capturer(
     }
 
     fun resendLockedFrameBurst(repeatCount: Int = 12, intervalMs: Long = 250L) {
+        if (imageBitmap != null) {
+            resendImageFrameBurst(repeatCount, intervalMs)
+            return
+        }
         val handler = surfaceTextureHelper?.handler
         if (handler == null) {
             repeatLockedFrameIfNeeded()
@@ -270,6 +335,20 @@ class ControlledCamera2Capturer(
     fun isTorchSupported(): Boolean = currentCameraOrNull()?.supportsTorch == true
 
     fun zoomBy(scaleFactor: Float): Float {
+        imageBitmap?.let {
+            val maxZoom = maxImageZoom()
+            val nextImageZoom = (imageZoomRatio * scaleFactor).coerceIn(1f, maxZoom)
+            if (nextImageZoom == imageZoomRatio) {
+                return imageZoomRatio
+            }
+            imageZoomRatio = nextImageZoom
+            coerceImagePan()
+            runOnCameraThread {
+                resendImageFrameBurst(repeatCount = 4, intervalMs = 80L)
+            }
+            return imageZoomRatio
+        }
+
         val camera = currentCameraOrNull() ?: return zoomRatio
         if (frameLocked || frameLockRequested) {
             val nextLockedZoom = (lockedFrameZoomRatio * scaleFactor).coerceIn(1f, camera.maxZoom)
@@ -303,6 +382,9 @@ class ControlledCamera2Capturer(
     }
 
     fun panLockedFrameBy(deltaXNormalized: Float, deltaYNormalized: Float): Boolean {
+        if (imageBitmap != null) {
+            return panImageBy(deltaXNormalized, deltaYNormalized)
+        }
         if (!frameLocked || lockedFrameZoomRatio <= 1.01f || lockedFrame == null) {
             return false
         }
@@ -351,11 +433,27 @@ class ControlledCamera2Capturer(
     }
 
     fun setDeviceRotation(rotationDegrees: Int) {
-        runOnCameraThread {
+        var repeatLockedFrame = false
+        var repeatImageFrame = false
+        runOnCameraThreadBlocking {
             val changed = deviceRotationDegrees != rotationDegrees
             deviceRotationDegrees = rotationDegrees
             if (changed && frameLocked) {
+                repeatLockedFrame = true
+            }
+            if (changed && imageBitmap != null) {
+                updateImageFrameSizeForRotation()
+                repeatImageFrame = true
+            }
+        }
+        if (repeatLockedFrame) {
+            runOnCameraThread {
                 repeatLockedFrameIfNeeded()
+            }
+        }
+        if (repeatImageFrame) {
+            runOnCameraThread {
+                repeatImageFrameIfNeeded()
             }
         }
     }
@@ -573,6 +671,9 @@ class ControlledCamera2Capturer(
     }
 
     private fun deliverCameraFrame(frame: VideoFrame) {
+        if (imageBitmap != null) {
+            return
+        }
         if (frameLocked) {
             return
         }
@@ -719,6 +820,224 @@ class ControlledCamera2Capturer(
         lockedFramePanY = 0f
     }
 
+    private fun resendImageFrameBurst(repeatCount: Int = 12, intervalMs: Long = 250L) {
+        val handler = surfaceTextureHelper?.handler
+        imageFrameGeneration += 1
+        val generation = imageFrameGeneration
+        if (handler == null) {
+            repeatImageFrameIfNeeded(generation)
+            return
+        }
+        repeat(repeatCount) { index ->
+            handler.postDelayed(
+                { repeatImageFrameIfNeeded(generation) },
+                index * intervalMs
+            )
+        }
+    }
+
+    private fun repeatImageFrameIfNeeded(expectedGeneration: Int? = null) {
+        if (expectedGeneration != null && expectedGeneration != imageFrameGeneration) {
+            return
+        }
+        val bitmap = imageBitmap ?: return
+        val buffer = renderImageToI420(bitmap)
+        val frame = VideoFrame(buffer, 0, System.nanoTime())
+        capturerObserver?.onFrameCaptured(frame)
+        frame.release()
+    }
+
+    private fun renderImageToI420(bitmap: Bitmap): VideoFrame.Buffer {
+        val output = Bitmap.createBitmap(imageFrameWidth, imageFrameHeight, Bitmap.Config.ARGB_8888)
+        val crop = imageCrop()
+        val sourceWidth = (bitmap.width * crop.width).roundToInt().coerceIn(1, bitmap.width)
+        val sourceHeight = (bitmap.height * crop.height).roundToInt().coerceIn(1, bitmap.height)
+        val sourceX = (bitmap.width * crop.x).roundToInt().coerceIn(0, bitmap.width - sourceWidth)
+        val sourceY = (bitmap.height * crop.y).roundToInt().coerceIn(0, bitmap.height - sourceHeight)
+        val source = Rect(
+            sourceX,
+            sourceY,
+            sourceX + sourceWidth,
+            sourceY + sourceHeight
+        )
+        Canvas(output).drawBitmap(
+            bitmap,
+            source,
+            RectF(0f, 0f, imageFrameWidth.toFloat(), imageFrameHeight.toFloat()),
+            IMAGE_PAINT
+        )
+        val buffer = bitmapToI420(output)
+        output.recycle()
+        return buffer
+    }
+
+    private fun bitmapToI420(bitmap: Bitmap): JavaI420Buffer {
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        val buffer = JavaI420Buffer.allocate(width, height)
+        val dataY = buffer.dataY
+        val dataU = buffer.dataU
+        val dataV = buffer.dataV
+        val strideY = buffer.strideY
+        val strideU = buffer.strideU
+        val strideV = buffer.strideV
+
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val pixel = pixels[y * width + x]
+                val r = (pixel shr 16) and 0xff
+                val g = (pixel shr 8) and 0xff
+                val b = pixel and 0xff
+                val yValue = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
+                putByte(dataY, y * strideY + x, yValue)
+            }
+        }
+
+        for (y in 0 until height step 2) {
+            for (x in 0 until width step 2) {
+                var rSum = 0
+                var gSum = 0
+                var bSum = 0
+                var count = 0
+                for (dy in 0..1) {
+                    for (dx in 0..1) {
+                        val sampleX = x + dx
+                        val sampleY = y + dy
+                        if (sampleX >= width || sampleY >= height) {
+                            continue
+                        }
+                        val pixel = pixels[sampleY * width + sampleX]
+                        rSum += (pixel shr 16) and 0xff
+                        gSum += (pixel shr 8) and 0xff
+                        bSum += pixel and 0xff
+                        count += 1
+                    }
+                }
+                val r = rSum / count
+                val g = gSum / count
+                val b = bSum / count
+                val uValue = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
+                val vValue = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
+                val chromaIndex = (y / 2) * strideU + (x / 2)
+                putByte(dataU, chromaIndex, uValue)
+                putByte(dataV, (y / 2) * strideV + (x / 2), vValue)
+            }
+        }
+        return buffer
+    }
+
+    private fun putByte(buffer: ByteBuffer, index: Int, value: Int) {
+        buffer.put(index, value.coerceIn(0, 255).toByte())
+    }
+
+    private fun imageCrop(): NormalizedCrop {
+        val cropSize = imageCropSize()
+        val cropWidth = cropSize.width
+        val cropHeight = cropSize.height
+        val maxCropX = 1f - cropWidth
+        val maxCropY = 1f - cropHeight
+        return NormalizedCrop(
+            x = (maxCropX / 2f + imagePanX).coerceIn(0f, maxCropX),
+            y = (maxCropY / 2f + imagePanY).coerceIn(0f, maxCropY),
+            width = cropWidth,
+            height = cropHeight
+        )
+    }
+
+    private fun panImageBy(deltaXNormalized: Float, deltaYNormalized: Float): Boolean {
+        if (imageBitmap == null) {
+            return false
+        }
+        val cropSize = imageCropSize()
+        if (cropSize.width >= 0.999f && cropSize.height >= 0.999f) {
+            return false
+        }
+        val previousPanX = imagePanX
+        val previousPanY = imagePanY
+        imagePanX -= deltaXNormalized * cropSize.width
+        imagePanY -= deltaYNormalized * cropSize.height
+        coerceImagePan()
+        if (abs(previousPanX - imagePanX) < PAN_EPSILON &&
+            abs(previousPanY - imagePanY) < PAN_EPSILON
+        ) {
+            return false
+        }
+        runOnCameraThread {
+            repeatImageFrameIfNeeded()
+        }
+        return true
+    }
+
+    private fun maxImageZoom(): Float =
+        MAX_IMAGE_ZOOM
+
+    private fun coerceImagePan() {
+        val cropSize = imageCropSize()
+        val maxPanX = ((1f - cropSize.width) / 2f).coerceAtLeast(0f)
+        val maxPanY = ((1f - cropSize.height) / 2f).coerceAtLeast(0f)
+        imagePanX = imagePanX.coerceIn(-maxPanX, maxPanX)
+        imagePanY = imagePanY.coerceIn(-maxPanY, maxPanY)
+    }
+
+    private fun resetImagePan() {
+        imagePanX = 0f
+        imagePanY = 0f
+    }
+
+    private fun clearImageProjectionInternal() {
+        imageFrameGeneration += 1
+        imageBitmap?.recycle()
+        imageBitmap = null
+        imageZoomRatio = 1f
+        resetImagePan()
+    }
+
+    private fun updateImageFrameSizeForRotation(): Boolean {
+        val bitmap = imageBitmap ?: return false
+        val size = imageOutputFrameSize()
+        val changed = imageFrameWidth != size.width || imageFrameHeight != size.height
+        imageFrameWidth = size.width
+        imageFrameHeight = size.height
+        imageZoomRatio = imageZoomRatio.coerceIn(1f, maxImageZoom())
+        coerceImagePan()
+        return changed
+    }
+
+    private fun imageOutputFrameSize(): Size =
+        if (deviceRotationDegrees.isLandscapeRotation()) {
+            Size(MAX_IMAGE_FRAME_EDGE, IMAGE_FRAME_SHORT_EDGE)
+        } else {
+            Size(IMAGE_FRAME_SHORT_EDGE, MAX_IMAGE_FRAME_EDGE)
+        }
+
+    private fun imageCropSize(
+        bitmap: Bitmap? = imageBitmap,
+        zoomRatio: Float = imageZoomRatio
+    ): NormalizedCrop {
+        val sourceBitmap = bitmap ?: return NormalizedCrop(0f, 0f, 1f, 1f)
+        val outputAspect = imageFrameWidth.toFloat() / imageFrameHeight.toFloat()
+        val sourceAspect = sourceBitmap.width.toFloat() / sourceBitmap.height.toFloat()
+        var cropWidth = 1f
+        var cropHeight = 1f
+        if (sourceAspect > outputAspect) {
+            cropWidth = (outputAspect / sourceAspect).coerceIn(0.001f, 1f)
+        } else if (sourceAspect < outputAspect) {
+            cropHeight = (sourceAspect / outputAspect).coerceIn(0.001f, 1f)
+        }
+        val zoom = zoomRatio.coerceAtLeast(1f)
+        return NormalizedCrop(
+            x = 0f,
+            y = 0f,
+            width = (cropWidth / zoom).coerceIn(0.001f, 1f),
+            height = (cropHeight / zoom).coerceIn(0.001f, 1f)
+        )
+    }
+
+    private fun Int.isLandscapeRotation(): Boolean =
+        this == 90 || this == 270
+
     private fun clearLockedFrame() {
         lockedFrame?.release()
         lockedFrame = null
@@ -740,6 +1059,26 @@ class ControlledCamera2Capturer(
         } else {
             handler.post(block)
         }
+    }
+
+    private fun runOnCameraThreadBlocking(atFront: Boolean = false, block: () -> Unit) {
+        val handler = surfaceTextureHelper?.handler
+        if (handler == null || handler.looper.thread == Thread.currentThread()) {
+            block()
+            return
+        }
+
+        val latch = CountDownLatch(1)
+        val runnable = Runnable {
+            block()
+            latch.countDown()
+        }
+        if (atFront) {
+            handler.postAtFrontOfQueue(runnable)
+        } else {
+            handler.post(runnable)
+        }
+        latch.await(2, TimeUnit.SECONDS)
     }
 
     private fun notifyCameraChanged() {
@@ -879,6 +1218,10 @@ class ControlledCamera2Capturer(
     private companion object {
         private const val NATIVE_ASPECT_TOLERANCE = 0.025
         private const val PAN_EPSILON = 0.0005f
+        private const val MAX_IMAGE_FRAME_EDGE = 1920
+        private const val IMAGE_FRAME_SHORT_EDGE = 1080
+        private const val MAX_IMAGE_ZOOM = 8f
+        private val IMAGE_PAINT = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         private val FULL_FRAME_PRESENTATION = LockedFramePresentation(
             zoomRatio = 1f,
             cropX = 0f,

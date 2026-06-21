@@ -1,11 +1,15 @@
 package cn.edu.nb3.myclass
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Bundle
 import android.text.TextUtils
 import android.text.InputFilter
@@ -37,7 +41,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private enum class Screen {
         Connect,
         Menu,
-        Camera
+        Camera,
+        ScreenShare
+    }
+
+    private enum class PresentationMode {
+        Camera,
+        ScreenShare
     }
 
     private var currentScreen = Screen.Connect
@@ -50,11 +60,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var switchCameraButton: MaterialButton? = null
     private var frameLockButton: MaterialButton? = null
     private var torchButton: MaterialButton? = null
+    private var imageCastButton: MaterialButton? = null
     private var cameraControls: LinearLayout? = null
     private var cameraVersionLabel: TextView? = null
     private var orientationListener: OrientationEventListener? = null
     private var rawDeviceRotationDegrees = 0
     private var isUsingFrontCamera = false
+    private var activePresentationMode = PresentationMode.Camera
     private var currentDeviceOrientation = createDeviceOrientationPayload(0)
     private var lastSentDeviceOrientation: DeviceOrientationPayload? = null
     private var activeRoomCode: String? = null
@@ -63,13 +75,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var restartLiveOnResume = false
     private var resumeCameraAfterJoin = false
     private var resumeLiveAfterJoin = false
+    private var isPickingImageForProjection = false
+    private var openImagePickerAfterPermission = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         if (result.values.all { it }) {
-            showCameraScreen()
+            val shouldOpenImagePicker = openImagePickerAfterPermission
+            openImagePickerAfterPermission = false
+            showCameraScreen(openImagePicker = shouldOpenImagePicker)
         } else {
+            openImagePickerAfterPermission = false
             toast("需要摄像头权限才能直播")
         }
     }
@@ -113,7 +130,30 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    private val imagePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        isPickingImageForProjection = false
+        uri ?: return@registerForActivityResult
+        showSelectedImage(uri)
+    }
+
+    private val screenCaptureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            startScreenShare(data)
+        } else {
+            toast("已取消屏幕共享")
+        }
+    }
+
     override fun onPause() {
+        if (isPickingImageForProjection) {
+            super.onPause()
+            return
+        }
         if (currentScreen == Screen.Camera && !isFinishing) {
             cameraPausedForBackground = true
             restartLiveOnResume = webRtcClient?.isLive() == true
@@ -139,8 +179,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         override fun handleOnBackPressed() {
             when (currentScreen) {
                 Screen.Camera -> {
-                    releaseCamera()
-                    showMenuScreen()
+                    returnToMenuFromCamera()
+                }
+                Screen.ScreenShare -> {
+                    stopScreenShareAndReturnMenu()
                 }
                 Screen.Menu -> {
                     signalingClient?.close()
@@ -239,7 +281,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ensureCameraPermissions()
             }
         })
-        root.addView(secondaryButton("共享手机屏幕（暂未开放）").apply {
+        root.addView(secondaryButton("图片投屏").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -247,7 +289,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 topMargin = dp(16)
             }
             setOnClickListener {
-                toast("该功能开发中")
+                ensureCameraPermissions(openImagePicker = true)
+            }
+        })
+        root.addView(secondaryButton("共享屏幕").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(16)
+            }
+            setOnClickListener {
+                requestScreenSharePermission()
             }
         })
         statusText = bodyText("已连接课堂").apply {
@@ -264,8 +317,103 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         setContentView(root)
     }
 
-    private fun showCameraScreen(autoStartLive: Boolean = false) {
+    private fun requestScreenSharePermission() {
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        screenCaptureLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun startScreenShare(permissionData: Intent) {
+        ScreenProjectionService.start(this)
+        showScreenShareScreen(permissionData)
+    }
+
+    private fun showScreenShareScreen(permissionData: Intent) {
+        currentScreen = Screen.ScreenShare
+        activePresentationMode = PresentationMode.ScreenShare
+        val root = baseColumn().apply {
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+        }
+
+        root.addView(titleText("共享屏幕", 28f))
+        statusText = bodyText("正在准备屏幕共享...").apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(24)
+            }
+        }
+        root.addView(statusText)
+        root.addView(primaryButton("停止共享并返回菜单").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(32)
+            }
+            setOnClickListener {
+                stopScreenShareAndReturnMenu()
+            }
+        })
+        root.addView(versionLabel())
+        setContentView(root)
+        startOrientationTracking()
+
+        runCatching {
+            webRtcClient = CameraWebRtcClient(
+                context = this,
+                renderer = null,
+                sendOffer = { signalingClient?.sendOffer(it) },
+                sendIceCandidate = { signalingClient?.sendIceCandidate(it) },
+                updateStatus = { updateStatus(it) },
+                captureMode = WebRtcCaptureMode.Screen,
+                screenCaptureData = permissionData
+            )
+            webRtcClient?.startPreview()
+            sendCurrentDeviceOrientation(force = true)
+            startScreenShareLive()
+        }.onFailure {
+            ScreenProjectionService.stop(this)
+            activePresentationMode = PresentationMode.Camera
+            updateStatus(it.message ?: "屏幕共享启动失败")
+            toast(it.message ?: "屏幕共享启动失败")
+            showMenuScreen()
+        }
+    }
+
+    private fun startScreenShareLive() {
+        if (!roomJoined) {
+            updateStatus("正在重新连接教室端...")
+            toast("正在重新连接教室端")
+            return
+        }
+
+        runCatching {
+            sendCurrentDeviceOrientation(force = true)
+            webRtcClient?.startLive()
+            sendCurrentDeviceOrientation(force = true)
+            updateStatus("屏幕共享中")
+        }.onFailure {
+            updateStatus(it.message ?: "屏幕共享启动失败")
+            toast(it.message ?: "屏幕共享启动失败")
+        }
+    }
+
+    private fun stopScreenShareAndReturnMenu() {
+        if (webRtcClient?.isLive() == true) {
+            signalingClient?.sendStop()
+        }
+        releaseCamera()
+        showMenuScreen()
+    }
+
+    private fun showCameraScreen(
+        autoStartLive: Boolean = false,
+        openImagePicker: Boolean = false
+    ) {
         currentScreen = Screen.Camera
+        activePresentationMode = PresentationMode.Camera
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
         }
@@ -312,13 +460,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 startLiveFromUi()
             }
         }
-        stopLiveButton = cameraSecondaryButton("停止直播").apply {
-            isEnabled = false
+        stopLiveButton = cameraSecondaryButton("返回菜单").apply {
             setOnClickListener {
-                stopLiveButton?.isEnabled = false
-                startLiveButton?.isEnabled = true
-                webRtcClient?.stopLive()
-                signalingClient?.sendStop()
+                if (webRtcClient?.isLive() == true) {
+                    webRtcClient?.stopLive()
+                    signalingClient?.sendStop()
+                    updateLiveControlButtons(isLive = false)
+                } else {
+                    returnToMenuFromCamera()
+                }
             }
         }
         switchCameraButton = cameraSecondaryButton("切换镜头").apply {
@@ -326,6 +476,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 webRtcClient?.setFrameLocked(false)
                 updateFrameLockButton(isLocked = false, isEnabled = true)
                 webRtcClient?.switchCamera()
+                updateImageCastButton(isProjecting = false)
             }
         }
         frameLockButton = cameraSecondaryButton("锁定画面").apply {
@@ -349,6 +500,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     supportsTorch = webRtcClient?.isTorchSupported() == true,
                     torchEnabled = enabled
                 )
+            }
+        }
+        imageCastButton = cameraSecondaryButton("图片投屏").apply {
+            isEnabled = true
+            setOnClickListener {
+                if (webRtcClient?.isImageProjectionActive() == true) {
+                    updateImageCastButton(isProjecting = false)
+                    webRtcClient?.clearImageProjection()
+                    sendCurrentDeviceOrientation(force = true)
+                    return@setOnClickListener
+                }
+                launchImagePickerForProjection()
             }
         }
         cameraVersionLabel = versionLabel(onDark = true)
@@ -380,8 +543,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             webRtcClient?.startPreview()
             webRtcClient?.setDeviceRotation(rawDeviceRotationDegrees)
             updateFrameLockButton(isLocked = false, isEnabled = true)
+            updateImageCastButton(isProjecting = false)
+            updateLiveControlButtons(isLive = false)
             if (autoStartLive) {
                 startLiveFromUi()
+            }
+            if (openImagePicker) {
+                renderer.post {
+                    launchImagePickerForProjection()
+                }
             }
         }.onFailure {
             updateStatus(it.message ?: "摄像头启动失败")
@@ -407,7 +577,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         ).also { it.connect() }
     }
 
-    private fun ensureCameraPermissions() {
+    private fun ensureCameraPermissions(openImagePicker: Boolean = false) {
+        openImagePickerAfterPermission = openImagePicker
         val permissions = arrayOf(
             Manifest.permission.CAMERA
         )
@@ -415,7 +586,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
         if (allGranted) {
-            showCameraScreen()
+            val shouldOpenImagePicker = openImagePickerAfterPermission
+            openImagePickerAfterPermission = false
+            showCameraScreen(openImagePicker = shouldOpenImagePicker)
         } else {
             permissionLauncher.launch(permissions)
         }
@@ -435,7 +608,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     showCameraScreen(autoStartLive = shouldResumeLive)
                 } else {
                     updateStatus("教室端已重新连接")
-                    startLiveButton?.isEnabled = true
+                    updateLiveControlButtons(isLive = webRtcClient?.isLive() == true)
                     sendCurrentDeviceOrientation(force = true)
                     if (shouldResumeLive) {
                         startLiveFromUi()
@@ -495,7 +668,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onSignalError(message: String) {
         runOnUiThread {
             roomJoined = false
-            startLiveButton?.isEnabled = false
+            updateLiveControlButtons(isLive = webRtcClient?.isLive() == true)
             updateStatus(message)
             toast(message)
             if (currentScreen == Screen.Connect) {
@@ -508,6 +681,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun releaseCamera() {
         stopOrientationTracking()
+        ScreenProjectionService.stop(this)
         webRtcClient?.release()
         webRtcClient = null
         cameraRenderer?.release()
@@ -517,8 +691,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         switchCameraButton = null
         frameLockButton = null
         torchButton = null
+        imageCastButton = null
         cameraControls = null
         cameraVersionLabel = null
+        activePresentationMode = PresentationMode.Camera
+    }
+
+    private fun returnToMenuFromCamera() {
+        releaseCamera()
+        showMenuScreen()
     }
 
     private fun updateStatus(message: String) {
@@ -531,24 +712,27 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (!roomJoined) {
             updateStatus("正在重新连接教室端...")
             toast("正在重新连接教室端")
-            startLiveButton?.isEnabled = false
-            stopLiveButton?.isEnabled = false
+            updateLiveControlButtons(isLive = false)
             return
         }
 
-        startLiveButton?.isEnabled = false
-        stopLiveButton?.isEnabled = true
+        updateLiveControlButtons(isLive = true)
         runCatching {
             sendCurrentDeviceOrientation(force = true)
             webRtcClient?.startLive()
             sendCurrentDeviceOrientation(force = true)
         }.onFailure {
-            stopLiveButton?.isEnabled = false
-            startLiveButton?.isEnabled = true
+            updateLiveControlButtons(isLive = false)
             val message = it.message ?: "直播启动失败"
             updateStatus(message)
             toast(message)
         }
+    }
+
+    private fun updateLiveControlButtons(isLive: Boolean) {
+        startLiveButton?.isEnabled = roomJoined && !isLive
+        stopLiveButton?.isEnabled = true
+        setCameraButtonText(stopLiveButton, if (isLive) "停止直播" else "返回菜单")
     }
 
     private fun updateTorchButton(supportsTorch: Boolean, torchEnabled: Boolean) {
@@ -557,7 +741,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setCameraButtonText(torchButton, when {
                 !supportsTorch -> "无补光灯"
                 torchEnabled -> "关闭补光灯"
-                else -> "打开补光灯"
+                else -> "开补光灯"
             })
         }
     }
@@ -570,6 +754,34 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         setCameraButtonText(frameLockButton, if (isLocked) "解除锁定" else "锁定画面")
     }
 
+    private fun launchImagePickerForProjection() {
+        isPickingImageForProjection = true
+        runCatching {
+            imagePickerLauncher.launch("image/*")
+        }.onFailure {
+            isPickingImageForProjection = false
+            toast("无法打开相册")
+        }
+    }
+
+    private fun updateImageCastButton(isProjecting: Boolean) {
+        setCameraButtonText(imageCastButton, if (isProjecting) "恢复摄像头" else "图片投屏")
+    }
+
+    private fun showSelectedImage(uri: Uri) {
+        runCatching {
+            webRtcClient?.setFrameLocked(false)
+            updateFrameLockButton(isLocked = false, isEnabled = true)
+            webRtcClient?.showImage(uri)
+        }.onSuccess {
+            updateImageCastButton(isProjecting = true)
+            sendCurrentDeviceOrientation(force = true)
+        }.onFailure {
+            updateStatus(it.message ?: "图片投屏失败")
+            toast(it.message ?: "图片投屏失败")
+        }
+    }
+
     private fun updateCameraControlsLayout() {
         val controls = cameraControls ?: return
         val startButton = startLiveButton ?: return
@@ -577,10 +789,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val switchButton = switchCameraButton ?: return
         val lockButton = frameLockButton ?: return
         val lightButton = torchButton ?: return
+        val imageButton = imageCastButton ?: return
         val version = cameraVersionLabel ?: return
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        listOf(startButton, stopButton, switchButton, lockButton, lightButton, version).forEach { view ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton, version).forEach { view ->
             (view.parent as? ViewGroup)?.removeView(view)
         }
         controls.removeAllViews()
@@ -595,7 +808,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         )
 
         if (isLandscape) {
-            listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
+            listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton).forEach { button ->
                 setCameraButtonTextRotation(button, 0f)
                 button.ellipsize = TextUtils.TruncateAt.END
                 button.maxLines = 2
@@ -613,7 +826,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
 
-        listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton).forEach { button ->
             setCameraButtonTextRotation(button, 0f)
             button.ellipsize = TextUtils.TruncateAt.END
             button.maxLines = 1
@@ -651,10 +864,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         lightButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
             marginStart = dp(6)
+            marginEnd = dp(6)
+        }
+        imageButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(6)
         }
         toolsRow.addView(switchButton)
         toolsRow.addView(lockButton)
         toolsRow.addView(lightButton)
+        toolsRow.addView(imageButton)
 
         version.visibility = View.VISIBLE
         controls.addView(liveRow)
@@ -740,26 +958,35 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun createDeviceOrientationPayload(rawRotationDegrees: Int): DeviceOrientationPayload {
-        val rotationDegrees = if (!isUsingFrontCamera && rawRotationDegrees.isLandscapeRotation()) {
-            (rawRotationDegrees + 180) % 360
-        } else {
-            rawRotationDegrees
+        val isScreenShare = activePresentationMode == PresentationMode.ScreenShare
+        val rotationDegrees = when {
+            isScreenShare && rawRotationDegrees.isLandscapeRotation() -> rawRotationDegrees
+            isScreenShare -> 90
+            !isUsingFrontCamera && rawRotationDegrees.isLandscapeRotation() -> (rawRotationDegrees + 180) % 360
+            else -> rawRotationDegrees
         }
-        val orientation = if (rawRotationDegrees.isLandscapeRotation()) {
+        val orientation = if (isScreenShare || rawRotationDegrees.isLandscapeRotation()) {
             "landscape"
         } else {
             "portrait"
         }
-        val cameraFacing = if (isUsingFrontCamera) "front" else "back"
-        val frameLocked = webRtcClient?.isFrameLocked() == true
-        val lockedFramePresentation = webRtcClient?.lockedFramePresentation()
-            ?: LockedFramePresentation(
-                zoomRatio = 1f,
-                cropX = 0f,
-                cropY = 0f,
-                cropWidth = 1f,
-                cropHeight = 1f
-            )
+        val cameraFacing = when {
+            isScreenShare -> "unknown"
+            isUsingFrontCamera -> "front"
+            else -> "back"
+        }
+        val frameLocked = !isScreenShare && webRtcClient?.isStaticPresentationActive() == true
+        val lockedFramePresentation = if (frameLocked) {
+            webRtcClient?.lockedFramePresentation()
+        } else {
+            null
+        } ?: LockedFramePresentation(
+            zoomRatio = 1f,
+            cropX = 0f,
+            cropY = 0f,
+            cropWidth = 1f,
+            cropHeight = 1f
+        )
 
         return DeviceOrientationPayload(
             orientation = orientation,
@@ -789,7 +1016,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
                     touchWasScaling = true
                     webRtcClient?.zoomBy(detector.scaleFactor)
-                    if (webRtcClient?.isFrameLocked() == true) {
+                    if (webRtcClient?.isStaticPresentationActive() == true) {
                         sendCurrentDeviceOrientation(force = true)
                     }
                     return true
@@ -811,7 +1038,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (event.actionMasked == MotionEvent.ACTION_MOVE &&
                 event.pointerCount == 1 &&
                 !touchWasScaling &&
-                webRtcClient?.isFrameLocked() == true
+                webRtcClient?.isStaticPresentationActive() == true
             ) {
                 val dx = event.x - lastTouchX
                 val dy = event.y - lastTouchY
@@ -829,7 +1056,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (event.actionMasked == MotionEvent.ACTION_UP &&
                 !touchWasScaling &&
                 !touchWasDragging &&
-                webRtcClient?.isFrameLocked() != true
+                webRtcClient?.isStaticPresentationActive() != true
             ) {
                 val width = view.width
                 val height = view.height
