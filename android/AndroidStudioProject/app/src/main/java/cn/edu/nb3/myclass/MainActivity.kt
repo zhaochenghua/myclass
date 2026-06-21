@@ -103,6 +103,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var restartLiveOnResume = false
     private var resumeCameraAfterJoin = false
     private var resumeLiveAfterJoin = false
+    private var pendingCoursewareCloseAfterJoin = false
     private var isPickingImageForProjection = false
     private var openImagePickerAfterPermission = false
     private var coursewarePage = 1
@@ -1127,7 +1128,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun closeCoursewareAndReturnMenu() {
         cancelCoursewareFastSeek()
-        signalingClient?.sendCoursewareClose()
+        if (!sendCoursewareCloseSignal() && activeRoomCode != null) {
+            pendingCoursewareCloseAfterJoin = true
+            reconnectSignalingForCurrentRoom()
+        }
         coursewareUploadInProgress = false
         coursewarePage = 1
         coursewarePageCount = 1
@@ -1136,6 +1140,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareTitle = ""
         coursewareUrl = ""
         showMenuScreen()
+    }
+
+    private fun sendCoursewareCloseSignal(): Boolean {
+        val stopSent = signalingClient?.sendStop() == true
+        val closeSent = signalingClient?.sendCoursewareClose() == true
+        return closeSent || stopSent
     }
 
     private fun showCameraScreen(
@@ -1345,6 +1355,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             val shouldResumeLive = resumeLiveAfterJoin
             resumeCameraAfterJoin = false
             resumeLiveAfterJoin = false
+            if (pendingCoursewareCloseAfterJoin) {
+                pendingCoursewareCloseAfterJoin = false
+                sendCoursewareCloseSignal()
+                toast("课件播放已结束")
+                showMenuScreen()
+                return@runOnUiThread
+            }
             if (currentScreen == Screen.Courseware) {
                 if (!coursewareUploadInProgress && coursewareUrl.isNotBlank()) {
                     signalingClient?.sendCoursewareOpen(
@@ -1385,6 +1402,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             signalReconnectInProgress = false
             resumeCameraAfterJoin = false
             resumeLiveAfterJoin = false
+            pendingCoursewareCloseAfterJoin = false
             toast(message)
             signalingClient?.close()
             signalingClient = null

@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.1.27-20260622';
+const APP_VERSION = process.env.APP_VERSION || '1.1.28-20260622';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(

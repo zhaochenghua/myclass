@@ -87,11 +87,10 @@ class SignalingClient(
         )
     }
 
-    fun sendStop() {
+    fun sendStop(): Boolean =
         sendJson(JSONObject().put("type", "teacher.stop"))
-    }
 
-    fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1) {
+    fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.open")
@@ -100,27 +99,23 @@ class SignalingClient(
                 .put("page", page)
                 .put("screen", screen)
         )
-    }
 
-    fun sendCoursewareNavigate(delta: Int) {
+    fun sendCoursewareNavigate(delta: Int): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.navigate")
                 .put("delta", if (delta < 0) -1 else 1)
         )
-    }
 
-    fun sendCoursewarePage(page: Int) {
+    fun sendCoursewarePage(page: Int): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.page")
                 .put("page", page)
         )
-    }
 
-    fun sendCoursewareClose() {
+    fun sendCoursewareClose(): Boolean =
         sendJson(JSONObject().put("type", "courseware.close"))
-    }
 
     fun sendOrientation(orientation: DeviceOrientationPayload) {
         sendJson(
@@ -185,9 +180,8 @@ class SignalingClient(
         }
     }
 
-    private fun sendJson(payload: JSONObject) {
-        webSocket?.send(payload.toString())
-    }
+    private fun sendJson(payload: JSONObject): Boolean =
+        webSocket?.send(payload.toString()) == true
 
     private fun readableNetworkError(message: String): String {
         val lowerMessage = message.lowercase()

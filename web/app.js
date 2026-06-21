@@ -159,8 +159,11 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.stop':
       cleanupPeerConnection();
-      showJoinView();
-      setWaitingStatus('直播已停止，等待教师重新开始...');
+      closeCourseware(
+        state.presentationMode === 'courseware'
+          ? '课件播放已结束，等待教师连接...'
+          : '直播已停止，等待教师重新开始...'
+      );
       break;
     case 'room.expired':
       setWaitingStatus('连接码已过期，正在创建新课堂...');
@@ -350,13 +353,13 @@ function navigateCourseware(deltaValue) {
   renderCoursewarePage();
 }
 
-function closeCourseware() {
+function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {
   destroyCoursewareDocument(state.courseware);
   state.courseware = null;
   clearCoursewareCanvas();
   resetAnnotations();
   showJoinView();
-  setWaitingStatus('课件播放已结束，等待教师连接...');
+  setWaitingStatus(statusText);
 }
 
 async function loadCoursewareDocument(courseware) {
