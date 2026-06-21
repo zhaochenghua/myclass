@@ -34,6 +34,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     )
 
     private data class StoredCoursewareItem(
+        val id: String,
         val title: String,
         val url: String,
         val size: Long
@@ -110,6 +112,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareTitle = ""
     private var coursewareUrl = ""
     private var coursewareUploadInProgress = false
+    private var coursewareFastSeekDirection = 0
+    private var coursewareFastSeekTargetPage = 1
+    private var coursewareFastSeekConsumedClick = false
+    private var coursewareFastSeekTicks = 0
+    private var coursewareFastSeekRunnable: Runnable? = null
     private var signalReconnectInProgress = false
     private val coursewareHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -600,10 +607,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 )
             }
             items.forEachIndexed { index, item ->
-                listColumn.addView(secondaryButton("${item.title}\n${formatCoursewareSize(item.size)}").apply {
-                    maxLines = 2
-                    setSingleLine(false)
-                    ellipsize = TextUtils.TruncateAt.END
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         dp(68)
@@ -612,10 +617,33 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             topMargin = dp(10)
                         }
                     }
+                }
+                row.addView(secondaryButton("${item.title}\n${formatCoursewareSize(item.size)}").apply {
+                    maxLines = 2
+                    setSingleLine(false)
+                    ellipsize = TextUtils.TruncateAt.END
+                    layoutParams = LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        1f
+                    ).apply {
+                        marginEnd = dp(8)
+                    }
                     setOnClickListener {
                         openStoredCourseware(item)
                     }
                 })
+                row.addView(secondaryButton("删除").apply {
+                    textSize = 15f
+                    layoutParams = LinearLayout.LayoutParams(
+                        dp(82),
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    setOnClickListener {
+                        confirmDeleteServerCourseware(item)
+                    }
+                })
+                listColumn.addView(row)
             }
             root.addView(ScrollView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(
@@ -668,11 +696,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             val items = JSONObject(body).optJSONArray("items") ?: JSONArray()
             return (0 until items.length()).mapNotNull { index ->
                 val item = items.optJSONObject(index) ?: return@mapNotNull null
+                val id = item.optString("id")
                 val url = item.optString("url")
-                if (url.isBlank()) {
+                if (id.isBlank() || url.isBlank()) {
                     return@mapNotNull null
                 }
                 StoredCoursewareItem(
+                    id = id,
                     title = item.optString("title", "课件"),
                     url = url,
                     size = item.optLong("size", 0L)
@@ -681,7 +711,48 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    private fun confirmDeleteServerCourseware(item: StoredCoursewareItem) {
+        AlertDialog.Builder(this)
+            .setTitle("删除服务器课件")
+            .setMessage("确定删除“${item.title}”吗？")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除") { _, _ ->
+                deleteServerCourseware(item)
+            }
+            .show()
+    }
+
+    private fun deleteServerCourseware(item: StoredCoursewareItem) {
+        Thread {
+            runCatching {
+                deleteServerCoursewareBlocking(item)
+            }.onSuccess {
+                runOnUiThread {
+                    toast("服务器课件已删除")
+                    loadServerCoursewareList()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    toast(error.message ?: "服务器课件删除失败")
+                }
+            }
+        }.start()
+    }
+
+    private fun deleteServerCoursewareBlocking(item: StoredCoursewareItem) {
+        val request = Request.Builder()
+            .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware/${item.id}")
+            .delete()
+            .build()
+        coursewareHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IOException("服务器课件删除失败：HTTP ${response.code}")
+            }
+        }
+    }
+
     private fun openStoredCourseware(item: StoredCoursewareItem) {
+        cancelCoursewareFastSeek()
         coursewareUploadInProgress = false
         coursewarePage = 1
         coursewarePageCount = 1
@@ -711,6 +782,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             toast("请先连接教室端")
             return
         }
+        cancelCoursewareFastSeek()
         val fileName = displayNameForUri(uri)
         coursewareTitle = fileName
         coursewareUrl = ""
@@ -905,18 +977,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                 marginEnd = dp(8)
             }
-            setOnClickListener {
-                changeCoursewarePage(-1)
-            }
+            configureCoursewareNavigationButton(this, -1)
         })
         pageRow.addView(primaryButton("下一屏").apply {
             isEnabled = !isUploading && roomJoined
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                 marginStart = dp(8)
             }
-            setOnClickListener {
-                changeCoursewarePage(1)
-            }
+            configureCoursewareNavigationButton(this, 1)
         })
         root.addView(pageRow)
 
@@ -958,7 +1026,107 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         updateStatus("$coursewareTitle\n正在切换...")
     }
 
+    private fun configureCoursewareNavigationButton(button: MaterialButton, delta: Int) {
+        button.setOnClickListener {
+            if (coursewareFastSeekConsumedClick) {
+                coursewareFastSeekConsumedClick = false
+                return@setOnClickListener
+            }
+            changeCoursewarePage(delta)
+        }
+        button.setOnLongClickListener {
+            startCoursewareFastSeek(delta)
+            true
+        }
+        button.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> {
+                    if (coursewareFastSeekDirection != 0) {
+                        finishCoursewareFastSeek()
+                        coursewareFastSeekConsumedClick = true
+                        true
+                    } else {
+                        false
+                    }
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun startCoursewareFastSeek(delta: Int) {
+        if (coursewareUploadInProgress) {
+            return
+        }
+        if (!roomJoined) {
+            reconnectSignalingForCurrentRoom()
+            updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            return
+        }
+        cancelCoursewareFastSeek()
+        coursewareFastSeekDirection = if (delta < 0) -1 else 1
+        coursewareFastSeekTargetPage = coursewarePage.coerceIn(1, coursewarePageCount.coerceAtLeast(1))
+        coursewareFastSeekConsumedClick = false
+        stepCoursewareFastSeek()
+    }
+
+    private fun stepCoursewareFastSeek() {
+        if (coursewareFastSeekDirection == 0) {
+            return
+        }
+        val pageCount = coursewarePageCount.coerceAtLeast(1)
+        val step = when {
+            coursewareFastSeekTicks >= 45 -> 10
+            coursewareFastSeekTicks >= 25 -> 5
+            coursewareFastSeekTicks >= 10 -> 2
+            else -> 1
+        }
+        coursewareFastSeekTargetPage = (
+            coursewareFastSeekTargetPage + coursewareFastSeekDirection * step
+        ).coerceIn(1, pageCount)
+        coursewareFastSeekTicks += 1
+        updateStatus(
+            "$coursewareTitle\n定位到第 $coursewareFastSeekTargetPage / $pageCount 页，松手跳转"
+        )
+
+        val runnable = Runnable {
+            stepCoursewareFastSeek()
+        }
+        coursewareFastSeekRunnable = runnable
+        statusText?.postDelayed(runnable, 120L)
+    }
+
+    private fun finishCoursewareFastSeek() {
+        if (coursewareFastSeekDirection == 0) {
+            return
+        }
+        val targetPage = coursewareFastSeekTargetPage
+        cancelCoursewareFastSeek()
+        if (!roomJoined) {
+            reconnectSignalingForCurrentRoom()
+            updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            return
+        }
+        if (targetPage == coursewarePage) {
+            updateStatus(coursewareStatusText(coursewareTitle))
+            return
+        }
+        signalingClient?.sendCoursewarePage(targetPage)
+        updateStatus("$coursewareTitle\n正在跳转到第 $targetPage 页...")
+    }
+
+    private fun cancelCoursewareFastSeek() {
+        coursewareFastSeekRunnable?.let { runnable ->
+            statusText?.removeCallbacks(runnable)
+        }
+        coursewareFastSeekRunnable = null
+        coursewareFastSeekDirection = 0
+        coursewareFastSeekTicks = 0
+    }
+
     private fun closeCoursewareAndReturnMenu() {
+        cancelCoursewareFastSeek()
         signalingClient?.sendCoursewareClose()
         coursewareUploadInProgress = false
         coursewarePage = 1
@@ -1267,7 +1435,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             coursewarePageCount = state.pageCount
             coursewareScreen = state.screen
             coursewareScreenCount = state.screenCount
-            updateStatus(coursewareStatusText(coursewareTitle))
+            if (coursewareFastSeekDirection == 0) {
+                updateStatus(coursewareStatusText(coursewareTitle))
+            }
         }
     }
 

@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.1.26-20260622';
+const APP_VERSION = process.env.APP_VERSION || '1.1.27-20260622';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -70,7 +70,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
     res.setHeader('Vary', 'Origin');
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
@@ -127,6 +127,19 @@ app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
 app.get(`${PATH_PREFIX}/api/courseware`, async (req, res, next) => {
   try {
     res.json({ items: await listStoredCourseware() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete(`${PATH_PREFIX}/api/courseware/:id`, async (req, res, next) => {
+  try {
+    const deleted = await deleteStoredCourseware(req.params.id);
+    if (!deleted) {
+      res.status(404).json({ error: '课件不存在' });
+      return;
+    }
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
@@ -435,6 +448,44 @@ async function rememberCourseware(item) {
   );
 }
 
+async function deleteStoredCourseware(id) {
+  if (!isSafeCoursewareId(id)) {
+    const error = new Error('无效课件编号');
+    error.status = 400;
+    throw error;
+  }
+
+  const currentItems = await readCoursewareIndex();
+  const filePath = path.join(coursewareRoot, `${id}.pdf`);
+  const resolvedFilePath = path.resolve(filePath);
+  if (!resolvedFilePath.startsWith(`${path.resolve(coursewareRoot)}${path.sep}`)) {
+    const error = new Error('无效课件路径');
+    error.status = 400;
+    throw error;
+  }
+
+  const wasIndexed = currentItems.some((item) => item.id === id);
+  let fileDeleted = false;
+  try {
+    await fs.promises.unlink(resolvedFilePath);
+    fileDeleted = true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  if (wasIndexed) {
+    await fs.promises.writeFile(
+      coursewareIndexPath,
+      JSON.stringify(currentItems.filter((item) => item.id !== id), null, 2),
+      'utf8'
+    );
+  }
+
+  return wasIndexed || fileDeleted;
+}
+
 async function readCoursewareIndex() {
   try {
     const text = await fs.promises.readFile(coursewareIndexPath, 'utf8');
@@ -446,6 +497,10 @@ async function readCoursewareIndex() {
     }
     throw error;
   }
+}
+
+function isSafeCoursewareId(id) {
+  return typeof id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id);
 }
 
 function isAllowedHost(hostHeader) {
