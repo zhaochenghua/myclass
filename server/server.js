@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.1.25-20260622';
+const APP_VERSION = process.env.APP_VERSION || '1.1.26-20260622';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -32,8 +32,12 @@ const webRoot = path.resolve(__dirname, '..', 'web');
 const publicRoot = path.join(webRoot, 'public');
 const apkPath = path.join(publicRoot, 'myclass.apk');
 const coursewareRoot = path.join(publicRoot, 'courseware');
+const coursewareIndexPath = path.join(coursewareRoot, 'index.json');
 const tempRoot = path.join(__dirname, 'tmp', 'courseware');
-const COURSEWARE_MAX_BYTES = Number(process.env.COURSEWARE_MAX_BYTES || 500 * 1024 * 1024);
+const COURSEWARE_MAX_BYTES = Number(process.env.COURSEWARE_MAX_BYTES || 2 * 1024 * 1024 * 1024);
+const COURSEWARE_REQUEST_TIMEOUT_MS = Number(
+  process.env.COURSEWARE_REQUEST_TIMEOUT_MS || 30 * 60 * 1000
+);
 const upload = multer({
   dest: tempRoot,
   limits: {
@@ -43,6 +47,10 @@ const upload = multer({
 
 fs.mkdirSync(coursewareRoot, { recursive: true });
 fs.mkdirSync(tempRoot, { recursive: true });
+
+server.requestTimeout = COURSEWARE_REQUEST_TIMEOUT_MS;
+server.timeout = COURSEWARE_REQUEST_TIMEOUT_MS;
+server.headersTimeout = Math.min(120000, COURSEWARE_REQUEST_TIMEOUT_MS);
 
 app.disable('x-powered-by');
 
@@ -111,6 +119,14 @@ app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
       }
     });
     res.type('image/svg+xml').send(svg);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get(`${PATH_PREFIX}/api/courseware`, async (req, res, next) => {
+  try {
+    res.json({ items: await listStoredCourseware() });
   } catch (error) {
     next(error);
   }
@@ -217,12 +233,17 @@ async function publishCourseware(file, fields = {}) {
     throw publicError(400, '仅支持 PDF、PPT、PPTX 课件');
   }
 
-  return {
+  const stat = await fs.promises.stat(pdfPath);
+  const result = {
     id,
     title: path.basename(originalName, ext),
     fileName: originalName,
+    size: stat.size,
+    createdAt: new Date().toISOString(),
     url: `${PATH_PREFIX}/public/courseware/${pdfName}`
   };
+  await rememberCourseware(result);
+  return result;
 }
 
 async function convertPresentationToPdf(inputPath, ext, outputPdfPath, id) {
@@ -365,6 +386,66 @@ function sanitizeCoursewareName(value) {
 function formatBytes(bytes) {
   const mb = bytes / 1024 / 1024;
   return `${Math.round(mb)}MB`;
+}
+
+async function listStoredCourseware() {
+  const indexedItems = await readCoursewareIndex();
+  const knownIds = new Set(indexedItems.map((item) => item.id));
+  const discoveredItems = [];
+  const files = await fs.promises.readdir(coursewareRoot, { withFileTypes: true });
+
+  for (const file of files) {
+    if (!file.isFile() || path.extname(file.name).toLowerCase() !== '.pdf') {
+      continue;
+    }
+    const id = path.basename(file.name, '.pdf');
+    if (knownIds.has(id)) {
+      continue;
+    }
+    const stat = await fs.promises.stat(path.join(coursewareRoot, file.name));
+    discoveredItems.push({
+      id,
+      title: id,
+      fileName: file.name,
+      size: stat.size,
+      createdAt: stat.birthtime.toISOString(),
+      url: `${PATH_PREFIX}/public/courseware/${file.name}`
+    });
+  }
+
+  const items = [...indexedItems, ...discoveredItems]
+    .filter((item) => item && item.id && item.url)
+    .filter((item) => fs.existsSync(path.join(coursewareRoot, `${item.id}.pdf`)))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, Number(process.env.COURSEWARE_LIST_LIMIT || 60));
+
+  return items;
+}
+
+async function rememberCourseware(item) {
+  const currentItems = await readCoursewareIndex();
+  const nextItems = [
+    item,
+    ...currentItems.filter((existing) => existing.id !== item.id)
+  ].slice(0, Number(process.env.COURSEWARE_INDEX_LIMIT || 100));
+  await fs.promises.writeFile(
+    coursewareIndexPath,
+    JSON.stringify(nextItems, null, 2),
+    'utf8'
+  );
+}
+
+async function readCoursewareIndex() {
+  try {
+    const text = await fs.promises.readFile(coursewareIndexPath, 'utf8');
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
 }
 
 function isAllowedHost(hostHeader) {

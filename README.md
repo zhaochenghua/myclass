@@ -92,13 +92,14 @@ PATH_PREFIX=/myclass
 PUBLIC_BASE_URL=http://10.30.13.1/myclass
 ALLOWED_HOSTS=10.30.13.1,localhost,127.0.0.1
 ROOM_TTL_MS=7200000
-APP_VERSION=1.1.25-20260622
+APP_VERSION=1.1.26-20260622
 LIBREOFFICE_PATH=C:\Program Files\LibreOffice\program\soffice.exe
-COURSEWARE_MAX_BYTES=524288000
+COURSEWARE_MAX_BYTES=2147483648
+COURSEWARE_REQUEST_TIMEOUT_MS=1800000
 COURSEWARE_CONVERT_TIMEOUT_MS=120000
 ```
 
-“播放课件”功能由手机 App 选择本机 PDF/PPT/PPTX 并上传到服务端。PDF 会直接发布，PPT/PPTX 会通过 LibreOffice headless 转换为 PDF 后在网页端自动打开。网页端使用本地 PDF.js 单页渲染课件；横向幻灯片整页显示，竖向 A4 文档按屏幕宽度铺满并支持上一屏/下一屏与手型拖拽。画笔标注绑定在课件页坐标上，会跟随拖动画面移动。服务器需要安装 LibreOffice；如果不在默认路径，请设置 `LIBREOFFICE_PATH` 或 `SOFFICE_PATH`。
+“播放课件”功能由手机 App 选择本机 PDF/PPT/PPTX 并上传到服务端。PDF 会直接发布，PPT/PPTX 会通过 LibreOffice headless 转换为 PDF 后在网页端自动打开，并写入服务器暂存课件列表；App 后续可直接选择服务器课件，避免大课件重复上传。网页端使用本地 PDF.js 单页渲染课件；横向幻灯片整页显示，竖向 A4 文档按屏幕宽度铺满并支持上一屏/下一屏与手型拖拽。画笔标注绑定在课件页坐标上，会跟随拖动画面移动。服务器需要安装 LibreOffice；如果不在默认路径，请设置 `LIBREOFFICE_PATH` 或 `SOFFICE_PATH`。
 
 HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认只允许 `10.30.13.1`、`localhost`、`127.0.0.1`。请不要把该服务直接暴露到公网。
 
