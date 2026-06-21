@@ -34,6 +34,9 @@ import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 enum class WebRtcCaptureMode {
     Camera,
@@ -103,7 +106,7 @@ class CameraWebRtcClient(
         val source = factory.createVideoSource(capturer.isScreencast)
         capturer.initialize(textureHelper, appContext, source.capturerObserver)
         val captureSize = captureStartSize()
-        capturer.startCapture(captureSize.width, captureSize.height, BuildConfig.VIDEO_FPS)
+        capturer.startCapture(captureSize.width, captureSize.height, captureFps())
 
         val videoTrack = factory.createVideoTrack("myclass-video", source)
         videoTrack.setEnabled(true)
@@ -145,10 +148,36 @@ class CameraWebRtcClient(
 
     private fun captureStartSize(): Size =
         if (captureMode == WebRtcCaptureMode.Screen) {
-            Size(SCREEN_SHARE_WIDTH, SCREEN_SHARE_HEIGHT)
+            screenShareCaptureSize()
         } else {
             Size(BuildConfig.VIDEO_WIDTH, BuildConfig.VIDEO_HEIGHT)
         }
+
+    private fun captureFps(): Int =
+        if (captureMode == WebRtcCaptureMode.Screen) {
+            SCREEN_SHARE_FPS
+        } else {
+            BuildConfig.VIDEO_FPS
+        }
+
+    private fun screenShareCaptureSize(): Size {
+        val metrics = appContext.resources.displayMetrics
+        val sourceWidth = metrics.widthPixels
+        val sourceHeight = metrics.heightPixels
+        if (sourceWidth <= 0 || sourceHeight <= 0) {
+            return Size(SCREEN_SHARE_FALLBACK_WIDTH, SCREEN_SHARE_FALLBACK_HEIGHT)
+        }
+
+        val sourceLongEdge = max(sourceWidth, sourceHeight)
+        val sourceShortEdge = min(sourceWidth, sourceHeight)
+        val targetLongEdge = min(sourceLongEdge, SCREEN_SHARE_MAX_LONG_EDGE)
+        val targetShortEdge = (sourceShortEdge * targetLongEdge.toFloat() / sourceLongEdge)
+            .roundToInt()
+        return Size(
+            targetLongEdge.toEvenAtLeast(2),
+            targetShortEdge.toEvenAtLeast(2)
+        )
+    }
 
     fun startLive() {
         if (!previewStarted) {
@@ -398,9 +427,9 @@ class CameraWebRtcClient(
         parameters.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
         parameters.encodings.forEach { encoding ->
             encoding.active = true
-            encoding.minBitrateBps = VIDEO_MIN_BITRATE_BPS
-            encoding.maxBitrateBps = VIDEO_MAX_BITRATE_BPS
-            encoding.maxFramerate = BuildConfig.VIDEO_FPS
+            encoding.minBitrateBps = minVideoBitrateBps()
+            encoding.maxBitrateBps = maxVideoBitrateBps()
+            encoding.maxFramerate = captureFps()
             encoding.scaleResolutionDownBy = 1.0
         }
         val applied = sender.setParameters(parameters)
@@ -409,6 +438,25 @@ class CameraWebRtcClient(
         } else {
             updateStatus("高清码率设置失败，继续使用默认码率")
         }
+    }
+
+    private fun minVideoBitrateBps(): Int =
+        if (captureMode == WebRtcCaptureMode.Screen) {
+            SCREEN_SHARE_MIN_BITRATE_BPS
+        } else {
+            VIDEO_MIN_BITRATE_BPS
+        }
+
+    private fun maxVideoBitrateBps(): Int =
+        if (captureMode == WebRtcCaptureMode.Screen) {
+            SCREEN_SHARE_MAX_BITRATE_BPS
+        } else {
+            VIDEO_MAX_BITRATE_BPS
+        }
+
+    private fun Int.toEvenAtLeast(minimum: Int): Int {
+        val value = coerceAtLeast(minimum)
+        return if (value % 2 == 0) value else value - 1
     }
 
     private fun peerObserver() = object : PeerConnection.Observer {
@@ -465,8 +513,12 @@ class CameraWebRtcClient(
         private const val VIDEO_MIN_BITRATE_BPS = 300_000
         private const val VIDEO_MAX_BITRATE_BPS = 12_000_000
         private const val MAX_IMAGE_SOURCE_EDGE = 4096
-        private const val SCREEN_SHARE_WIDTH = 1920
-        private const val SCREEN_SHARE_HEIGHT = 1080
+        private const val SCREEN_SHARE_FALLBACK_WIDTH = 1920
+        private const val SCREEN_SHARE_FALLBACK_HEIGHT = 1080
+        private const val SCREEN_SHARE_MAX_LONG_EDGE = 2560
+        private const val SCREEN_SHARE_FPS = 12
+        private const val SCREEN_SHARE_MIN_BITRATE_BPS = 1_500_000
+        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 25_000_000
 
         private fun initializeFactoryOnce(context: Context) {
             if (factoryInitialized) {

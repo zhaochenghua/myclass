@@ -323,8 +323,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun startScreenShare(permissionData: Intent) {
-        ScreenProjectionService.start(this)
-        showScreenShareScreen(permissionData)
+        updateStatus("正在启动屏幕共享服务...")
+        ScreenProjectionService.start(this) {
+            runOnUiThread {
+                if (currentScreen == Screen.Menu && !isFinishing) {
+                    showScreenShareScreen(permissionData)
+                } else {
+                    ScreenProjectionService.stop(this)
+                }
+            }
+        }
     }
 
     private fun showScreenShareScreen(permissionData: Intent) {

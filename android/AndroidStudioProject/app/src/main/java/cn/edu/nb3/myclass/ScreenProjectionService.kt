@@ -8,7 +8,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -30,7 +32,13 @@ class ScreenProjectionService : Service() {
                 0
             }
         )
+        markForegroundStarted()
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        markForegroundStopped()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -64,8 +72,25 @@ class ScreenProjectionService : Service() {
     companion object {
         private const val CHANNEL_ID = "myclass_screen_projection"
         private const val NOTIFICATION_ID = 20260621
+        private val callbackLock = Any()
+        private val foregroundCallbacks = mutableListOf<() -> Unit>()
+        @Volatile
+        private var foregroundStarted = false
 
-        fun start(context: Context) {
+        fun start(context: Context, onForegroundStarted: (() -> Unit)? = null) {
+            onForegroundStarted?.let { callback ->
+                var runImmediately = false
+                synchronized(callbackLock) {
+                    if (foregroundStarted) {
+                        runImmediately = true
+                    } else {
+                        foregroundCallbacks.add(callback)
+                    }
+                }
+                if (runImmediately) {
+                    Handler(Looper.getMainLooper()).post(callback)
+                }
+            }
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, ScreenProjectionService::class.java)
@@ -73,7 +98,28 @@ class ScreenProjectionService : Service() {
         }
 
         fun stop(context: Context) {
+            markForegroundStopped()
             context.stopService(Intent(context, ScreenProjectionService::class.java))
+        }
+
+        private fun markForegroundStarted() {
+            val callbacks = synchronized(callbackLock) {
+                foregroundStarted = true
+                foregroundCallbacks.toList().also {
+                    foregroundCallbacks.clear()
+                }
+            }
+            val handler = Handler(Looper.getMainLooper())
+            callbacks.forEach { callback ->
+                handler.post(callback)
+            }
+        }
+
+        private fun markForegroundStopped() {
+            synchronized(callbackLock) {
+                foregroundStarted = false
+                foregroundCallbacks.clear()
+            }
         }
     }
 }
