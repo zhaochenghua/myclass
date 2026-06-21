@@ -17,6 +17,7 @@ import android.text.TextUtils
 import android.text.InputFilter
 import android.text.InputType
 import android.util.AttributeSet
+import android.util.Base64
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.OrientationEventListener
@@ -96,11 +97,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var openImagePickerAfterPermission = false
     private var coursewarePage = 1
     private var coursewareTitle = ""
+    private var coursewareUrl = ""
     private var coursewareUploadInProgress = false
+    private var signalReconnectInProgress = false
     private val coursewareHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(180, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.MINUTES)
+        .readTimeout(10, TimeUnit.MINUTES)
+        .callTimeout(12, TimeUnit.MINUTES)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val permissionLauncher = registerForActivityResult(
@@ -471,11 +476,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             toast("请先连接教室端")
             return
         }
-        showCoursewareScreen(title = "正在上传课件", isUploading = true)
+        val fileName = displayNameForUri(uri)
+        coursewareTitle = fileName
+        coursewareUrl = ""
+        coursewarePage = 1
+        showCoursewareScreen(title = fileName, isUploading = true)
 
         Thread {
             runCatching {
-                uploadCoursewareBlocking(uri)
+                uploadCoursewareBlocking(uri, fileName)
             }.onSuccess { result ->
                 runOnUiThread {
                     if (currentScreen != Screen.Courseware) {
@@ -484,23 +493,28 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     coursewareUploadInProgress = false
                     coursewarePage = 1
                     coursewareTitle = result.title
-                    signalingClient?.sendStop()
-                    signalingClient?.sendCoursewareOpen(result.url, result.title, coursewarePage)
+                    coursewareUrl = result.url
+                    if (roomJoined) {
+                        signalingClient?.sendStop()
+                        signalingClient?.sendCoursewareOpen(result.url, result.title, coursewarePage)
+                        toast("课件已打开")
+                    } else {
+                        reconnectSignalingForCurrentRoom()
+                        toast("课件已上传，正在重新连接教室端")
+                    }
                     showCoursewareScreen(title = result.title, isUploading = false)
-                    toast("课件已打开")
                 }
             }.onFailure { error ->
                 runOnUiThread {
                     coursewareUploadInProgress = false
-                    toast(error.message ?: "课件上传失败")
+                    toast(coursewareUploadErrorMessage(error))
                     showMenuScreen()
                 }
             }
         }.start()
     }
 
-    private fun uploadCoursewareBlocking(uri: Uri): CoursewareUploadResult {
-        val fileName = displayNameForUri(uri)
+    private fun uploadCoursewareBlocking(uri: Uri, fileName: String): CoursewareUploadResult {
         val requestBody = object : RequestBody() {
             override fun contentType() =
                 (contentResolver.getType(uri) ?: "application/octet-stream").toMediaTypeOrNull()
@@ -528,6 +542,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         val multipartBody = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
+            .addFormDataPart(
+                "displayNameBase64",
+                Base64.encodeToString(fileName.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+            )
             .addFormDataPart("file", fileName, requestBody)
             .build()
         val request = Request.Builder()
@@ -561,6 +579,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         return uri.lastPathSegment?.substringAfterLast('/') ?: "courseware"
     }
 
+    private fun coursewareUploadErrorMessage(error: Throwable): String {
+        val message = error.message.orEmpty()
+        val lowerMessage = message.lowercase()
+        return when {
+            lowerMessage.contains("software caused connection abort") ||
+                lowerMessage.contains("connection reset") ||
+                lowerMessage.contains("broken pipe") ||
+                lowerMessage.contains("timeout") ||
+                lowerMessage.contains("failed to connect") ->
+                "课件上传连接中断，请确认手机和服务器网络正常后重试"
+            message.isNotBlank() -> message
+            else -> "课件上传失败"
+        }
+    }
+
     private fun showCoursewareScreen(title: String, isUploading: Boolean) {
         currentScreen = Screen.Courseware
         coursewareUploadInProgress = isUploading
@@ -571,6 +604,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         statusText = bodyText(
             if (isUploading) {
                 "正在上传并转换：$title"
+            } else if (!roomJoined) {
+                "$title\n正在重新连接教室端..."
             } else {
                 "$title\n第 $coursewarePage 页"
             }
@@ -596,7 +631,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         pageRow.addView(secondaryButton("上一页").apply {
-            isEnabled = !isUploading
+            isEnabled = !isUploading && roomJoined
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                 marginEnd = dp(8)
             }
@@ -605,7 +640,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         })
         pageRow.addView(primaryButton("下一页").apply {
-            isEnabled = !isUploading
+            isEnabled = !isUploading && roomJoined
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                 marginStart = dp(8)
             }
@@ -634,6 +669,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (coursewareUploadInProgress) {
             return
         }
+        if (!roomJoined) {
+            reconnectSignalingForCurrentRoom()
+            updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            return
+        }
         coursewarePage = (coursewarePage + delta).coerceAtLeast(1)
         signalingClient?.sendCoursewarePage(coursewarePage)
         updateStatus("$coursewareTitle\n第 $coursewarePage 页")
@@ -644,6 +684,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareUploadInProgress = false
         coursewarePage = 1
         coursewareTitle = ""
+        coursewareUrl = ""
         showMenuScreen()
     }
 
@@ -816,6 +857,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         ).also { it.connect() }
     }
 
+    private fun reconnectSignalingForCurrentRoom(): Boolean {
+        val roomCode = activeRoomCode ?: return false
+        if (signalReconnectInProgress) {
+            return true
+        }
+        signalReconnectInProgress = true
+        roomJoined = false
+        signalingClient?.close()
+        signalingClient = null
+        connectToRoom(roomCode)
+        return true
+    }
+
     private fun ensureCameraPermissions(openImagePicker: Boolean = false) {
         openImagePickerAfterPermission = openImagePicker
         val permissions = arrayOf(
@@ -836,10 +890,22 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onJoinAccepted() {
         runOnUiThread {
             roomJoined = true
+            signalReconnectInProgress = false
             val shouldResumeCamera = resumeCameraAfterJoin
             val shouldResumeLive = resumeLiveAfterJoin
             resumeCameraAfterJoin = false
             resumeLiveAfterJoin = false
+            if (currentScreen == Screen.Courseware) {
+                if (!coursewareUploadInProgress && coursewareUrl.isNotBlank()) {
+                    signalingClient?.sendCoursewareOpen(coursewareUrl, coursewareTitle, coursewarePage)
+                    showCoursewareScreen(title = coursewareTitle, isUploading = false)
+                    toast("课件控制已重新连接")
+                } else if (coursewareUploadInProgress) {
+                    updateStatus("正在上传并转换：$coursewareTitle")
+                }
+                return@runOnUiThread
+            }
+
             toast("连接成功")
 
             if (shouldResumeCamera || currentScreen == Screen.Camera) {
@@ -863,6 +929,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         runOnUiThread {
             activeRoomCode = null
             roomJoined = false
+            signalReconnectInProgress = false
             resumeCameraAfterJoin = false
             resumeLiveAfterJoin = false
             toast(message)
@@ -879,6 +946,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             signalingClient = null
             activeRoomCode = null
             roomJoined = false
+            signalReconnectInProgress = false
             toast(message)
             showConnectScreen()
         }
@@ -891,6 +959,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             signalingClient = null
             activeRoomCode = null
             roomJoined = false
+            signalReconnectInProgress = false
             toast(message)
             showConnectScreen()
         }
@@ -907,6 +976,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onSignalError(message: String) {
         runOnUiThread {
             roomJoined = false
+            if (
+                (currentScreen == Screen.Courseware || currentScreen == Screen.Menu) &&
+                activeRoomCode != null &&
+                !signalReconnectInProgress
+            ) {
+                updateStatus("网络连接中断，正在重新连接教室端...")
+                toast("网络连接中断，正在重新连接教室端")
+                reconnectSignalingForCurrentRoom()
+                return@runOnUiThread
+            }
             updateLiveControlButtons(isLive = webRtcClient?.isLive() == true)
             updateStatus(message)
             toast(message)

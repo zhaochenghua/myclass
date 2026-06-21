@@ -162,12 +162,26 @@ class SignalingClient(
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
         if (!closedByUser) {
-            callback.onSignalError(t.message ?: "信令连接失败")
+            callback.onSignalError(readableNetworkError(t.message ?: "信令连接失败"))
         }
     }
 
     private fun sendJson(payload: JSONObject) {
         webSocket?.send(payload.toString())
+    }
+
+    private fun readableNetworkError(message: String): String {
+        val lowerMessage = message.lowercase()
+        return if (
+            lowerMessage.contains("software caused connection abort") ||
+            lowerMessage.contains("connection reset") ||
+            lowerMessage.contains("broken pipe") ||
+            lowerMessage.contains("timeout")
+        ) {
+            "网络连接中断，请确认手机和服务器网络正常"
+        } else {
+            message
+        }
     }
 
     private fun parseIceCandidate(message: JSONObject): IceCandidatePayload? {

@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.1.23-20260621';
+const APP_VERSION = process.env.APP_VERSION || '1.1.24-20260621';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -33,10 +33,11 @@ const publicRoot = path.join(webRoot, 'public');
 const apkPath = path.join(publicRoot, 'myclass.apk');
 const coursewareRoot = path.join(publicRoot, 'courseware');
 const tempRoot = path.join(__dirname, 'tmp', 'courseware');
+const COURSEWARE_MAX_BYTES = Number(process.env.COURSEWARE_MAX_BYTES || 500 * 1024 * 1024);
 const upload = multer({
   dest: tempRoot,
   limits: {
-    fileSize: Number(process.env.COURSEWARE_MAX_BYTES || 200 * 1024 * 1024)
+    fileSize: COURSEWARE_MAX_BYTES
   }
 });
 
@@ -122,7 +123,7 @@ app.post(`${PATH_PREFIX}/api/courseware`, upload.single('file'), async (req, res
       return;
     }
 
-    const result = await publishCourseware(req.file);
+    const result = await publishCourseware(req.file, req.body);
     res.json(result);
   } catch (error) {
     next(error);
@@ -166,9 +167,12 @@ app.use((error, req, res, next) => {
     next(error);
     return;
   }
-  const status = error.statusCode || error.status || 500;
+  const isMulterSizeError = error.code === 'LIMIT_FILE_SIZE';
+  const status = isMulterSizeError ? 413 : error.statusCode || error.status || 500;
   res.status(status).json({
-    error: error.publicMessage || error.message || '服务器处理失败'
+    error: isMulterSizeError
+      ? `课件文件过大，请控制在 ${formatBytes(COURSEWARE_MAX_BYTES)} 以内`
+      : error.publicMessage || error.message || '服务器处理失败'
   });
 });
 
@@ -190,8 +194,8 @@ function safeDownloadVersion(value) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-async function publishCourseware(file) {
-  const originalName = file.originalname || 'courseware';
+async function publishCourseware(file, fields = {}) {
+  const originalName = preferredCoursewareName(file, fields);
   const ext = path.extname(originalName).toLowerCase();
   const id = crypto.randomUUID();
   const pdfName = `${id}.pdf`;
@@ -302,6 +306,57 @@ function publicError(statusCode, message) {
   error.statusCode = statusCode;
   error.publicMessage = message;
   return error;
+}
+
+function preferredCoursewareName(file, fields) {
+  const fromApp = decodeBase64Utf8(fields?.displayNameBase64);
+  const fromMultipart = decodeMultipartFileName(file.originalname);
+  return sanitizeCoursewareName(fromApp || fromMultipart || 'courseware');
+}
+
+function decodeBase64Utf8(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return '';
+  }
+
+  try {
+    const decoded = Buffer.from(value, 'base64').toString('utf8').trim();
+    return decoded.includes('\uFFFD') ? '' : decoded;
+  } catch (error) {
+    return '';
+  }
+}
+
+function decodeMultipartFileName(value) {
+  const original = String(value || '').trim();
+  if (!original) {
+    return '';
+  }
+
+  const decodedAsUtf8 = Buffer.from(original, 'latin1').toString('utf8');
+  if (
+    decodedAsUtf8 &&
+    decodedAsUtf8 !== original &&
+    !decodedAsUtf8.includes('\uFFFD') &&
+    /[\u4e00-\u9fff]/.test(decodedAsUtf8)
+  ) {
+    return decodedAsUtf8;
+  }
+
+  return original;
+}
+
+function sanitizeCoursewareName(value) {
+  const name = String(value || '')
+    .replace(/\0/g, '')
+    .replace(/\\/g, '/')
+    .trim();
+  return path.basename(name) || 'courseware';
+}
+
+function formatBytes(bytes) {
+  const mb = bytes / 1024 / 1024;
+  return `${Math.round(mb)}MB`;
 }
 
 function isAllowedHost(hostHeader) {
