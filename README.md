@@ -92,8 +92,13 @@ PATH_PREFIX=/myclass
 PUBLIC_BASE_URL=http://10.30.13.1/myclass
 ALLOWED_HOSTS=10.30.13.1,localhost,127.0.0.1
 ROOM_TTL_MS=7200000
-APP_VERSION=1.1.14-20260620
+APP_VERSION=1.1.23-20260621
+LIBREOFFICE_PATH=C:\Program Files\LibreOffice\program\soffice.exe
+COURSEWARE_MAX_BYTES=209715200
+COURSEWARE_CONVERT_TIMEOUT_MS=120000
 ```
+
+“播放课件”功能由手机 App 选择本机 PDF/PPT/PPTX 并上传到服务端。PDF 会直接发布，PPT/PPTX 会通过 LibreOffice headless 转换为 PDF 后在网页端自动打开。服务器需要安装 LibreOffice；如果不在默认路径，请设置 `LIBREOFFICE_PATH` 或 `SOFFICE_PATH`。
 
 HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认只允许 `10.30.13.1`、`localhost`、`127.0.0.1`。请不要把该服务直接暴露到公网。
 

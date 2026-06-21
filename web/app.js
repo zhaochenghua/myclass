@@ -3,6 +3,8 @@ const state = {
   peerConnection: null,
   config: null,
   reconnectTimer: null,
+  presentationMode: 'waiting',
+  courseware: null,
   videoOrientation: {
     orientation: 'portrait',
     rotationDegrees: 0,
@@ -32,6 +34,7 @@ const elements = {
   statusText: document.getElementById('statusText'),
   videoStatus: document.getElementById('videoStatus'),
   remoteVideo: document.getElementById('remoteVideo'),
+  coursewareFrame: document.getElementById('coursewareFrame'),
   annotationCanvas: document.getElementById('annotationCanvas'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
   clearAnnotationButton: document.getElementById('clearAnnotationButton'),
@@ -125,6 +128,15 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.orientation':
       handleTeacherOrientation(message);
+      break;
+    case 'courseware.open':
+      openCourseware(message);
+      break;
+    case 'courseware.page':
+      showCoursewarePage(message.page);
+      break;
+    case 'courseware.close':
+      closeCourseware();
       break;
     case 'teacher.stop':
       cleanupPeerConnection();
@@ -241,6 +253,59 @@ function cleanupPeerConnection() {
     cropHeight: 1
   };
   updateVideoPresentation();
+}
+
+function openCourseware(message) {
+  const url = typeof message.url === 'string' ? message.url : '';
+  if (!url) {
+    return;
+  }
+
+  cleanupPeerConnection();
+  resetAnnotations();
+  state.courseware = {
+    url,
+    title: typeof message.title === 'string' ? message.title : '课件',
+    page: normalizePageNumber(message.page)
+  };
+  showCoursewareView();
+  renderCoursewarePage();
+}
+
+function showCoursewarePage(page) {
+  if (!state.courseware) {
+    return;
+  }
+  const nextPage = normalizePageNumber(page);
+  if (nextPage === state.courseware.page) {
+    return;
+  }
+  state.courseware.page = nextPage;
+  resetAnnotations();
+  renderCoursewarePage();
+}
+
+function closeCourseware() {
+  state.courseware = null;
+  elements.coursewareFrame.removeAttribute('src');
+  resetAnnotations();
+  showJoinView();
+  setWaitingStatus('课件播放已结束，等待教师连接...');
+}
+
+function renderCoursewarePage() {
+  const courseware = state.courseware;
+  if (!courseware) {
+    return;
+  }
+  elements.coursewareFrame.src = `${courseware.url}#page=${courseware.page}&view=FitH&toolbar=0&navpanes=0`;
+  elements.videoStatus.textContent = `${courseware.title} 第 ${courseware.page} 页`;
+  updateVideoPresentation();
+}
+
+function normalizePageNumber(value) {
+  const page = Number(value);
+  return Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
 }
 
 function handleTeacherOrientation(message) {
@@ -392,6 +457,10 @@ function undoAnnotationStroke() {
 }
 
 function clearAnnotations() {
+  resetAnnotations();
+}
+
+function resetAnnotations() {
   state.annotations.strokes = [];
   state.annotations.activeStroke = null;
   drawAnnotations();
@@ -529,6 +598,10 @@ function currentFrameCrop() {
 }
 
 function currentVideoContentRect() {
+  if (state.presentationMode === 'courseware') {
+    return elements.coursewareFrame.getBoundingClientRect();
+  }
+
   const elementRect = elements.remoteVideo.getBoundingClientRect();
   const videoWidth = elements.remoteVideo.videoWidth;
   const videoHeight = elements.remoteVideo.videoHeight;
@@ -566,15 +639,35 @@ function sendMessage(payload) {
 }
 
 function showJoinView() {
+  state.presentationMode = 'waiting';
+  state.courseware = null;
+  elements.coursewareFrame.removeAttribute('src');
   document.body.classList.remove('is-streaming');
   elements.joinView.hidden = false;
   elements.videoView.hidden = true;
+  elements.remoteVideo.hidden = false;
+  elements.coursewareFrame.hidden = true;
 }
 
 function showVideoView() {
+  state.presentationMode = 'video';
+  elements.coursewareFrame.hidden = true;
+  elements.remoteVideo.hidden = false;
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
   elements.videoView.hidden = false;
+}
+
+function showCoursewareView() {
+  state.presentationMode = 'courseware';
+  elements.remoteVideo.hidden = true;
+  elements.coursewareFrame.hidden = false;
+  elements.videoView.dataset.orientation = 'landscape';
+  elements.videoView.dataset.lockedZoomed = 'false';
+  document.body.classList.add('is-streaming');
+  elements.joinView.hidden = true;
+  elements.videoView.hidden = false;
+  resizeAnnotationCanvas();
 }
 
 function setWaitingStatus(text) {

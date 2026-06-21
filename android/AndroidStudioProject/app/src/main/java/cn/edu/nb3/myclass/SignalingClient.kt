@@ -82,6 +82,28 @@ class SignalingClient(
         sendJson(JSONObject().put("type", "teacher.stop"))
     }
 
+    fun sendCoursewareOpen(url: String, title: String, page: Int = 1) {
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.open")
+                .put("url", url)
+                .put("title", title)
+                .put("page", page)
+        )
+    }
+
+    fun sendCoursewarePage(page: Int) {
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.page")
+                .put("page", page)
+        )
+    }
+
+    fun sendCoursewareClose() {
+        sendJson(JSONObject().put("type", "courseware.close"))
+    }
+
     fun sendOrientation(orientation: DeviceOrientationPayload) {
         sendJson(
             JSONObject()

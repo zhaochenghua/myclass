@@ -5,12 +5,14 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.database.Cursor
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.text.TextUtils
 import android.text.InputFilter
 import android.text.InputType
@@ -35,20 +37,35 @@ import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okio.BufferedSink
+import org.json.JSONObject
 import org.webrtc.SurfaceViewRenderer
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private enum class Screen {
         Connect,
         Menu,
         Camera,
-        ScreenShare
+        ScreenShare,
+        Courseware
     }
 
     private enum class PresentationMode {
         Camera,
         ScreenShare
     }
+
+    private data class CoursewareUploadResult(
+        val title: String,
+        val url: String
+    )
 
     private var currentScreen = Screen.Connect
     private var signalingClient: SignalingClient? = null
@@ -77,6 +94,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var resumeLiveAfterJoin = false
     private var isPickingImageForProjection = false
     private var openImagePickerAfterPermission = false
+    private var coursewarePage = 1
+    private var coursewareTitle = ""
+    private var coursewareUploadInProgress = false
+    private val coursewareHttpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(180, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .build()
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -138,6 +163,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         showSelectedImage(uri)
     }
 
+    private val coursewarePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri ?: return@registerForActivityResult
+        uploadCourseware(uri)
+    }
+
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -183,6 +215,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
                 Screen.ScreenShare -> {
                     stopScreenShareAndReturnMenu()
+                }
+                Screen.Courseware -> {
+                    closeCoursewareAndReturnMenu()
                 }
                 Screen.Menu -> {
                     signalingClient?.close()
@@ -303,6 +338,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 requestScreenSharePermission()
             }
         })
+        root.addView(secondaryButton("播放课件").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(16)
+            }
+            setOnClickListener {
+                launchCoursewarePicker()
+            }
+        })
         statusText = bodyText("已连接课堂").apply {
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
@@ -413,6 +459,191 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             signalingClient?.sendStop()
         }
         releaseCamera()
+        showMenuScreen()
+    }
+
+    private fun launchCoursewarePicker() {
+        coursewarePickerLauncher.launch("*/*")
+    }
+
+    private fun uploadCourseware(uri: Uri) {
+        if (!roomJoined || activeRoomCode == null) {
+            toast("请先连接教室端")
+            return
+        }
+        showCoursewareScreen(title = "正在上传课件", isUploading = true)
+
+        Thread {
+            runCatching {
+                uploadCoursewareBlocking(uri)
+            }.onSuccess { result ->
+                runOnUiThread {
+                    if (currentScreen != Screen.Courseware) {
+                        return@runOnUiThread
+                    }
+                    coursewareUploadInProgress = false
+                    coursewarePage = 1
+                    coursewareTitle = result.title
+                    signalingClient?.sendStop()
+                    signalingClient?.sendCoursewareOpen(result.url, result.title, coursewarePage)
+                    showCoursewareScreen(title = result.title, isUploading = false)
+                    toast("课件已打开")
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    coursewareUploadInProgress = false
+                    toast(error.message ?: "课件上传失败")
+                    showMenuScreen()
+                }
+            }
+        }.start()
+    }
+
+    private fun uploadCoursewareBlocking(uri: Uri): CoursewareUploadResult {
+        val fileName = displayNameForUri(uri)
+        val requestBody = object : RequestBody() {
+            override fun contentType() =
+                (contentResolver.getType(uri) ?: "application/octet-stream").toMediaTypeOrNull()
+
+            override fun contentLength(): Long =
+                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (index >= 0 && cursor.moveToFirst()) cursor.getLong(index) else -1L
+                } ?: -1L
+
+            override fun writeTo(sink: BufferedSink) {
+                val input = contentResolver.openInputStream(uri)
+                    ?: throw IOException("无法读取所选课件")
+                input.use {
+                    val buffer = ByteArray(8 * 1024)
+                    while (true) {
+                        val read = it.read(buffer)
+                        if (read == -1) {
+                            break
+                        }
+                        sink.write(buffer, 0, read)
+                    }
+                }
+            }
+        }
+        val multipartBody = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", fileName, requestBody)
+            .build()
+        val request = Request.Builder()
+            .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware")
+            .post(multipartBody)
+            .build()
+
+        coursewareHttpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val message = runCatching {
+                    JSONObject(body).optString("error")
+                }.getOrNull().orEmpty()
+                throw IOException(message.ifBlank { "课件上传失败：HTTP ${response.code}" })
+            }
+            val json = JSONObject(body)
+            return CoursewareUploadResult(
+                title = json.optString("title", fileName),
+                url = json.getString("url")
+            )
+        }
+    }
+
+    private fun displayNameForUri(uri: Uri): String {
+        contentResolver.query(uri, null, null, null, null)?.use { cursor: Cursor ->
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0 && cursor.moveToFirst()) {
+                return cursor.getString(index) ?: "courseware"
+            }
+        }
+        return uri.lastPathSegment?.substringAfterLast('/') ?: "courseware"
+    }
+
+    private fun showCoursewareScreen(title: String, isUploading: Boolean) {
+        currentScreen = Screen.Courseware
+        coursewareUploadInProgress = isUploading
+        val root = baseColumn().apply {
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+        }
+        root.addView(titleText("播放课件", 28f))
+        statusText = bodyText(
+            if (isUploading) {
+                "正在上传并转换：$title"
+            } else {
+                "$title\n第 $coursewarePage 页"
+            }
+        ).apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(24)
+            }
+        }
+        root.addView(statusText)
+
+        val pageRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(32)
+            }
+        }
+        pageRow.addView(secondaryButton("上一页").apply {
+            isEnabled = !isUploading
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                marginEnd = dp(8)
+            }
+            setOnClickListener {
+                changeCoursewarePage(-1)
+            }
+        })
+        pageRow.addView(primaryButton("下一页").apply {
+            isEnabled = !isUploading
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                marginStart = dp(8)
+            }
+            setOnClickListener {
+                changeCoursewarePage(1)
+            }
+        })
+        root.addView(pageRow)
+
+        root.addView(secondaryButton(if (isUploading) "返回菜单" else "结束播放").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(16)
+            }
+            setOnClickListener {
+                closeCoursewareAndReturnMenu()
+            }
+        })
+        root.addView(versionLabel())
+        setContentView(root)
+    }
+
+    private fun changeCoursewarePage(delta: Int) {
+        if (coursewareUploadInProgress) {
+            return
+        }
+        coursewarePage = (coursewarePage + delta).coerceAtLeast(1)
+        signalingClient?.sendCoursewarePage(coursewarePage)
+        updateStatus("$coursewareTitle\n第 $coursewarePage 页")
+    }
+
+    private fun closeCoursewareAndReturnMenu() {
+        signalingClient?.sendCoursewareClose()
+        coursewareUploadInProgress = false
+        coursewarePage = 1
+        coursewareTitle = ""
         showMenuScreen()
     }
 

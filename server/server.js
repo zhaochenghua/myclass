@@ -1,7 +1,11 @@
 const fs = require('fs');
 const http = require('http');
+const crypto = require('crypto');
+const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 const express = require('express');
+const multer = require('multer');
 const QRCode = require('qrcode');
 const setupWebSocket = require('./websocket');
 
@@ -12,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.1.22-20260621';
+const APP_VERSION = process.env.APP_VERSION || '1.1.23-20260621';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -27,6 +31,17 @@ const server = http.createServer(app);
 const webRoot = path.resolve(__dirname, '..', 'web');
 const publicRoot = path.join(webRoot, 'public');
 const apkPath = path.join(publicRoot, 'myclass.apk');
+const coursewareRoot = path.join(publicRoot, 'courseware');
+const tempRoot = path.join(__dirname, 'tmp', 'courseware');
+const upload = multer({
+  dest: tempRoot,
+  limits: {
+    fileSize: Number(process.env.COURSEWARE_MAX_BYTES || 200 * 1024 * 1024)
+  }
+});
+
+fs.mkdirSync(coursewareRoot, { recursive: true });
+fs.mkdirSync(tempRoot, { recursive: true });
 
 app.disable('x-powered-by');
 
@@ -100,6 +115,24 @@ app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
   }
 });
 
+app.post(`${PATH_PREFIX}/api/courseware`, upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: '请选择课件文件' });
+      return;
+    }
+
+    const result = await publishCourseware(req.file);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  } finally {
+    if (req.file?.path) {
+      fs.promises.unlink(req.file.path).catch(() => {});
+    }
+  }
+});
+
 app.get(`${PATH_PREFIX}/myclass.apk`, (req, res) => {
   if (!fs.existsSync(apkPath)) {
     res
@@ -128,6 +161,17 @@ setupWebSocket(server, {
   isAllowedOrigin
 });
 
+app.use((error, req, res, next) => {
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
+  const status = error.statusCode || error.status || 500;
+  res.status(status).json({
+    error: error.publicMessage || error.message || '服务器处理失败'
+  });
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`MyClass server listening on http://${HOST}:${PORT}${PATH_PREFIX}/`);
   console.log(`APK QR points to ${APK_URL}`);
@@ -144,6 +188,120 @@ function removeTrailingSlash(value) {
 
 function safeDownloadVersion(value) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+async function publishCourseware(file) {
+  const originalName = file.originalname || 'courseware';
+  const ext = path.extname(originalName).toLowerCase();
+  const id = crypto.randomUUID();
+  const pdfName = `${id}.pdf`;
+  const pdfPath = path.join(coursewareRoot, pdfName);
+
+  if (ext === '.pdf') {
+    await fs.promises.copyFile(file.path, pdfPath);
+  } else if (ext === '.ppt' || ext === '.pptx') {
+    await convertPresentationToPdf(file.path, ext, pdfPath, id);
+  } else {
+    throw publicError(400, '仅支持 PDF、PPT、PPTX 课件');
+  }
+
+  return {
+    id,
+    title: path.basename(originalName, ext),
+    fileName: originalName,
+    url: `${PATH_PREFIX}/public/courseware/${pdfName}`
+  };
+}
+
+async function convertPresentationToPdf(inputPath, ext, outputPdfPath, id) {
+  const sourcePath = path.join(tempRoot, `${id}${ext}`);
+  const outputDir = path.join(tempRoot, id);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.copyFile(inputPath, sourcePath);
+
+  try {
+    await runLibreOffice([
+      '--headless',
+      '--nologo',
+      '--nofirststartwizard',
+      '--convert-to',
+      'pdf',
+      '--outdir',
+      outputDir,
+      sourcePath
+    ]);
+
+    const convertedPath = path.join(outputDir, `${id}.pdf`);
+    if (!fs.existsSync(convertedPath)) {
+      throw publicError(500, 'LibreOffice 未生成 PDF，请检查课件格式');
+    }
+    await fs.promises.rename(convertedPath, outputPdfPath);
+  } finally {
+    fs.promises.rm(outputDir, { recursive: true, force: true }).catch(() => {});
+    fs.promises.unlink(sourcePath).catch(() => {});
+  }
+}
+
+function runLibreOffice(args) {
+  const executable = libreOfficeExecutable();
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, {
+      windowsHide: true
+    });
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(publicError(504, 'LibreOffice 转换超时'));
+    }, Number(process.env.COURSEWARE_CONVERT_TIMEOUT_MS || 120000));
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      if (error.code === 'ENOENT') {
+        reject(publicError(500, '服务器未找到 LibreOffice，请安装或配置 LIBREOFFICE_PATH'));
+      } else {
+        reject(error);
+      }
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(publicError(500, `LibreOffice 转换失败：${stderr.trim() || code}`));
+      }
+    });
+  });
+}
+
+function libreOfficeExecutable() {
+  const configured = process.env.LIBREOFFICE_PATH || process.env.SOFFICE_PATH;
+  if (configured) {
+    return configured;
+  }
+
+  const candidates = os.platform() === 'win32'
+    ? [
+        'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+        'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe'
+      ]
+    : [
+        '/usr/bin/libreoffice',
+        '/usr/local/bin/libreoffice',
+        '/usr/bin/soffice',
+        '/usr/local/bin/soffice'
+      ];
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) || 'soffice';
+}
+
+function publicError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.publicMessage = message;
+  return error;
 }
 
 function isAllowedHost(hostHeader) {
