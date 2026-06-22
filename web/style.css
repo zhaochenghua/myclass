@@ -121,6 +121,28 @@ h1 {
   font-size: clamp(1.1rem, 1.6vw, 2rem);
 }
 
+.download-apk-btn {
+  display: inline-block;
+  margin-top: 0.8rem;
+  padding: 0.5rem 1.2rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: clamp(0.95rem, 1.3vw, 1.3rem);
+  text-decoration: none;
+  transition: background 0.2s;
+}
+
+.download-apk-btn:hover {
+  background: rgba(101, 240, 200, 0.12);
+}
+
+.platform-note {
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 .status-text {
   min-height: 2.5rem;
   color: var(--accent);

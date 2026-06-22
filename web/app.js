@@ -58,6 +58,7 @@ const elements = {
   nextPageButton: document.getElementById('nextPageButton'),
   offlineCode: document.getElementById('offlineCode'),
   offlineCodeValue: document.getElementById('offlineCodeValue'),
+  downloadApkButton: document.getElementById('downloadApkButton'),
 };
 
 bootstrap();
@@ -68,9 +69,53 @@ async function bootstrap() {
     const apkVersion = state.config?.apkVersion || 'latest';
     elements.apkQr.src = `./api/apk-qrcode.svg?v=${encodeURIComponent(apkVersion)}`;
     elements.downloadHint.textContent = `APP v${apkVersion}`;
+    if (state.config?.apkUrl) {
+      elements.downloadApkButton.href = '#';
+      elements.downloadApkButton.hidden = false;
+      elements.downloadApkButton.addEventListener('click', async (e) => {
+        e.preventDefault();
+        elements.downloadApkButton.textContent = '正在下载...';
+        elements.downloadApkButton.style.pointerEvents = 'none';
+        try {
+          const response = await fetch(state.config.apkUrl);
+          const total = Number(response.headers.get('content-length')) || 0;
+          const reader = response.body.getReader();
+          const chunks = [];
+          let loaded = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            loaded += value.length;
+            if (total) {
+              const pct = Math.round(loaded / total * 100);
+              elements.downloadApkButton.textContent = `下载中 ${pct}%`;
+            }
+          }
+          elements.downloadApkButton.textContent = '下载完成';
+          const blob = new Blob(chunks);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'myclass.apk';
+          a.click();
+          URL.revokeObjectURL(url);
+        } catch {
+          elements.downloadApkButton.textContent = '下载失败，请重试';
+          elements.downloadApkButton.style.pointerEvents = 'auto';
+        }
+      });
+    }
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
     window.addEventListener('resize', handleViewportResize);
+    // 首次点击页面任意位置自动全屏（排除下载按钮）
+    const autoFullscreen = (e) => {
+      if (e.target.closest('#downloadApkButton')) return;
+      document.documentElement.requestFullscreen().catch(() => {});
+      document.removeEventListener('click', autoFullscreen);
+    };
+    document.addEventListener('click', autoFullscreen);
     elements.annotationCanvas.addEventListener('pointerdown', beginAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointermove', continueAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointerup', finishAnnotationStroke);
@@ -444,8 +489,7 @@ async function loadCoursewareDocument(courseware) {
     url: courseware.url,
     cMapUrl: './vendor/pdfjs/cmaps/',
     cMapPacked: true,
-    standardFontDataUrl: './vendor/pdfjs/standard_fonts/',
-    wasmUrl: './vendor/pdfjs/wasm/'
+    standardFontDataUrl: './vendor/pdfjs/standard_fonts/'
   });
   courseware.loadingTask = loadingTask;
 
@@ -1107,6 +1151,7 @@ function showVideoView() {
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
+  elements.videoStatus.hidden = false;
 }
 
 function showCoursewareView() {
@@ -1122,6 +1167,7 @@ function showCoursewareView() {
   elements.panToolButton.hidden = false;
   elements.prevPageButton.hidden = false;
   elements.nextPageButton.hidden = false;
+  elements.videoStatus.hidden = true;
   updatePageNavButtons();
   resizeAnnotationCanvas();
 }

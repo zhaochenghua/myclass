@@ -139,7 +139,7 @@ function handleTeacherJoin(socket, message, roomManager) {
   });
 }
 
-async function handleForward(socket, message, roomManager, options) {
+function handleForward(socket, message, roomManager, options) {
   const binding = roomManager.getBinding(socket);
   if (!binding) {
     sendJson(socket, { type: 'error', message: '尚未加入课堂' });
@@ -156,15 +156,16 @@ async function handleForward(socket, message, roomManager, options) {
     return;
   }
 
-  // 为课件打开消息注入原始文件下载地址，在转发前完成
-  if (message.type === 'courseware.open' && typeof message.url === 'string') {
-    await injectOriginalUrl(message, options);
-  }
-
+  // 先同步转发消息，确保课件立即打开
   roomManager.forward(socket, message);
+
+  // 异步查找原始文件下载地址，通过 courseware.original 消息发送
+  if (message.type === 'courseware.open' && typeof message.url === 'string') {
+    sendOriginalUrl(socket, message, roomManager, options);
+  }
 }
 
-async function injectOriginalUrl(message, options) {
+async function sendOriginalUrl(socket, message, roomManager, options) {
   if (typeof options.readCoursewareIndex !== 'function') {
     return;
   }
@@ -178,7 +179,11 @@ async function injectOriginalUrl(message, options) {
     const id = match[1];
     const item = items.find((c) => c.id === id);
     if (item?.originalUrl && item.originalUrl !== item.url) {
-      message.originalUrl = item.originalUrl;
+      roomManager.forward(socket, {
+        type: 'courseware.original',
+        id,
+        originalUrl: item.originalUrl
+      });
     }
   } catch (error) {
     // 静默失败，不影响主流程
