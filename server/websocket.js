@@ -85,7 +85,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'courseware.state':
     case 'teacher.orientation':
     case 'teacher.stop':
-      handleForward(socket, message, roomManager);
+      handleForward(socket, message, roomManager, options);
       break;
     default:
       sendJson(socket, {
@@ -139,7 +139,7 @@ function handleTeacherJoin(socket, message, roomManager) {
   });
 }
 
-function handleForward(socket, message, roomManager) {
+async function handleForward(socket, message, roomManager, options) {
   const binding = roomManager.getBinding(socket);
   if (!binding) {
     sendJson(socket, { type: 'error', message: '尚未加入课堂' });
@@ -156,7 +156,33 @@ function handleForward(socket, message, roomManager) {
     return;
   }
 
+  // 为课件打开消息注入原始文件下载地址，在转发前完成
+  if (message.type === 'courseware.open' && typeof message.url === 'string') {
+    await injectOriginalUrl(message, options);
+  }
+
   roomManager.forward(socket, message);
+}
+
+async function injectOriginalUrl(message, options) {
+  if (typeof options.readCoursewareIndex !== 'function') {
+    return;
+  }
+  try {
+    const items = await options.readCoursewareIndex();
+    const pdfUrl = message.url;
+    const match = pdfUrl.match(/\/([a-f0-9-]+)\.pdf$/i);
+    if (!match) {
+      return;
+    }
+    const id = match[1];
+    const item = items.find((c) => c.id === id);
+    if (item?.originalUrl && item.originalUrl !== item.url) {
+      message.originalUrl = item.originalUrl;
+    }
+  } catch (error) {
+    // 静默失败，不影响主流程
+  }
 }
 
 function parseJson(rawMessage) {

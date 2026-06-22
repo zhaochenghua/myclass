@@ -51,7 +51,11 @@ const elements = {
   panToolButton: document.getElementById('panToolButton'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
   clearAnnotationButton: document.getElementById('clearAnnotationButton'),
-  annotationColorButtons: Array.from(document.querySelectorAll('.annotation-color'))
+  annotationColorButtons: Array.from(document.querySelectorAll('.annotation-color')),
+  fullscreenButton: document.getElementById('fullscreenButton'),
+  downloadOriginalButton: document.getElementById('downloadOriginalButton'),
+  prevPageButton: document.getElementById('prevPageButton'),
+  nextPageButton: document.getElementById('nextPageButton'),
 };
 
 bootstrap();
@@ -73,6 +77,11 @@ async function bootstrap() {
     elements.panToolButton.addEventListener('click', () => setAnnotationTool('pan'));
     elements.undoAnnotationButton.addEventListener('click', undoAnnotationStroke);
     elements.clearAnnotationButton.addEventListener('click', clearAnnotations);
+    elements.fullscreenButton.addEventListener('click', toggleFullscreen);
+    elements.downloadOriginalButton.addEventListener('click', downloadOriginalFile);
+    elements.prevPageButton.addEventListener('click', () => navigatePage(-1));
+    elements.nextPageButton.addEventListener('click', () => navigatePage(1));
+    document.addEventListener('fullscreenchange', updateFullscreenButton);
     elements.annotationColorButtons.forEach((button) => {
       button.addEventListener('click', () => setAnnotationColor(button.dataset.color));
     });
@@ -111,9 +120,13 @@ function connectSignaling() {
 
   socket.addEventListener('close', () => {
     cleanupPeerConnection();
-    showJoinView();
-    elements.roomCode.textContent = '----';
-    setWaitingStatus('连接已断开，正在重新连接...');
+    if (state.presentationMode === 'courseware') {
+      setWaitingStatus('信令连接已断开，可继续翻页查看课件');
+    } else {
+      showJoinView();
+      elements.roomCode.textContent = '----';
+      setWaitingStatus('连接已断开，正在重新连接...');
+    }
     state.reconnectTimer = setTimeout(connectSignaling, 1500);
   });
 
@@ -133,8 +146,12 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.offline':
       cleanupPeerConnection();
-      showJoinView();
-      setWaitingStatus('教师已断开，等待重新连接...');
+      if (state.presentationMode === 'courseware') {
+        setWaitingStatus('教师设备已断开，可继续翻页查看课件');
+      } else {
+        showJoinView();
+        setWaitingStatus('教师已断开，等待重新连接...');
+      }
       break;
     case 'webrtc.offer':
       await handleOffer(message.sdp);
@@ -156,6 +173,9 @@ async function handleSignalMessage(message) {
       break;
     case 'courseware.close':
       closeCourseware();
+      break;
+    case 'courseware.original':
+      handleCoursewareOriginal(message);
       break;
     case 'teacher.stop':
       cleanupPeerConnection();
@@ -306,6 +326,11 @@ function openCourseware(message) {
     renderTask: null,
     renderGeneration: 0
   };
+  // 从消息中读取原始文件下载地址（服务端已注入）
+  if (typeof message.originalUrl === 'string' && message.originalUrl) {
+    state.downloadOriginalUrl = message.originalUrl;
+    state.courseware.downloadOriginalUrl = message.originalUrl;
+  }
   showCoursewareView();
   loadCoursewareDocument(state.courseware);
 }
@@ -353,7 +378,39 @@ function navigateCourseware(deltaValue) {
   renderCoursewarePage();
 }
 
+function navigatePage(delta) {
+  const courseware = state.courseware;
+  if (!courseware?.pdfDocument) {
+    return;
+  }
+
+  const nextPage = courseware.page + (delta < 0 ? -1 : 1);
+  if (nextPage < 1 || nextPage > courseware.pageCount) {
+    return;
+  }
+
+  courseware.page = nextPage;
+  courseware.screen = 1;
+  courseware.offsetY = 0;
+  resetAnnotations();
+  renderCoursewarePage();
+}
+
+function updatePageNavButtons() {
+  const courseware = state.courseware;
+  if (!courseware?.pdfDocument) {
+    elements.prevPageButton.disabled = true;
+    elements.nextPageButton.disabled = true;
+    return;
+  }
+  elements.prevPageButton.disabled = courseware.page <= 1;
+  elements.nextPageButton.disabled = courseware.page >= courseware.pageCount;
+}
+
 function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {
+  hideDownloadButton();
+  elements.prevPageButton.hidden = true;
+  elements.nextPageButton.hidden = true;
   destroyCoursewareDocument(state.courseware);
   state.courseware = null;
   clearCoursewareCanvas();
@@ -458,6 +515,7 @@ async function renderCoursewarePage() {
     await renderTask.promise;
     if (state.courseware === courseware && generation === courseware.renderGeneration) {
       updateCoursewareStatus();
+      updatePageNavButtons();
       sendCoursewareState();
       updateVideoPresentation();
     }
@@ -1008,6 +1066,7 @@ function sendMessage(payload) {
 }
 
 function showJoinView() {
+  hideDownloadButton();
   destroyCoursewareDocument(state.courseware);
   state.presentationMode = 'waiting';
   state.courseware = null;
@@ -1017,6 +1076,9 @@ function showJoinView() {
   elements.videoView.hidden = true;
   elements.remoteVideo.hidden = false;
   elements.coursewareCanvas.hidden = true;
+  elements.panToolButton.hidden = true;
+  elements.prevPageButton.hidden = true;
+  elements.nextPageButton.hidden = true;
 }
 
 function showVideoView() {
@@ -1027,10 +1089,14 @@ function showVideoView() {
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
   elements.videoView.hidden = false;
+  elements.panToolButton.hidden = true;
+  elements.prevPageButton.hidden = true;
+  elements.nextPageButton.hidden = true;
 }
 
 function showCoursewareView() {
   state.presentationMode = 'courseware';
+  showDownloadButtonIfAvailable();
   elements.remoteVideo.hidden = true;
   elements.coursewareCanvas.hidden = false;
   elements.videoView.dataset.orientation = 'landscape';
@@ -1038,7 +1104,65 @@ function showCoursewareView() {
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
   elements.videoView.hidden = false;
+  elements.panToolButton.hidden = false;
+  elements.prevPageButton.hidden = false;
+  elements.nextPageButton.hidden = false;
+  updatePageNavButtons();
   resizeAnnotationCanvas();
+}
+
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+function updateFullscreenButton() {
+  if (elements.fullscreenButton) {
+    elements.fullscreenButton.textContent = document.fullscreenElement ? '退出全屏' : '全屏';
+  }
+}
+
+function handleCoursewareOriginal(message) {
+  if (typeof message.originalUrl !== 'string' || !message.originalUrl) {
+    return;
+  }
+  state.courseware = state.courseware || {};
+  state.courseware.downloadOriginalUrl = message.originalUrl;
+  state.downloadOriginalUrl = message.originalUrl;
+  if (elements.downloadOriginalButton) {
+    elements.downloadOriginalButton.hidden = false;
+  }
+}
+
+function downloadOriginalFile() {
+  const url = state.courseware?.downloadOriginalUrl || state.downloadOriginalUrl;
+  if (!url) {
+    return;
+  }
+  // 将相对路径转为完整 URL 并通过隐藏 a 标签触发下载
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = '';
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+}
+
+function hideDownloadButton() {
+  state.downloadOriginalUrl = null;
+  if (elements.downloadOriginalButton) {
+    elements.downloadOriginalButton.hidden = true;
+  }
+}
+
+function showDownloadButtonIfAvailable() {
+  if (state.downloadOriginalUrl) {
+    elements.downloadOriginalButton.hidden = false;
+  }
 }
 
 function setWaitingStatus(text) {

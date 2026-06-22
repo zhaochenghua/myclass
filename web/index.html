@@ -27,7 +27,7 @@
         <div class="annotation-toolbar" aria-label="画笔工具">
           <div class="annotation-modes" aria-label="操作模式">
             <button class="annotation-mode is-active" id="penToolButton" type="button">画笔</button>
-            <button class="annotation-mode" id="panToolButton" type="button">手型</button>
+            <button class="annotation-mode" id="panToolButton" type="button" hidden>手型</button>
           </div>
           <div class="annotation-colors" aria-label="画笔颜色">
             <button class="annotation-color is-active" type="button" data-color="#ffd166" aria-label="黄色"></button>
@@ -38,6 +38,11 @@
           </div>
           <button class="annotation-button" id="undoAnnotationButton" type="button">撤销</button>
           <button class="annotation-button" id="clearAnnotationButton" type="button">清空</button>
+          <div class="toolbar-divider"></div>
+          <button class="nav-page-button" id="prevPageButton" type="button" hidden>上一页</button>
+          <button class="nav-page-button" id="nextPageButton" type="button" hidden>下一页</button>
+          <button class="annotation-button" id="fullscreenButton" type="button">全屏</button>
+          <button class="annotation-button" id="downloadOriginalButton" type="button" hidden>↓原文件</button>
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
       </section>

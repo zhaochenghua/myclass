@@ -282,6 +282,32 @@ video {
   border-color: rgba(255, 255, 255, 0.12);
 }
 
+.nav-page-button {
+  min-width: 4.2rem;
+  height: 2.5rem;
+  padding: 0 0.9rem;
+  border: 1px solid rgba(101, 240, 200, 0.35);
+  border-radius: 8px;
+  background: rgba(101, 240, 200, 0.12);
+  color: var(--accent);
+  font: inherit;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.nav-page-button:disabled {
+  color: rgba(101, 240, 200, 0.25);
+  border-color: rgba(101, 240, 200, 0.1);
+  cursor: default;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 1.8rem;
+  margin: 0 0.2rem;
+  background: rgba(255, 255, 255, 0.25);
+}
+
 .video-status {
   position: absolute;
   z-index: 4;
