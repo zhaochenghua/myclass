@@ -37,8 +37,8 @@ android {
         applicationId = "cn.edu.nb3.myclass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2026062204
-        versionName = "1.1.28-20260622"
+        versionCode = 2026062206
+        versionName = "1.1.30-20260622"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
         buildConfigField("int", "VIDEO_WIDTH", "1920")
@@ -47,11 +47,19 @@ android {
         buildConfigField("boolean", "WEBRTC_DISABLE_NETWORK_MONITOR", disableWebRtcNetworkMonitor)
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file("myclass.keystore")
+            storePassword = providers.gradleProperty("MYCLASS_KEYSTORE_PASSWORD").get()
+            keyAlias = providers.gradleProperty("MYCLASS_KEY_ALIAS").get()
+            keyPassword = providers.gradleProperty("MYCLASS_KEY_PASSWORD").get()
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // 局域网内部分发使用 debug 签名生成可安装 release APK；正式签名可在此替换。
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

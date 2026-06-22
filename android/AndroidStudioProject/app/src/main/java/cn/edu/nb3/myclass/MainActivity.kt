@@ -71,6 +71,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val url: String
     )
 
+    private data class CoursewareState(
+        val title: String,
+        val url: String,
+        val page: Int,
+        val pageCount: Int,
+        val screen: Int,
+        val screenCount: Int
+    )
+
     private data class StoredCoursewareItem(
         val id: String,
         val title: String,
@@ -119,6 +128,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareFastSeekTicks = 0
     private var coursewareFastSeekRunnable: Runnable? = null
     private var signalReconnectInProgress = false
+    private var savedCoursewareState: CoursewareState? = null
     private val coursewareHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.MINUTES)
@@ -318,6 +328,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         root.addView(inputLayout)
         root.addView(connectButton)
         root.addView(statusText)
+        root.addView(footerLabel())
         root.addView(versionLabel())
         setContentView(root)
     }
@@ -362,7 +373,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 requestScreenSharePermission()
             }
         })
-        root.addView(secondaryButton("播放课件").apply {
+        root.addView(primaryButton(if (savedCoursewareState != null) "继续播放课件" else "播放课件").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -370,7 +381,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 topMargin = dp(16)
             }
             setOnClickListener {
-                showCoursewareSourceScreen()
+                resumeOrShowCoursewareSource()
             }
         })
         statusText = bodyText("已连接课堂").apply {
@@ -484,6 +495,37 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         releaseCamera()
         showMenuScreen()
+    }
+
+    private fun resumeOrShowCoursewareSource() {
+        val saved = savedCoursewareState
+        if (saved != null) {
+            savedCoursewareState = null
+            coursewareUploadInProgress = false
+            coursewarePage = saved.page
+            coursewarePageCount = saved.pageCount
+            coursewareScreen = saved.screen
+            coursewareScreenCount = saved.screenCount
+            coursewareTitle = saved.title
+            coursewareUrl = saved.url
+            if (roomJoined) {
+                signalingClient?.sendStop()
+                signalingClient?.sendCoursewareOpen(
+                    saved.url,
+                    saved.title,
+                    saved.page,
+                    saved.screen
+                )
+                showCoursewareScreen(title = saved.title, isUploading = false)
+                toast("已恢复课件：${saved.title}")
+            } else {
+                reconnectSignalingForCurrentRoom()
+                showCoursewareScreen(title = saved.title, isUploading = false)
+                toast("正在重新连接教室端…")
+            }
+            return
+        }
+        showCoursewareSourceScreen()
     }
 
     private fun showCoursewareSourceScreen() {
@@ -989,17 +1031,42 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         })
         root.addView(pageRow)
 
-        root.addView(secondaryButton(if (isUploading) "返回菜单" else "结束播放").apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(58)
-            ).apply {
-                topMargin = dp(16)
-            }
-            setOnClickListener {
-                closeCoursewareAndReturnMenu()
-            }
-        })
+        if (isUploading) {
+            root.addView(secondaryButton("返回菜单").apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(58)
+                ).apply {
+                    topMargin = dp(16)
+                }
+                setOnClickListener {
+                    closeCoursewareAndReturnMenu()
+                }
+            })
+        } else {
+            root.addView(primaryButton("返回主菜单").apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(58)
+                ).apply {
+                    topMargin = dp(16)
+                }
+                setOnClickListener {
+                    pauseCoursewareAndReturnMenu()
+                }
+            })
+            root.addView(secondaryButton("结束播放").apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(58)
+                ).apply {
+                    topMargin = dp(12)
+                }
+                setOnClickListener {
+                    closeCoursewareAndReturnMenu()
+                }
+            })
+        }
         root.addView(versionLabel())
         setContentView(root)
     }
@@ -1139,6 +1206,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareScreenCount = 1
         coursewareTitle = ""
         coursewareUrl = ""
+        savedCoursewareState = null
+        showMenuScreen()
+    }
+
+    private fun pauseCoursewareAndReturnMenu() {
+        cancelCoursewareFastSeek()
+        savedCoursewareState = CoursewareState(
+            title = coursewareTitle,
+            url = coursewareUrl,
+            page = coursewarePage,
+            pageCount = coursewarePageCount,
+            screen = coursewareScreen,
+            screenCount = coursewareScreenCount
+        )
         showMenuScreen()
     }
 
@@ -1418,6 +1499,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             activeRoomCode = null
             roomJoined = false
             signalReconnectInProgress = false
+            savedCoursewareState = null
             toast(message)
             showConnectScreen()
         }
@@ -1431,6 +1513,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             activeRoomCode = null
             roomJoined = false
             signalReconnectInProgress = false
+            savedCoursewareState = null
             toast(message)
             showConnectScreen()
         }
@@ -1894,6 +1977,23 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
                 topMargin = dp(12)
+            }
+        }
+
+    private fun footerLabel(): TextView =
+        TextView(this).apply {
+            text = "本应用由宁波三中人工智能实验室开发维护"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(
+                ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface)
+            )
+            alpha = 0.55f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(24)
             }
         }
 
