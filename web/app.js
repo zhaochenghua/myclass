@@ -56,6 +56,8 @@ const elements = {
   downloadOriginalButton: document.getElementById('downloadOriginalButton'),
   prevPageButton: document.getElementById('prevPageButton'),
   nextPageButton: document.getElementById('nextPageButton'),
+  offlineCode: document.getElementById('offlineCode'),
+  offlineCodeValue: document.getElementById('offlineCodeValue'),
 };
 
 bootstrap();
@@ -121,6 +123,7 @@ function connectSignaling() {
   socket.addEventListener('close', () => {
     cleanupPeerConnection();
     if (state.presentationMode === 'courseware') {
+      showOfflineCode();
       setWaitingStatus('信令连接已断开，可继续翻页查看课件');
     } else {
       showJoinView();
@@ -142,11 +145,13 @@ async function handleSignalMessage(message) {
       setWaitingStatus('等待教师连接...');
       break;
     case 'teacher.online':
+      hideOfflineCode();
       setWaitingStatus('教师已连接，等待直播...');
       break;
     case 'teacher.offline':
       cleanupPeerConnection();
       if (state.presentationMode === 'courseware') {
+        showOfflineCode();
         setWaitingStatus('教师设备已断开，可继续翻页查看课件');
       } else {
         showJoinView();
@@ -405,6 +410,15 @@ function updatePageNavButtons() {
   }
   elements.prevPageButton.disabled = courseware.page <= 1;
   elements.nextPageButton.disabled = courseware.page >= courseware.pageCount;
+}
+
+function showOfflineCode() {
+  elements.offlineCodeValue.textContent = elements.roomCode.textContent;
+  elements.offlineCode.hidden = false;
+}
+
+function hideOfflineCode() {
+  elements.offlineCode.hidden = true;
 }
 
 function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {
@@ -1079,6 +1093,7 @@ function showJoinView() {
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
+  elements.offlineCode.hidden = true;
 }
 
 function showVideoView() {

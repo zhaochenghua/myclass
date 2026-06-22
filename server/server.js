@@ -196,7 +196,8 @@ setupWebSocket(server, {
   roomTtlMs: ROOM_TTL_MS,
   apkUrl: APK_URL,
   isAllowedHost,
-  isAllowedOrigin
+  isAllowedOrigin,
+  readCoursewareIndex
 });
 
 app.use((error, req, res, next) => {
@@ -238,9 +239,23 @@ async function publishCourseware(file, fields = {}) {
   const pdfName = `${id}.pdf`;
   const pdfPath = path.join(coursewareRoot, pdfName);
 
+  let originalPath = null;
+  let originalUrl = null;
+  let originalSize = 0;
+
   if (ext === '.pdf') {
     await fs.promises.copyFile(file.path, pdfPath);
+    originalPath = pdfPath;
+    originalUrl = `${PATH_PREFIX}/public/courseware/${pdfName}`;
   } else if (ext === '.ppt' || ext === '.pptx') {
+    const originalSavePath = path.join(coursewareRoot, `${id}${ext}`);
+    await fs.promises.copyFile(file.path, originalSavePath);
+    originalPath = originalSavePath;
+    originalUrl = `${PATH_PREFIX}/public/courseware/${id}${ext}`;
+
+    const originalStat = await fs.promises.stat(originalPath);
+    originalSize = originalStat.size;
+
     await convertPresentationToPdf(file.path, ext, pdfPath, id);
   } else {
     throw publicError(400, '仅支持 PDF、PPT、PPTX 课件');
@@ -252,6 +267,8 @@ async function publishCourseware(file, fields = {}) {
     title: path.basename(originalName, ext),
     fileName: originalName,
     size: stat.size,
+    originalUrl: originalUrl || `${PATH_PREFIX}/public/courseware/${pdfName}`,
+    originalSize: originalSize,
     createdAt: new Date().toISOString(),
     url: `${PATH_PREFIX}/public/courseware/${pdfName}`
   };
@@ -472,6 +489,18 @@ async function deleteStoredCourseware(id) {
   } catch (error) {
     if (error.code !== 'ENOENT') {
       throw error;
+    }
+  }
+
+  // 同时删除可能存在的原始 PPT/PPTX 文件
+  for (const ext of ['.pptx', '.ppt']) {
+    const originalPath = path.join(coursewareRoot, `${id}${ext}`);
+    try {
+      await fs.promises.unlink(originalPath);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
     }
   }
 
