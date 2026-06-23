@@ -654,27 +654,31 @@ async function renderCoursewarePage() {
     const canvas = elements.coursewareCanvas;
     const containerRect = elements.videoView.getBoundingClientRect();
     const baseViewport = page.getViewport({ scale: 1 });
-    // 始终适配容器，避免一张 PPT 需要翻多屏
-    const fitScale = Math.min(
-      containerRect.width / baseViewport.width,
-      containerRect.height / baseViewport.height
-    );
+    const isPortraitDocumentPage = baseViewport.height > baseViewport.width * 1.15;
+    const fitScale = isPortraitDocumentPage
+      ? containerRect.width / baseViewport.width
+      : Math.min(
+          containerRect.width / baseViewport.width,
+          containerRect.height / baseViewport.height
+        );
     const cssViewport = page.getViewport({ scale: fitScale });
     const outputScale = Math.min(window.devicePixelRatio || 1, 2);
     const renderViewport = page.getViewport({ scale: fitScale * outputScale });
 
     canvas.width = Math.max(1, Math.round(renderViewport.width));
     canvas.height = Math.max(1, Math.round(renderViewport.height));
-    courseware.fitMode = 'fit-page';
+    courseware.fitMode = isPortraitDocumentPage ? 'width-fill' : 'fit-page';
     courseware.cssWidth = Math.round(cssViewport.width);
     courseware.cssHeight = Math.round(cssViewport.height);
-    courseware.maxOffsetX = 0;
-    courseware.maxOffsetY = 0;
-    courseware.pageStepY = 0;
-    courseware.screenCount = 1;
-    courseware.screen = 1;
-    courseware.offsetX = 0;
-    courseware.offsetY = 0;
+    courseware.maxOffsetX = Math.max(0, courseware.cssWidth - containerRect.width);
+    courseware.maxOffsetY = Math.max(0, courseware.cssHeight - containerRect.height);
+    courseware.pageStepY = Math.max(1, Math.round(containerRect.height * 0.9));
+    courseware.screenCount = courseware.maxOffsetY > 0
+      ? Math.ceil(courseware.maxOffsetY / courseware.pageStepY) + 1
+      : 1;
+    courseware.screen = clamp(courseware.screen || 1, 1, courseware.screenCount);
+    courseware.offsetX = clamp(courseware.offsetX || 0, 0, courseware.maxOffsetX);
+    courseware.offsetY = offsetYForCoursewareScreen(courseware, courseware.screen);
     updateCoursewareCanvasPlacement();
 
     const context = canvas.getContext('2d', { alpha: false });
