@@ -73,6 +73,8 @@ const elements = {
   teacherLoginError: document.getElementById('teacherLoginError'),
   teacherUsername: document.getElementById('teacherUsername'),
   teacherPassword: document.getElementById('teacherPassword'),
+  teacherLoginCancel: document.getElementById('teacherLoginCancel'),
+  teacherLoginSubmit: document.getElementById('teacherLoginSubmit'),
 };
 
 bootstrap();
