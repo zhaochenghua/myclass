@@ -253,6 +253,7 @@ function connectSignaling() {
 }
 
 async function handleSignalMessage(message) {
+  try {
   switch (message.type) {
     case 'room.created':
       elements.roomCode.textContent = message.code;
@@ -313,6 +314,7 @@ async function handleSignalMessage(message) {
     default:
       break;
   }
+  } catch {}
 }
 
 async function handleOffer(sdp) {
@@ -536,15 +538,33 @@ function hideOfflineCode() {
 }
 
 function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {
-  hideDownloadButton();
-  elements.prevPageButton.hidden = true;
-  elements.nextPageButton.hidden = true;
-  destroyCoursewareDocument(state.courseware);
-  state.courseware = null;
-  clearCoursewareCanvas();
-  resetAnnotations();
-  showJoinView();
-  setWaitingStatus(statusText);
+  // 1. 先立即切回主页（必须最先执行，确保画面立刻切换）
+  try { document.body.classList.remove('is-streaming'); } catch {}
+  try { elements.joinView.hidden = false; } catch {}
+  try { elements.videoView.hidden = true; } catch {}
+  try { elements.coursewareCanvas.hidden = true; } catch {}
+  try { elements.panToolButton.hidden = true; } catch {}
+  try { elements.prevPageButton.hidden = true; } catch {}
+  try { elements.nextPageButton.hidden = true; } catch {}
+  if (elements.selectCoursewareButton) try { elements.selectCoursewareButton.hidden = true; } catch {}
+  try { elements.offlineCode.hidden = true; } catch {}
+  try { elements.remoteVideo.hidden = false; } catch {}
+
+  // 2. 重置状态
+  try { state.presentationMode = 'waiting'; } catch {}
+  try { state.directTeach = false; } catch {}
+
+  // 3. 安全清理课件资源
+  try { destroyCoursewareDocument(state.courseware); } catch {}
+  try { state.courseware = null; } catch {}
+  try { clearCoursewareCanvas(); } catch {}
+  try { resetAnnotations(); } catch {}
+
+  // 4. 清理下载相关
+  try { hideDownloadButton(); } catch {}
+
+  // 5. 更新提示
+  try { setWaitingStatus(statusText); } catch {}
 }
 
 async function loadCoursewareDocument(courseware) {
