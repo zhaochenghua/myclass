@@ -416,29 +416,32 @@ video {
   color: var(--alert);
 }
 
-/* 课件选择面板 */
-.courseware-picker {
-  margin-top: 1.5rem;
-  text-align: center;
+/* 课件选择弹窗 */
+.courseware-picker-card {
+  width: min(600px, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
 }
 
-.courseware-picker h3 {
+.courseware-picker-card h3 {
   margin: 0 0 1rem;
-  font-size: clamp(1rem, 1.4vw, 1.3rem);
-  color: var(--accent);
+  font-size: 1.15rem;
+  color: var(--text);
 }
 
 .courseware-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 0.6rem;
-  max-width: 800px;
-  margin: 0 auto 1rem;
+  gap: 0.5rem;
+  overflow-y: auto;
+  max-height: 50vh;
+  margin-bottom: 1rem;
   text-align: left;
 }
 
 .courseware-item {
-  padding: 0.7rem 0.9rem;
+  padding: 0.65rem 0.8rem;
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 6px;
   background: rgba(255,255,255,0.04);

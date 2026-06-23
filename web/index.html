@@ -24,14 +24,19 @@
           <span class="direct-teach-user" id="directTeachUser" hidden></span>
           <button class="direct-teach-logout" id="directTeachLogout" hidden>退出</button>
         </div>
-        <!-- 课件选择面板（登录后显示） -->
-        <div class="courseware-picker" id="coursewarePicker" hidden>
-          <h3>选择课件</h3>
-          <div class="courseware-grid" id="coursewareGrid"></div>
-          <button class="btn-secondary" id="closePickerButton">取消</button>
-        </div>
         <div class="maintenance-note">由宁波三中人工智能实验室开发维护</div>
       </section>
+
+      <!-- 课件选择弹窗 -->
+      <div class="modal-overlay" id="coursewarePicker" hidden>
+        <div class="modal-card courseware-picker-card">
+          <h3>选择课件</h3>
+          <div class="courseware-grid" id="coursewareGrid"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="closePickerButton">取消</button>
+          </div>
+        </div>
+      </div>
 
       <!-- 登录弹窗 -->
       <div class="modal-overlay" id="loginModal" hidden>
@@ -88,6 +93,6 @@
       </section>
     </main>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260623"></script>
   </body>
 </html>
