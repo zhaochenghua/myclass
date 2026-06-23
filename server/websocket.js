@@ -68,6 +68,11 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     return;
   }
 
+  const binding = roomManager.getBinding(socket);
+  if (message.type === 'courseware.close' || message.type === 'teacher.stop') {
+    console.log(`[WS] ${binding?.role || '?'} → ${message.type}`);
+  }
+
   switch (message.type) {
     case 'viewer.join':
       handleViewerJoin(socket, roomManager, options);
