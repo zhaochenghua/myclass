@@ -340,7 +340,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun showAuthScreen() {
         currentScreen = Screen.Auth
         val root = baseColumn().apply {
-            setPadding(dp(28), dp(48), dp(28), dp(32))
+            setPadding(dp(28), dp(36), dp(28), dp(32))
         }
         root.addView(titleText("上课投屏平台", 24f))
         root.addView(bodyText("首次使用请注册账号").apply {
@@ -480,10 +480,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun showConnectScreen() {
         currentScreen = Screen.Connect
         val root = baseColumn().apply {
-            setPadding(dp(28), dp(32), dp(28), dp(32))
+            setPadding(dp(28), dp(36), dp(28), dp(20))
         }
 
-        val title = titleText(getString(R.string.platform_title), 22f)
+        root.addView(titleText(getString(R.string.platform_title), 22f))
+
         val inputLayout = TextInputLayout(this).apply {
             hint = "连接码"
             boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
@@ -491,7 +492,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(36)
+                topMargin = dp(28)
             }
         }
         val codeInput = TextInputEditText(inputLayout.context).apply {
@@ -508,7 +509,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(56)
             ).apply {
-                topMargin = dp(20)
+                topMargin = dp(18)
             }
             setOnClickListener {
                 val code = codeInput.text?.toString()?.trim().orEmpty()
@@ -529,17 +530,300 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(18)
+                topMargin = dp(20)
             }
         }
 
-        root.addView(title)
+        val hintText = TextView(this).apply {
+            text = "浏览器进入 10.30.13.1/myclass 查看连接码"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            alpha = 0.6f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(6)
+            }
+        }
+
         root.addView(inputLayout)
         root.addView(connectButton)
         root.addView(statusText)
-        root.addView(footerLabel())
-        root.addView(versionLabel())
+        root.addView(hintText)
+
+        // 底部元素用 topMargin 自动推开
+        root.addView(secondaryButton("用户管理：${authUsername ?: ""}").apply {
+            textSize = 14f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(40)
+            ).apply {
+                topMargin = dp(32)
+            }
+            setOnClickListener {
+                showUserManagementDialog()
+            }
+        })
+        root.addView(versionLabel().apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(6)
+        })
+        root.addView(footerLabel().apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(2)
+        })
         setContentView(root)
+    }
+
+    private fun showUserManagementDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("用户管理")
+            .setItems(arrayOf("课件管理", "切换用户")) { _, which ->
+                when (which) {
+                    0 -> showCoursewareManagement()
+                    1 -> confirmSwitchUser()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmSwitchUser() {
+        AlertDialog.Builder(this)
+            .setTitle("切换用户")
+            .setMessage("确定要退出当前账号（${authUsername}）吗？")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确定") { _, _ ->
+                signalingClient?.close()
+                signalingClient = null
+                activeRoomCode = null
+                roomJoined = false
+                clearAuth()
+                showAuthScreen()
+            }
+            .show()
+    }
+
+    private fun showCoursewareManagement() {
+        currentScreen = Screen.Connect  // 停留在 Connect 状态，避免 back 混乱
+        val root = baseColumn().apply {
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+        }
+        root.addView(titleText("课件管理", 22f))
+        val statusView = bodyText("正在加载...").apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(20) }
+        }
+        root.addView(statusView)
+        root.addView(secondaryButton("返回").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(50)
+            ).apply { topMargin = dp(20) }
+            setOnClickListener { showConnectScreen() }
+        })
+        setContentView(root)
+
+        Thread {
+            runCatching {
+                fetchServerCoursewareListBlocking()
+            }.onSuccess { items ->
+                runOnUiThread { showCoursewareManagementList(items) }
+            }.onFailure { error ->
+                runOnUiThread {
+                    statusView.text = "加载失败：${error.message}"
+                }
+            }
+        }.start()
+    }
+
+    private fun showCoursewareManagementList(items: List<StoredCoursewareItem>) {
+        val root = baseColumn().apply {
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+        }
+        root.addView(titleText("课件管理", 22f))
+
+        if (items.isEmpty()) {
+            root.addView(bodyText("暂无课件").apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(24) }
+            })
+        } else {
+            val listColumn = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            }
+            items.forEachIndexed { index, item ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(56)
+                    ).apply {
+                        if (index > 0) topMargin = dp(8)
+                    }
+                }
+                row.addView(secondaryButton("${item.title}\n${formatCoursewareSize(item.size)}").apply {
+                    maxLines = 2
+                    setSingleLine(false)
+                    ellipsize = TextUtils.TruncateAt.END
+                    textSize = 14f
+                    isEnabled = false
+                    layoutParams = LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        1f
+                    ).apply { marginEnd = dp(8) }
+                })
+                row.addView(secondaryButton("删除").apply {
+                    textSize = 14f
+                    layoutParams = LinearLayout.LayoutParams(
+                        dp(78),
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    setOnClickListener {
+                        confirmDeleteManagementCourseware(item)
+                    }
+                })
+                listColumn.addView(row)
+            }
+            val listScroll = ScrollView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                ).apply { topMargin = dp(12) }
+                addView(listColumn)
+            }
+            root.addView(listScroll)
+        }
+
+        root.addView(primaryButton("上传课件").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(50)
+            ).apply { topMargin = dp(16) }
+            setOnClickListener {
+                uploadFromManagement()
+            }
+        })
+        root.addView(secondaryButton("返回").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(50)
+            ).apply { topMargin = dp(8) }
+            setOnClickListener { showConnectScreen() }
+        })
+        setContentView(root)
+    }
+
+    private val managementPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri == null) return@registerForActivityResult
+        managementUploadProgress(uri)
+    }
+
+    private fun uploadFromManagement() {
+        managementPickerLauncher.launch("*/*")
+    }
+
+    private fun managementUploadProgress(uri: Uri) {
+        val fileName = displayNameForUri(uri)
+        updateStatus("正在上传：$fileName")
+        Thread {
+            runCatching {
+                val totalBytes = contentLengthForUri(uri)
+                val requestBody = object : RequestBody() {
+                    override fun contentType() =
+                        (contentResolver.getType(uri) ?: "application/octet-stream").toMediaTypeOrNull()
+                    override fun contentLength(): Long = totalBytes
+                    override fun writeTo(sink: BufferedSink) {
+                        val input = contentResolver.openInputStream(uri)
+                            ?: throw IOException("无法读取文件")
+                        input.use {
+                            val buffer = ByteArray(8 * 1024)
+                            while (true) {
+                                val read = it.read(buffer)
+                                if (read == -1) break
+                                sink.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                }
+                val multipartBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart(
+                        "displayNameBase64",
+                        Base64.encodeToString(fileName.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                    )
+                    .addFormDataPart("file", fileName, requestBody)
+                    .build()
+                val request = Request.Builder()
+                    .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware")
+                    .post(multipartBody)
+                    .also { addAuthHeader(it) }
+                    .build()
+                coursewareHttpClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        val error = runCatching {
+                            JSONObject(body).optString("error")
+                        }.getOrNull().orEmpty()
+                        throw IOException(error.ifBlank { "上传失败：HTTP ${response.code}" })
+                    }
+                }
+            }.onSuccess {
+                runOnUiThread {
+                    toast("课件上传成功")
+                    showCoursewareManagement()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    toast(error.message ?: "课件上传失败")
+                    showCoursewareManagement()
+                }
+            }
+        }.start()
+    }
+
+    private fun confirmDeleteManagementCourseware(item: StoredCoursewareItem) {
+        AlertDialog.Builder(this)
+            .setTitle("删除课件")
+            .setMessage("确定删除「${item.title}」吗？")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除") { _, _ ->
+                deleteManagementCourseware(item)
+            }
+            .show()
+    }
+
+    private fun deleteManagementCourseware(item: StoredCoursewareItem) {
+        Thread {
+            runCatching {
+                deleteServerCoursewareBlocking(item)
+            }.onSuccess {
+                runOnUiThread {
+                    toast("课件已删除")
+                    showCoursewareManagement()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    toast(error.message ?: "删除失败")
+                    showCoursewareManagement()
+                }
+            }
+        }.start()
     }
 
     private fun showMenuScreen() {
