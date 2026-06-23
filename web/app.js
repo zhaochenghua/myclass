@@ -261,12 +261,14 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.online':
       hideOfflineCode();
-      hideDirectTeachUI();
+      elements.directTeachButton.hidden = true;
+      elements.downloadApkButton.hidden = true;
       setWaitingStatus('教师已连接，等待直播...');
       break;
     case 'teacher.offline':
       cleanupPeerConnection();
-      showDirectTeachUI();
+      if (!state.directTeach) elements.directTeachButton.hidden = false;
+      if (!state.directTeach && state.config?.apkUrl) elements.downloadApkButton.hidden = false;
       if (state.presentationMode === 'courseware') {
         showOfflineCode();
         setWaitingStatus('教师设备已断开，可继续翻页查看课件');
