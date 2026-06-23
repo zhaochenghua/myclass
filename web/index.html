@@ -19,8 +19,42 @@
           <div class="platform-note">暂只支持安卓平台</div>
         </div>
         <div class="status-text" id="statusText">正在创建课堂...</div>
+        <div class="direct-teach">
+          <button class="direct-teach-btn" id="directTeachButton">直接上课（免手机）</button>
+          <span class="direct-teach-user" id="directTeachUser" hidden></span>
+          <button class="direct-teach-logout" id="directTeachLogout" hidden>退出</button>
+        </div>
+        <!-- 课件选择面板（登录后显示） -->
+        <div class="courseware-picker" id="coursewarePicker" hidden>
+          <h3>选择课件</h3>
+          <div class="courseware-grid" id="coursewareGrid"></div>
+          <button class="btn-secondary" id="closePickerButton">取消</button>
+        </div>
         <div class="maintenance-note">由宁波三中人工智能实验室开发维护</div>
       </section>
+
+      <!-- 登录弹窗 -->
+      <div class="modal-overlay" id="loginModal" hidden>
+        <div class="modal-card">
+          <h3>教师登录</h3>
+          <form id="teacherLoginForm">
+            <label>
+              <span>用户名</span>
+              <input type="text" id="teacherUsername" required autocomplete="username">
+            </label>
+            <label>
+              <span>密码</span>
+              <input type="password" id="teacherPassword" required>
+            </label>
+            <p class="form-error" id="teacherLoginError" hidden></p>
+            <div class="modal-actions">
+              <button type="button" class="btn-secondary" id="teacherLoginCancel">取消</button>
+              <button type="submit" class="btn-primary" id="teacherLoginSubmit">登录</button>
+            </div>
+          </form>
+          <p class="form-hint">没有账号？请用管理员后台注册。</p>
+        </div>
+      </div>
 
       <section class="video-view" id="videoView" hidden>
         <video id="remoteVideo" autoplay playsinline muted></video>

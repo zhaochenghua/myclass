@@ -31,7 +31,10 @@ const state = {
     startY: 0,
     startOffsetX: 0,
     startOffsetY: 0
-  }
+  },
+  downloadOriginalUrl: null,
+  teacherToken: null,
+  directTeach: false
 };
 
 let pdfJsPromise = null;
@@ -59,6 +62,17 @@ const elements = {
   offlineCode: document.getElementById('offlineCode'),
   offlineCodeValue: document.getElementById('offlineCodeValue'),
   downloadApkButton: document.getElementById('downloadApkButton'),
+  directTeachButton: document.getElementById('directTeachButton'),
+  directTeachUser: document.getElementById('directTeachUser'),
+  directTeachLogout: document.getElementById('directTeachLogout'),
+  coursewarePicker: document.getElementById('coursewarePicker'),
+  coursewareGrid: document.getElementById('coursewareGrid'),
+  closePickerButton: document.getElementById('closePickerButton'),
+  loginModal: document.getElementById('loginModal'),
+  teacherLoginForm: document.getElementById('teacherLoginForm'),
+  teacherLoginError: document.getElementById('teacherLoginError'),
+  teacherUsername: document.getElementById('teacherUsername'),
+  teacherPassword: document.getElementById('teacherPassword'),
 };
 
 bootstrap();
@@ -106,12 +120,62 @@ async function bootstrap() {
         }
       });
     }
+    // 直接上课
+    elements.directTeachButton.addEventListener('click', () => {
+      elements.loginModal.hidden = false;
+    });
+    elements.teacherLoginCancel.addEventListener('click', () => {
+      elements.loginModal.hidden = true;
+    });
+    elements.teacherLoginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = elements.teacherLoginSubmit;
+      btn.disabled = true; btn.textContent = '登录中...';
+      elements.teacherLoginError.hidden = true;
+      try {
+        const res = await fetch('./api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: elements.teacherUsername.value.trim(),
+            password: elements.teacherPassword.value
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '登录失败');
+        state.teacherToken = data.token;
+        state.directTeach = true;
+        elements.directTeachButton.hidden = true;
+        elements.directTeachUser.textContent = `已登录：${data.username}`;
+        elements.directTeachUser.hidden = false;
+        elements.directTeachLogout.hidden = false;
+        elements.loginModal.hidden = true;
+        elements.teacherUsername.value = '';
+        elements.teacherPassword.value = '';
+        loadTeacherCourseware();
+      } catch (err) {
+        elements.teacherLoginError.textContent = err.message;
+        elements.teacherLoginError.hidden = false;
+      }
+      btn.disabled = false; btn.textContent = '登录';
+    });
+    elements.directTeachLogout.addEventListener('click', () => {
+      state.teacherToken = null;
+      state.directTeach = false;
+      elements.directTeachButton.hidden = false;
+      elements.directTeachUser.hidden = true;
+      elements.directTeachLogout.hidden = true;
+      elements.coursewarePicker.hidden = true;
+    });
+    elements.closePickerButton.addEventListener('click', () => {
+      elements.coursewarePicker.hidden = true;
+    });
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
     window.addEventListener('resize', handleViewportResize);
     // 首次点击页面任意位置自动全屏（排除下载按钮）
     const autoFullscreen = (e) => {
-      if (e.target.closest('#downloadApkButton')) return;
+      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
@@ -1230,4 +1294,59 @@ function showDownloadButtonIfAvailable() {
 function setWaitingStatus(text) {
   elements.statusText.textContent = text;
   elements.videoStatus.textContent = text;
+}
+
+// -- 直接上课模式 --
+async function loadTeacherCourseware() {
+  if (!state.teacherToken) return;
+  try {
+    const res = await fetch('./api/courseware', {
+      headers: { Authorization: `Bearer ${state.teacherToken}` }
+    });
+    if (!res.ok) throw new Error('获取课件失败');
+    const data = await res.json();
+    const items = data.items || [];
+    if (!items.length) {
+      elements.coursewareGrid.innerHTML = '<p style="color:var(--muted);text-align:center;grid-column:1/-1;">暂无课件，请通过管理后台上传</p>';
+    } else {
+      elements.coursewareGrid.innerHTML = items.map((c) => `
+        <div class="courseware-item" data-cw-url="${escapeAttr(c.url)}" data-cw-title="${escapeAttr(c.title)}">
+          <div class="courseware-item-title">${escapeHtml(c.title)}</div>
+          <div class="courseware-item-meta">${c.fileName || ''} · ${formatSize(c.size)}</div>
+        </div>
+      `).join('');
+      elements.coursewareGrid.querySelectorAll('.courseware-item').forEach((item) => {
+        item.addEventListener('click', () => {
+          openDirectCourseware(item.dataset.cwUrl, item.dataset.cwTitle);
+        });
+      });
+    }
+    elements.coursewarePicker.hidden = false;
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function openDirectCourseware(url, title) {
+  elements.coursewarePicker.hidden = true;
+  elements.roomCode.textContent = '----';
+  setWaitingStatus('');
+  state.directTeach = true;
+  openCourseware({ url, title, page: 1, screen: 1 });
+}
+
+function escapeAttr(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function formatSize(b) {
+  if (!b) return '0B';
+  if (b < 1024 * 1024) return Math.round(b / 1024) + 'KB';
+  return (b / 1024 / 1024).toFixed(1) + 'MB';
 }
