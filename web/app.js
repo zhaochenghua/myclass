@@ -89,7 +89,7 @@ async function bootstrap() {
     elements.downloadHint.textContent = `APP v${apkVersion}`;
     if (state.config?.apkUrl) {
       elements.downloadApkButton.href = '#';
-      elements.downloadApkButton.hidden = false;
+      elements.downloadApkButton.style.display = '';
       elements.downloadApkButton.addEventListener('click', async (e) => {
         e.preventDefault();
         elements.downloadApkButton.textContent = '正在下载...';
@@ -261,14 +261,12 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.online':
       hideOfflineCode();
-      elements.directTeachButton.hidden = true;
-      elements.downloadApkButton.hidden = true;
+      hideDirectTeachUI();
       setWaitingStatus('教师已连接，等待直播...');
       break;
     case 'teacher.offline':
       cleanupPeerConnection();
-      if (!state.directTeach) elements.directTeachButton.hidden = false;
-      if (!state.directTeach && state.config?.apkUrl) elements.downloadApkButton.hidden = false;
+      showDirectTeachUI();
       if (state.presentationMode === 'courseware') {
         showOfflineCode();
         setWaitingStatus('教师设备已断开，可继续翻页查看课件');
@@ -573,7 +571,7 @@ function hideOfflineCode() {
 
 function hideDirectTeachUI() {
   elements.directTeachButton.hidden = true;
-  elements.downloadApkButton.hidden = true;
+  if (elements.downloadApkButton) elements.downloadApkButton.style.display = 'none';
   elements.directTeachUser.hidden = true;
   elements.directTeachLogout.hidden = true;
   elements.coursewarePicker.hidden = true;
@@ -581,7 +579,7 @@ function hideDirectTeachUI() {
 
 function showDirectTeachUI() {
   elements.directTeachButton.hidden = false;
-  if (state.config?.apkUrl) elements.downloadApkButton.hidden = false;
+  if (elements.downloadApkButton) elements.downloadApkButton.style.display = '';
 }
 
 function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {
