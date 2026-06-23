@@ -261,10 +261,12 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.online':
       hideOfflineCode();
+      hideDirectTeachUI();
       setWaitingStatus('教师已连接，等待直播...');
       break;
     case 'teacher.offline':
       cleanupPeerConnection();
+      showDirectTeachUI();
       if (state.presentationMode === 'courseware') {
         showOfflineCode();
         setWaitingStatus('教师设备已断开，可继续翻页查看课件');
@@ -292,7 +294,7 @@ async function handleSignalMessage(message) {
       showCoursewarePage(message.page);
       break;
     case 'courseware.close':
-      closeCourseware();
+      closeCourseware('课件已结束');
       break;
     case 'courseware.original':
       handleCoursewareOriginal(message);
@@ -301,7 +303,7 @@ async function handleSignalMessage(message) {
       cleanupPeerConnection();
       closeCourseware(
         state.presentationMode === 'courseware'
-          ? '课件播放已结束，等待教师连接...'
+          ? '课件已结束'
           : '直播已停止，等待教师重新开始...'
       );
       break;
@@ -565,6 +567,19 @@ function showOfflineCode() {
 
 function hideOfflineCode() {
   elements.offlineCode.hidden = true;
+}
+
+function hideDirectTeachUI() {
+  elements.directTeachButton.hidden = true;
+  elements.downloadApkButton.hidden = true;
+  elements.directTeachUser.hidden = true;
+  elements.directTeachLogout.hidden = true;
+  elements.coursewarePicker.hidden = true;
+}
+
+function showDirectTeachUI() {
+  elements.directTeachButton.hidden = false;
+  if (state.config?.apkUrl) elements.downloadApkButton.hidden = false;
 }
 
 function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {
