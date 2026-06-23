@@ -27,11 +27,19 @@ const ALLOWED_HOSTS = new Set(
 );
 
 // -- 用户系统 --
-const AUTH_SECRET = process.env.AUTH_SECRET || crypto.randomBytes(32).toString('hex');
-const INACTIVE_USER_DELETE_DAYS = Number(process.env.INACTIVE_USER_DELETE_DAYS || 60);
 const dataDir = path.join(__dirname, 'data');
-const usersPath = path.join(dataDir, 'users.json');
 fs.mkdirSync(dataDir, { recursive: true });
+const secretPath = path.join(dataDir, '.auth_secret');
+let AUTH_SECRET = process.env.AUTH_SECRET;
+if (!AUTH_SECRET) {
+  try { AUTH_SECRET = fs.readFileSync(secretPath, 'utf8').trim(); } catch {}
+  if (!AUTH_SECRET) {
+    AUTH_SECRET = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(secretPath, AUTH_SECRET, 'utf8');
+  }
+}
+const INACTIVE_USER_DELETE_DAYS = Number(process.env.INACTIVE_USER_DELETE_DAYS || 60);
+const usersPath = path.join(dataDir, 'users.json');
 
 const app = express();
 const server = http.createServer(app);
@@ -197,10 +205,61 @@ app.get(`${PATH_PREFIX}/api/auth/me`, requireAuth, async (req, res) => {
   res.json({ username: req.user.username });
 });
 
+// -- 管理员接口（需认证） --
+app.get(`${PATH_PREFIX}/api/admin/users`, requireAuth, async (req, res, next) => {
+  try {
+    const users = await readUsers();
+    res.json({ users: users.map((u) => ({ id: u.id, username: u.username, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt })) });
+  } catch (error) { next(error); }
+});
+
+app.put(`${PATH_PREFIX}/api/admin/users/:id/password`, requireAuth, async (req, res, next) => {
+  try {
+    const { password } = req.body || {};
+    if (!password || typeof password !== 'string' || password.length < 4 || password.length > 32) {
+      res.status(400).json({ error: '密码需4-32位' });
+      return;
+    }
+    const users = await readUsers();
+    const user = users.find((u) => u.id === req.params.id);
+    if (!user) { res.status(404).json({ error: '用户不存在' }); return; }
+    user.passwordHash = hashPassword(password);
+    // 重置 token 使旧登录失效
+    user.token = null;
+    await writeUsers(users);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.delete(`${PATH_PREFIX}/api/admin/users/:id`, requireAuth, async (req, res, next) => {
+  try {
+    if (req.params.id === req.user.id) {
+      res.status(400).json({ error: '不能删除自己' });
+      return;
+    }
+    const users = await readUsers();
+    const index = users.findIndex((u) => u.id === req.params.id);
+    if (index === -1) { res.status(404).json({ error: '用户不存在' }); return; }
+    const removed = users.splice(index, 1)[0];
+    await writeUsers(users);
+
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 // -- 课件接口（需认证） --
 app.get(`${PATH_PREFIX}/api/courseware`, requireAuth, async (req, res, next) => {
   try {
-    res.json({ items: await listStoredCourseware(req.user.id) });
+    const userId = req.query.all === 'true' ? null : req.user.id;
+    const items = await listStoredCourseware(userId);
+    if (req.query.all === 'true') {
+      const users = await readUsers();
+      const userMap = Object.fromEntries(users.map(u => [u.id, u.username]));
+      items.forEach(item => {
+        item.owner = userMap[item.userId] || (item.userId === 'admin' ? '所有人' : (item.userId || '未知'));
+      });
+    }
+    res.json({ items });
   } catch (error) {
     next(error);
   }
@@ -225,8 +284,9 @@ app.post(`${PATH_PREFIX}/api/courseware`, requireAuth, upload.single('file'), as
       res.status(400).json({ error: '请选择课件文件' });
       return;
     }
-
-    const result = await publishCourseware(req.file, req.body, req.user.id);
+    // share=true → 所有人可见(owner=admin)；否则仅上传者可见(owner=userId)
+    const ownerId = req.body.share === 'true' ? 'admin' : req.user.id;
+    const result = await publishCourseware(req.file, req.body, ownerId);
     res.json(result);
   } catch (error) {
     next(error);
@@ -521,7 +581,7 @@ async function listStoredCourseware(userId) {
 
   const items = [...indexedItems, ...discoveredItems]
     .filter((item) => item && item.id && item.url)
-    .filter((item) => !userId || !item.userId || item.userId === userId || item.userId === 'legacy')
+    .filter((item) => !userId || !item.userId || item.userId === 'admin' || item.userId === userId || item.userId === 'legacy')
     .filter((item) => fs.existsSync(path.join(coursewareRoot, `${item.id}.pdf`)))
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
     .slice(0, Number(process.env.COURSEWARE_LIST_LIMIT || 60));

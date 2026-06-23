@@ -15,3 +15,5 @@ android/AndroidStudioProject/app/build/
 android/AndroidStudioProject/build/
 android/AndroidStudioProject/.idea/
 android/AndroidStudioProject/*.iml
+server/data/
+web/vendor/
