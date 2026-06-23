@@ -34,7 +34,8 @@ const state = {
   },
   downloadOriginalUrl: null,
   teacherToken: null,
-  directTeach: false
+  directTeach: false,
+  teacherCoursewareList: []
 };
 
 let pdfJsPromise = null;
@@ -59,6 +60,7 @@ const elements = {
   downloadOriginalButton: document.getElementById('downloadOriginalButton'),
   prevPageButton: document.getElementById('prevPageButton'),
   nextPageButton: document.getElementById('nextPageButton'),
+  selectCoursewareButton: document.getElementById('selectCoursewareButton'),
   offlineCode: document.getElementById('offlineCode'),
   offlineCodeValue: document.getElementById('offlineCodeValue'),
   downloadApkButton: document.getElementById('downloadApkButton'),
@@ -194,6 +196,7 @@ async function bootstrap() {
     elements.downloadOriginalButton.addEventListener('click', downloadOriginalFile);
     elements.prevPageButton.addEventListener('click', () => navigatePage(-1));
     elements.nextPageButton.addEventListener('click', () => navigatePage(1));
+    elements.selectCoursewareButton.addEventListener('click', showTeacherCoursewarePicker);
     document.addEventListener('fullscreenchange', updateFullscreenButton);
     elements.annotationColorButtons.forEach((button) => {
       button.addEventListener('click', () => setAnnotationColor(button.dataset.color));
@@ -1204,6 +1207,7 @@ function showJoinView() {
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
+  elements.selectCoursewareButton.hidden = true;
   elements.offlineCode.hidden = true;
 }
 
@@ -1234,6 +1238,7 @@ function showCoursewareView() {
   elements.panToolButton.hidden = false;
   elements.prevPageButton.hidden = false;
   elements.nextPageButton.hidden = false;
+  elements.selectCoursewareButton.hidden = !state.directTeach;
   elements.videoStatus.hidden = true;
   updatePageNavButtons();
   resizeAnnotationCanvas();
@@ -1307,34 +1312,52 @@ async function loadTeacherCourseware() {
     });
     if (!res.ok) throw new Error('获取课件失败');
     const data = await res.json();
-    const items = data.items || [];
+    state.teacherCoursewareList = data.items || [];
+    const items = state.teacherCoursewareList;
     if (!items.length) {
-      elements.coursewareGrid.innerHTML = '<p style="color:var(--muted);text-align:center;grid-column:1/-1;">暂无课件，请通过管理后台上传</p>';
+      elements.coursewareGrid.innerHTML = '<p style="color:var(--muted);text-align:center">暂无课件，请通过管理后台上传</p>';
     } else {
-      elements.coursewareGrid.innerHTML = items.map((c) => `
-        <div class="courseware-item" data-cw-url="${escapeAttr(c.url)}" data-cw-title="${escapeAttr(c.title)}">
+      elements.coursewareGrid.innerHTML = items.map((c, i) => `
+        <div class="courseware-item" data-index="${i}">
           <div class="courseware-item-title">${escapeHtml(c.title)}</div>
           <div class="courseware-item-meta">${c.fileName || ''} · ${formatSize(c.size)}</div>
         </div>
       `).join('');
       elements.coursewareGrid.querySelectorAll('.courseware-item').forEach((item) => {
         item.addEventListener('click', () => {
-          openDirectCourseware(item.dataset.cwUrl, item.dataset.cwTitle);
+          const idx = parseInt(item.dataset.index, 10);
+          const cw = state.teacherCoursewareList[idx];
+          if (cw) openDirectCourseware(cw);
         });
       });
     }
-    elements.coursewarePicker.hidden = false;
+    showPicker();
   } catch (err) {
     alert(err.message);
   }
 }
 
-function openDirectCourseware(url, title) {
+function showPicker() {
+  elements.coursewarePicker.hidden = false;
+  elements.selectCoursewareButton.hidden = false;
+}
+
+function showTeacherCoursewarePicker() {
+  loadTeacherCourseware();
+}
+
+function openDirectCourseware(cw) {
   elements.coursewarePicker.hidden = true;
   elements.roomCode.textContent = '----';
   setWaitingStatus('');
   state.directTeach = true;
-  openCourseware({ url, title, page: 1, screen: 1 });
+  // 如果有原文件下载地址，直接设置
+  if (cw.originalUrl && cw.originalUrl !== cw.url) {
+    state.downloadOriginalUrl = cw.originalUrl;
+  } else {
+    state.downloadOriginalUrl = null;
+  }
+  openCourseware({ url: cw.url, title: cw.title, page: 1, screen: 1 });
 }
 
 function escapeAttr(str) {
