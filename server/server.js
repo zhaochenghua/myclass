@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.2.3-20260623';
+const APP_VERSION = process.env.APP_VERSION || '1.2.4-20260623';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -376,12 +376,13 @@ async function publishCourseware(file, fields = {}, userId) {
   let originalPath = null;
   let originalUrl = null;
   let originalSize = 0;
+  let downloadOnly = false;
 
   if (ext === '.pdf') {
     await fs.promises.copyFile(file.path, pdfPath);
     originalPath = pdfPath;
     originalUrl = `${PATH_PREFIX}/public/courseware/${pdfName}`;
-  } else if (ext === '.ppt' || ext === '.pptx') {
+  } else if (ext === '.ppt' || ext === '.pptx' || ext === '.doc' || ext === '.docx') {
     const originalSavePath = path.join(coursewareRoot, `${id}${ext}`);
     await fs.promises.copyFile(file.path, originalSavePath);
     originalPath = originalSavePath;
@@ -390,9 +391,26 @@ async function publishCourseware(file, fields = {}, userId) {
     const originalStat = await fs.promises.stat(originalPath);
     originalSize = originalStat.size;
 
-    await convertPresentationToPdf(file.path, ext, pdfPath, id);
+    await convertOfficeToPdf(file.path, ext, pdfPath, id);
+  } else if (ext === '.zip') {
+    const zipPath = path.join(coursewareRoot, `${id}.zip`);
+    await fs.promises.copyFile(file.path, zipPath);
+    const stat = await fs.promises.stat(zipPath);
+    downloadOnly = true;
+    const result = {
+      id,
+      userId: userId || 'legacy',
+      title: path.basename(originalName, ext),
+      fileName: originalName,
+      size: stat.size,
+      downloadOnly: true,
+      url: `${PATH_PREFIX}/public/courseware/${id}.zip`,
+      createdAt: new Date().toISOString()
+    };
+    await rememberCourseware(result);
+    return result;
   } else {
-    throw publicError(400, '仅支持 PDF、PPT、PPTX 课件');
+    throw publicError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP 文件');
   }
 
   const stat = await fs.promises.stat(pdfPath);
@@ -411,7 +429,7 @@ async function publishCourseware(file, fields = {}, userId) {
   return result;
 }
 
-async function convertPresentationToPdf(inputPath, ext, outputPdfPath, id) {
+async function convertOfficeToPdf(inputPath, ext, outputPdfPath, id) {
   const sourcePath = path.join(tempRoot, `${id}${ext}`);
   const outputDir = path.join(tempRoot, id);
   await fs.promises.mkdir(outputDir, { recursive: true });
@@ -582,7 +600,10 @@ async function listStoredCourseware(userId) {
   const items = [...indexedItems, ...discoveredItems]
     .filter((item) => item && item.id && item.url)
     .filter((item) => !userId || !item.userId || item.userId === 'admin' || item.userId === userId || item.userId === 'legacy')
-    .filter((item) => fs.existsSync(path.join(coursewareRoot, `${item.id}.pdf`)))
+    .filter((item) => {
+      const fileExt = path.extname(new URL(item.url, 'http://localhost').pathname);
+      return fs.existsSync(path.join(coursewareRoot, `${item.id}${fileExt}`));
+    })
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
     .slice(0, Number(process.env.COURSEWARE_LIST_LIMIT || 60));
 
@@ -614,30 +635,21 @@ async function deleteStoredCourseware(id, userId) {
   if (targetItem && targetItem.userId && userId && targetItem.userId !== userId) {
     return false; // 不属于当前用户
   }
-  const filePath = path.join(coursewareRoot, `${id}.pdf`);
-  const resolvedFilePath = path.resolve(filePath);
-  if (!resolvedFilePath.startsWith(`${path.resolve(coursewareRoot)}${path.sep}`)) {
-    const error = new Error('无效课件路径');
-    error.status = 400;
-    throw error;
-  }
-
   const wasIndexed = currentItems.some((item) => item.id === id);
   let fileDeleted = false;
-  try {
-    await fs.promises.unlink(resolvedFilePath);
-    fileDeleted = true;
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
+
+  // 删除所有可能的关联文件（PDF、原始 Office 文件、ZIP）
+  for (const ext of ['.pdf', '.zip', '.pptx', '.ppt', '.docx', '.doc']) {
+    const filePath = path.join(coursewareRoot, `${id}${ext}`);
+    const resolvedFilePath = path.resolve(filePath);
+    if (!resolvedFilePath.startsWith(`${path.resolve(coursewareRoot)}${path.sep}`)) {
+      const error = new Error('无效课件路径');
+      error.status = 400;
       throw error;
     }
-  }
-
-  // 同时删除可能存在的原始 PPT/PPTX 文件
-  for (const ext of ['.pptx', '.ppt']) {
-    const originalPath = path.join(coursewareRoot, `${id}${ext}`);
     try {
-      await fs.promises.unlink(originalPath);
+      await fs.promises.unlink(resolvedFilePath);
+      fileDeleted = true;
     } catch (error) {
       if (error.code !== 'ENOENT') {
         throw error;
