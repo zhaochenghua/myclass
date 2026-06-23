@@ -196,7 +196,7 @@ async function bootstrap() {
     elements.downloadOriginalButton.addEventListener('click', downloadOriginalFile);
     elements.prevPageButton.addEventListener('click', () => navigatePage(-1));
     elements.nextPageButton.addEventListener('click', () => navigatePage(1));
-    elements.selectCoursewareButton.addEventListener('click', showTeacherCoursewarePicker);
+    if (elements.selectCoursewareButton) elements.selectCoursewareButton.addEventListener('click', showTeacherCoursewarePicker);
     document.addEventListener('fullscreenchange', updateFullscreenButton);
     elements.annotationColorButtons.forEach((button) => {
       button.addEventListener('click', () => setAnnotationColor(button.dataset.color));
@@ -291,18 +291,18 @@ async function handleSignalMessage(message) {
       showCoursewarePage(message.page);
       break;
     case 'courseware.close':
-      enterBlackboardMode();
+      closeCourseware();
       break;
     case 'courseware.original':
       handleCoursewareOriginal(message);
       break;
     case 'teacher.stop':
       cleanupPeerConnection();
-      if (state.presentationMode === 'courseware') {
-        enterBlackboardMode('直播已停止');
-      } else {
-        closeCourseware('直播已停止，等待教师重新开始...');
-      }
+      closeCourseware(
+        state.presentationMode === 'courseware'
+          ? '课件播放已结束，等待教师连接...'
+          : '直播已停止，等待教师重新开始...'
+      );
       break;
     case 'room.expired':
       setWaitingStatus('连接码已过期，正在创建新课堂...');
@@ -545,44 +545,6 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   resetAnnotations();
   showJoinView();
   setWaitingStatus(statusText);
-}
-
-function enterBlackboardMode(statusText) {
-  // 停止并销毁课件渲染
-  cancelCoursewareRender(state.courseware);
-  if (state.courseware?.loadingTask) {
-    state.courseware.loadingTask.destroy().catch(() => {});
-    state.courseware.loadingTask = null;
-  }
-  if (state.courseware?.pdfDocument) {
-    state.courseware.pdfDocument.destroy();
-    state.courseware.pdfDocument = null;
-  }
-  state.courseware = null;
-  // 清空画布填黑再隐藏
-  const cvs = elements.coursewareCanvas;
-  const ctx = cvs.getContext('2d');
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, cvs.width, cvs.height);
-  cvs.removeAttribute('style');
-  cvs.width = 1;
-  cvs.height = 1;
-  cvs.hidden = true;
-  resetAnnotations();
-  state.presentationMode = 'blackboard';
-  document.body.classList.add('is-streaming');
-  elements.joinView.hidden = true;
-  elements.videoView.hidden = false;
-  elements.remoteVideo.hidden = true;
-  elements.panToolButton.hidden = true;
-  elements.prevPageButton.hidden = true;
-  elements.nextPageButton.hidden = true;
-  elements.selectCoursewareButton.hidden = true;
-  elements.offlineCode.hidden = true;
-  elements.downloadOriginalButton.hidden = true;
-  elements.videoStatus.textContent = statusText || '课件已结束，可用画笔当黑板';
-  setAnnotationTool('pen');
-  resizeAnnotationCanvas();
 }
 
 async function loadCoursewareDocument(courseware) {
@@ -1245,7 +1207,7 @@ function showJoinView() {
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
-  elements.selectCoursewareButton.hidden = true;
+  if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
   elements.offlineCode.hidden = true;
 }
 
@@ -1276,7 +1238,7 @@ function showCoursewareView() {
   elements.panToolButton.hidden = false;
   elements.prevPageButton.hidden = false;
   elements.nextPageButton.hidden = false;
-  elements.selectCoursewareButton.hidden = !state.directTeach;
+  if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = !state.directTeach;
   elements.videoStatus.hidden = true;
   updatePageNavButtons();
   resizeAnnotationCanvas();
@@ -1377,7 +1339,7 @@ async function loadTeacherCourseware() {
 
 function showPicker() {
   elements.coursewarePicker.hidden = false;
-  elements.selectCoursewareButton.hidden = false;
+  if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = false;
 }
 
 function showTeacherCoursewarePicker() {
