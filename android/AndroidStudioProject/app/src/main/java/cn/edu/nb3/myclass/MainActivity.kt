@@ -87,7 +87,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val id: String,
         val title: String,
         val url: String,
-        val size: Long
+        val size: Long,
+        val originalUrl: String = ""
     )
 
     private var currentScreen = Screen.Connect
@@ -840,7 +841,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ensureCameraPermissions()
             }
         })
-        root.addView(secondaryButton("图片投屏").apply {
+        root.addView(primaryButton("图片投屏").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -851,7 +852,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ensureCameraPermissions(openImagePicker = true)
             }
         })
-        root.addView(secondaryButton("共享屏幕").apply {
+        root.addView(primaryButton("共享屏幕").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1034,7 +1035,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 loadServerCoursewareList()
             }
         })
-        root.addView(secondaryButton("本地上传").apply {
+        root.addView(primaryButton("本地上传").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1230,11 +1231,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 if (id.isBlank() || url.isBlank()) {
                     return@mapNotNull null
                 }
+                val originalUrl = item.optString("originalUrl", "")
                 StoredCoursewareItem(
                     id = id,
                     title = item.optString("title", "课件"),
                     url = url,
-                    size = item.optLong("size", 0L)
+                    size = item.optLong("size", 0L),
+                    originalUrl = originalUrl
                 )
             }
         }
@@ -1304,7 +1307,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
     private fun coursewareFormatLabel(item: StoredCoursewareItem): String {
-        val ext = item.url.substringAfterLast('.', "").uppercase()
+        // 优先用原始文件扩展名（PPT/DOC 转 PDF 后仍显示原格式）
+        val source = if (item.originalUrl.isNotBlank()) item.originalUrl else item.url
+        val ext = source.substringAfterLast('.', "").uppercase()
         return if (ext.isNotEmpty()) "[$ext]" else ""
     }
 

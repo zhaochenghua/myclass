@@ -671,7 +671,9 @@ async function renderCoursewarePage() {
     courseware.cssWidth = Math.round(cssViewport.width);
     courseware.cssHeight = Math.round(cssViewport.height);
     courseware.maxOffsetX = Math.max(0, courseware.cssWidth - containerRect.width);
-    courseware.maxOffsetY = Math.max(0, courseware.cssHeight - containerRect.height);
+    // 至少超出10px才算需要翻屏，避免取整误差导致多出一屏
+    courseware.maxOffsetY = Math.max(0, courseware.cssHeight - containerRect.height - 10);
+    if (courseware.maxOffsetY < 0) courseware.maxOffsetY = 0;
     courseware.pageStepY = Math.max(1, Math.round(containerRect.height * 0.9));
     courseware.screenCount = courseware.maxOffsetY > 0
       ? Math.ceil(courseware.maxOffsetY / courseware.pageStepY) + 1
