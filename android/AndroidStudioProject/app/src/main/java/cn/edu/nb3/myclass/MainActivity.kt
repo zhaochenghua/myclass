@@ -2,7 +2,9 @@ package cn.edu.nb3.myclass
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.database.Cursor
@@ -54,6 +56,7 @@ import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private enum class Screen {
+        Auth,
         Connect,
         Menu,
         Camera,
@@ -88,6 +91,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     )
 
     private var currentScreen = Screen.Connect
+    private var authToken: String? = null
+    private var authUsername: String? = null
     private var signalingClient: SignalingClient? = null
     private var webRtcClient: CameraWebRtcClient? = null
     private var cameraRenderer: SurfaceViewRenderer? = null
@@ -137,6 +142,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         .retryOnConnectionFailure(true)
         .build()
 
+    private val authHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
+
+    private val prefs: SharedPreferences
+        get() = getSharedPreferences("myclass_auth", Context.MODE_PRIVATE)
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
@@ -156,7 +169,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         currentDeviceOrientation = createDeviceOrientationPayload(rawDeviceRotationDegrees)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onBackPressedDispatcher.addCallback(this, backCallback)
-        showConnectScreen()
+        loadAuth()
+        if (authToken != null) {
+            verifyTokenThenProceed()
+        } else {
+            showAuthScreen()
+        }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -244,6 +262,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
             when (currentScreen) {
+                Screen.Auth -> {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
                 Screen.Camera -> {
                     returnToMenuFromCamera()
                 }
@@ -266,6 +288,193 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
         }
+    }
+
+    // -- 认证相关 --
+    private fun loadAuth() {
+        val p = prefs
+        authToken = p.getString("token", null)
+        authUsername = p.getString("username", null)
+    }
+
+    private fun saveAuth(token: String, username: String) {
+        authToken = token
+        authUsername = username
+        prefs.edit()
+            .putString("token", token)
+            .putString("username", username)
+            .apply()
+    }
+
+    private fun clearAuth() {
+        authToken = null
+        authUsername = null
+        prefs.edit().remove("token").remove("username").apply()
+    }
+
+    private fun addAuthHeader(builder: Request.Builder) {
+        authToken?.let { builder.header("Authorization", "Bearer $it") }
+    }
+
+    private fun verifyTokenThenProceed() {
+        Thread {
+            runCatching {
+                val request = Request.Builder()
+                    .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/auth/me")
+                    .get().also { addAuthHeader(it) }
+                    .build()
+                authHttpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("token invalid")
+                }
+            }.onSuccess {
+                runOnUiThread { showConnectScreen() }
+            }.onFailure {
+                runOnUiThread {
+                    clearAuth()
+                    showAuthScreen()
+                }
+            }
+        }.start()
+    }
+
+    private fun showAuthScreen() {
+        currentScreen = Screen.Auth
+        val root = baseColumn().apply {
+            setPadding(dp(28), dp(48), dp(28), dp(32))
+        }
+        root.addView(titleText("上课投屏平台", 24f))
+        root.addView(bodyText("首次使用请注册账号").apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.argb(180, 96, 96, 96))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+        })
+        val usernameLayout = TextInputLayout(this).apply {
+            hint = "用户名（2-20位）"
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(28) }
+        }
+        val usernameInput = TextInputEditText(usernameLayout.context).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            textSize = 17f
+            setSingleLine(true)
+        }
+        usernameLayout.addView(usernameInput)
+
+        val passwordLayout = TextInputLayout(this).apply {
+            hint = "密码（4-32位）"
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) }
+        }
+        val passwordInput = TextInputEditText(passwordLayout.context).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            textSize = 17f
+            setSingleLine(true)
+        }
+        passwordLayout.addView(passwordInput)
+
+        val loginButton = primaryButton("登录").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply { topMargin = dp(24) }
+            setOnClickListener {
+                val name = usernameInput.text?.toString()?.trim().orEmpty()
+                val pass = passwordInput.text?.toString().orEmpty()
+                if (name.length < 2) { usernameLayout.error = "用户名至少2位"; return@setOnClickListener }
+                if (pass.length < 4) { passwordLayout.error = "密码至少4位"; return@setOnClickListener }
+                usernameLayout.error = null
+                passwordLayout.error = null
+                isEnabled = false
+                text = "登录中..."
+                performAuth(false, name, pass)
+            }
+        }
+        val registerButton = secondaryButton("注册新账号").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply { topMargin = dp(12) }
+            setOnClickListener {
+                val name = usernameInput.text?.toString()?.trim().orEmpty()
+                val pass = passwordInput.text?.toString().orEmpty()
+                if (name.length < 2) { usernameLayout.error = "用户名至少2位"; return@setOnClickListener }
+                if (!Regex("^[\\u4e00-\\u9fa5a-zA-Z0-9_]+$").matches(name)) {
+                    usernameLayout.error = "仅支持中英文数字下划线"; return@setOnClickListener
+                }
+                if (name.length > 20) { usernameLayout.error = "用户名最多20位"; return@setOnClickListener }
+                if (pass.length < 4) { passwordLayout.error = "密码至少4位"; return@setOnClickListener }
+                if (pass.length > 32) { passwordLayout.error = "密码最多32位"; return@setOnClickListener }
+                usernameLayout.error = null
+                passwordLayout.error = null
+                isEnabled = false
+                text = "注册中..."
+                performAuth(true, name, pass)
+            }
+        }
+        val statusView = bodyText("").apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(18) }
+        }
+
+        root.addView(usernameLayout)
+        root.addView(passwordLayout)
+        root.addView(loginButton)
+        root.addView(registerButton)
+        root.addView(statusView)
+        root.addView(footerLabel())
+        root.addView(versionLabel())
+        setContentView(root)
+    }
+
+    private fun performAuth(isRegister: Boolean, username: String, password: String) {
+        Thread {
+            runCatching {
+                val json = JSONObject().apply {
+                    put("username", username)
+                    put("password", password)
+                }
+                val body = RequestBody.create(
+                    "application/json; charset=utf-8".toMediaTypeOrNull(),
+                    json.toString()
+                )
+                val url = "${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/auth/${if (isRegister) "register" else "login"}"
+                val request = Request.Builder().url(url).post(body).build()
+                authHttpClient.newCall(request).execute().use { response ->
+                    val respBody = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        val error = runCatching {
+                            JSONObject(respBody).optString("error")
+                        }.getOrNull().orEmpty()
+                        throw IOException(error.ifBlank { "HTTP ${response.code}" })
+                    }
+                    val resp = JSONObject(respBody)
+                    val token = resp.getString("token")
+                    val name = resp.getString("username")
+                    runOnUiThread {
+                        saveAuth(token, name)
+                        showConnectScreen()
+                        toast("${if (isRegister) "注册" else "登录"}成功，欢迎 $name")
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    toast(error.message ?: "认证失败")
+                    showAuthScreen()
+                }
+            }
+        }.start()
     }
 
     private fun showConnectScreen() {
@@ -730,6 +939,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val request = Request.Builder()
             .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware")
             .get()
+            .also { addAuthHeader(it) }
             .build()
         coursewareHttpClient.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
@@ -786,6 +996,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val request = Request.Builder()
             .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware/${item.id}")
             .delete()
+            .also { addAuthHeader(it) }
             .build()
         coursewareHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
@@ -918,6 +1129,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val request = Request.Builder()
             .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware")
             .post(multipartBody)
+            .also { addAuthHeader(it) }
             .build()
 
         coursewareHttpClient.newCall(request).execute().use { response ->

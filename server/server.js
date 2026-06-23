@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.1.30-20260622';
+const APP_VERSION = process.env.APP_VERSION || '1.2.0-20260623';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -25,6 +25,13 @@ const ALLOWED_HOSTS = new Set(
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean)
 );
+
+// -- 用户系统 --
+const AUTH_SECRET = process.env.AUTH_SECRET || crypto.randomBytes(32).toString('hex');
+const INACTIVE_USER_DELETE_DAYS = Number(process.env.INACTIVE_USER_DELETE_DAYS || 60);
+const dataDir = path.join(__dirname, 'data');
+const usersPath = path.join(dataDir, 'users.json');
+fs.mkdirSync(dataDir, { recursive: true });
 
 const app = express();
 const server = http.createServer(app);
@@ -53,6 +60,7 @@ server.timeout = COURSEWARE_REQUEST_TIMEOUT_MS;
 server.headersTimeout = Math.min(120000, COURSEWARE_REQUEST_TIMEOUT_MS);
 
 app.disable('x-powered-by');
+app.use(express.json());
 
 app.use((req, res, next) => {
   if (!isAllowedHost(req.headers.host)) {
@@ -124,17 +132,83 @@ app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
   }
 });
 
-app.get(`${PATH_PREFIX}/api/courseware`, async (req, res, next) => {
+// -- 认证接口 --
+app.post(`${PATH_PREFIX}/api/auth/register`, async (req, res, next) => {
   try {
-    res.json({ items: await listStoredCourseware() });
+    const { username, password } = req.body || {};
+    if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
+      res.status(400).json({ error: '用户名和密码不能为空' });
+      return;
+    }
+    const name = username.trim();
+    if (name.length < 2 || name.length > 20 || !/^[\u4e00-\u9fa5a-zA-Z0-9_]+$/.test(name)) {
+      res.status(400).json({ error: '用户名仅支持中英文数字下划线，2-20位' });
+      return;
+    }
+    if (password.length < 4 || password.length > 32) {
+      res.status(400).json({ error: '密码需要4-32位' });
+      return;
+    }
+    const users = await readUsers();
+    if (users.find((u) => u.username === name)) {
+      res.status(409).json({ error: '用户名已被注册' });
+      return;
+    }
+    const now = new Date().toISOString();
+    const user = {
+      id: crypto.randomUUID(),
+      username: name,
+      passwordHash: hashPassword(password),
+      token: crypto.randomBytes(32).toString('hex'),
+      createdAt: now,
+      lastLoginAt: now
+    };
+    users.push(user);
+    await writeUsers(users);
+    res.json({ token: user.token, username: user.username });
   } catch (error) {
     next(error);
   }
 });
 
-app.delete(`${PATH_PREFIX}/api/courseware/:id`, async (req, res, next) => {
+app.post(`${PATH_PREFIX}/api/auth/login`, async (req, res, next) => {
   try {
-    const deleted = await deleteStoredCourseware(req.params.id);
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      res.status(400).json({ error: '用户名和密码不能为空' });
+      return;
+    }
+    const users = await readUsers();
+    const user = users.find((u) => u.username === username.trim());
+    if (!user || user.passwordHash !== hashPassword(password)) {
+      res.status(401).json({ error: '用户名或密码错误' });
+      return;
+    }
+    user.token = crypto.randomBytes(32).toString('hex');
+    user.lastLoginAt = new Date().toISOString();
+    await writeUsers(users);
+    res.json({ token: user.token, username: user.username });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get(`${PATH_PREFIX}/api/auth/me`, requireAuth, async (req, res) => {
+  res.json({ username: req.user.username });
+});
+
+// -- 课件接口（需认证） --
+app.get(`${PATH_PREFIX}/api/courseware`, requireAuth, async (req, res, next) => {
+  try {
+    res.json({ items: await listStoredCourseware(req.user.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete(`${PATH_PREFIX}/api/courseware/:id`, requireAuth, async (req, res, next) => {
+  try {
+    const deleted = await deleteStoredCourseware(req.params.id, req.user.id);
     if (!deleted) {
       res.status(404).json({ error: '课件不存在' });
       return;
@@ -145,14 +219,14 @@ app.delete(`${PATH_PREFIX}/api/courseware/:id`, async (req, res, next) => {
   }
 });
 
-app.post(`${PATH_PREFIX}/api/courseware`, upload.single('file'), async (req, res, next) => {
+app.post(`${PATH_PREFIX}/api/courseware`, requireAuth, upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) {
       res.status(400).json({ error: '请选择课件文件' });
       return;
     }
 
-    const result = await publishCourseware(req.file, req.body);
+    const result = await publishCourseware(req.file, req.body, req.user.id);
     res.json(result);
   } catch (error) {
     next(error);
@@ -232,7 +306,7 @@ function safeDownloadVersion(value) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-async function publishCourseware(file, fields = {}) {
+async function publishCourseware(file, fields = {}, userId) {
   const originalName = preferredCoursewareName(file, fields);
   const ext = path.extname(originalName).toLowerCase();
   const id = crypto.randomUUID();
@@ -264,6 +338,7 @@ async function publishCourseware(file, fields = {}) {
   const stat = await fs.promises.stat(pdfPath);
   const result = {
     id,
+    userId: userId || 'legacy',
     title: path.basename(originalName, ext),
     fileName: originalName,
     size: stat.size,
@@ -418,7 +493,7 @@ function formatBytes(bytes) {
   return `${Math.round(mb)}MB`;
 }
 
-async function listStoredCourseware() {
+async function listStoredCourseware(userId) {
   const indexedItems = await readCoursewareIndex();
   const knownIds = new Set(indexedItems.map((item) => item.id));
   const discoveredItems = [];
@@ -435,6 +510,7 @@ async function listStoredCourseware() {
     const stat = await fs.promises.stat(path.join(coursewareRoot, file.name));
     discoveredItems.push({
       id,
+      userId: 'legacy',
       title: id,
       fileName: file.name,
       size: stat.size,
@@ -445,6 +521,7 @@ async function listStoredCourseware() {
 
   const items = [...indexedItems, ...discoveredItems]
     .filter((item) => item && item.id && item.url)
+    .filter((item) => !userId || !item.userId || item.userId === userId || item.userId === 'legacy')
     .filter((item) => fs.existsSync(path.join(coursewareRoot, `${item.id}.pdf`)))
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
     .slice(0, Number(process.env.COURSEWARE_LIST_LIMIT || 60));
@@ -465,7 +542,7 @@ async function rememberCourseware(item) {
   );
 }
 
-async function deleteStoredCourseware(id) {
+async function deleteStoredCourseware(id, userId) {
   if (!isSafeCoursewareId(id)) {
     const error = new Error('无效课件编号');
     error.status = 400;
@@ -473,6 +550,10 @@ async function deleteStoredCourseware(id) {
   }
 
   const currentItems = await readCoursewareIndex();
+  const targetItem = currentItems.find((item) => item.id === id);
+  if (targetItem && targetItem.userId && userId && targetItem.userId !== userId) {
+    return false; // 不属于当前用户
+  }
   const filePath = path.join(coursewareRoot, `${id}.pdf`);
   const resolvedFilePath = path.resolve(filePath);
   if (!resolvedFilePath.startsWith(`${path.resolve(coursewareRoot)}${path.sep}`)) {
@@ -552,3 +633,68 @@ function isAllowedOrigin(origin) {
     return false;
   }
 }
+
+// -- 用户数据读写 --
+async function readUsers() {
+  try {
+    const text = await fs.promises.readFile(usersPath, 'utf8');
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function writeUsers(users) {
+  await fs.promises.writeFile(usersPath, JSON.stringify(users, null, 2), 'utf8');
+}
+
+function hashPassword(password) {
+  return crypto.createHmac('sha256', AUTH_SECRET).update(password).digest('hex');
+}
+
+// -- 认证中间件 --
+async function requireAuth(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token) {
+    res.status(401).json({ error: '请先登录' });
+    return;
+  }
+  const users = await readUsers();
+  const user = users.find((u) => u.token === token);
+  if (!user) {
+    res.status(401).json({ error: '登录已过期，请重新登录' });
+    return;
+  }
+  user.lastLoginAt = new Date().toISOString();
+  await writeUsers(users);
+  req.user = { id: user.id, username: user.username };
+  next();
+}
+
+// -- 自动清理不活跃用户 --
+async function cleanupInactiveUsers() {
+  try {
+    const users = await readUsers();
+    const cutoff = Date.now() - INACTIVE_USER_DELETE_DAYS * 24 * 60 * 60 * 1000;
+    const inactive = users.filter((u) => new Date(u.lastLoginAt).getTime() < cutoff);
+    if (inactive.length === 0) return;
+    const index = await readCoursewareIndex();
+    const inactiveIds = new Set(inactive.map((u) => u.id));
+    for (const item of index) {
+      if (inactiveIds.has(item.userId)) {
+        await deleteStoredCourseware(item.id, item.userId).catch(() => {});
+      }
+    }
+    const remaining = users.filter((u) => !inactiveIds.has(u.id));
+    await writeUsers(remaining);
+    console.log(`清理了 ${inactive.length} 个不活跃用户及课件`);
+  } catch (error) {
+    console.error('清理不活跃用户失败:', error.message);
+  }
+}
+
+// 启动时清理
+cleanupInactiveUsers();
