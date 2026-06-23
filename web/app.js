@@ -548,16 +548,32 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
 }
 
 function enterBlackboardMode(statusText) {
-  destroyCoursewareDocument(state.courseware);
+  // 停止并销毁课件渲染
+  cancelCoursewareRender(state.courseware);
+  if (state.courseware?.loadingTask) {
+    state.courseware.loadingTask.destroy().catch(() => {});
+    state.courseware.loadingTask = null;
+  }
+  if (state.courseware?.pdfDocument) {
+    state.courseware.pdfDocument.destroy();
+    state.courseware.pdfDocument = null;
+  }
   state.courseware = null;
-  clearCoursewareCanvas();
+  // 清空画布填黑再隐藏
+  const cvs = elements.coursewareCanvas;
+  const ctx = cvs.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cvs.width, cvs.height);
+  cvs.removeAttribute('style');
+  cvs.width = 1;
+  cvs.height = 1;
+  cvs.hidden = true;
   resetAnnotations();
   state.presentationMode = 'blackboard';
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
   elements.videoView.hidden = false;
   elements.remoteVideo.hidden = true;
-  elements.coursewareCanvas.hidden = true;
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
