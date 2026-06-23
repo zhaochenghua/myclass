@@ -666,14 +666,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             items.forEachIndexed { index, item ->
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(56)
+                        ViewGroup.LayoutParams.WRAP_CONTENT
                     ).apply {
-                        if (index > 0) topMargin = dp(8)
+                        if (index > 0) topMargin = dp(4)
                     }
                 }
-                row.addView(secondaryButton("${item.title}\n${formatCoursewareSize(item.size)}").apply {
+                row.addView(secondaryButton("${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}").apply {
                     maxLines = 2
                     setSingleLine(false)
                     ellipsize = TextUtils.TruncateAt.END
@@ -681,16 +682,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     isEnabled = false
                     layoutParams = LinearLayout.LayoutParams(
                         0,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
                         1f
-                    ).apply { marginEnd = dp(8) }
+                    ).apply { marginEnd = dp(4) }
                 })
-                row.addView(secondaryButton("删除").apply {
-                    textSize = 14f
-                    layoutParams = LinearLayout.LayoutParams(
-                        dp(78),
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
+                row.addView(deleteButton("删除").apply {
                     setOnClickListener {
                         confirmDeleteManagementCourseware(item)
                     }
@@ -1145,36 +1141,32 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             items.forEachIndexed { index, item ->
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(68)
+                        ViewGroup.LayoutParams.WRAP_CONTENT
                     ).apply {
                         if (index > 0) {
-                            topMargin = dp(10)
+                            topMargin = dp(4)
                         }
                     }
                 }
-                row.addView(secondaryButton("${item.title}\n${formatCoursewareSize(item.size)}").apply {
+                row.addView(secondaryButton("${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}").apply {
                     maxLines = 2
                     setSingleLine(false)
                     ellipsize = TextUtils.TruncateAt.END
                     layoutParams = LinearLayout.LayoutParams(
                         0,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
                         1f
                     ).apply {
-                        marginEnd = dp(8)
+                        marginEnd = dp(4)
                     }
                     setOnClickListener {
                         openStoredCourseware(item)
                     }
                 })
-                row.addView(secondaryButton("删除").apply {
-                    textSize = 15f
-                    layoutParams = LinearLayout.LayoutParams(
-                        dp(82),
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
+                row.addView(deleteButton("删除").apply {
                     setOnClickListener {
                         confirmDeleteServerCourseware(item)
                     }
@@ -1310,6 +1302,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             size >= 1024L * 1024L -> "${size / 1024L / 1024L} MB"
             else -> "${(size / 1024L).coerceAtLeast(1L)} KB"
         }
+
+    private fun coursewareFormatLabel(item: StoredCoursewareItem): String {
+        val ext = item.url.substringAfterLast('.', "").uppercase()
+        return if (ext.isNotEmpty()) "[$ext]" else ""
+    }
 
     private fun launchCoursewarePicker() {
         coursewarePickerLauncher.launch("*/*")
@@ -2532,6 +2529,22 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             textSize = 16f
             cornerRadius = dp(8)
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+        }
+
+    private fun deleteButton(textValue: String): MaterialButton =
+        MaterialButton(this).apply {
+            text = textValue
+            textSize = 13f
+            setSingleLine(true)
+            cornerRadius = dp(6)
+            insetTop = 0
+            insetBottom = 0
+            minHeight = dp(36)
+            minimumWidth = dp(56)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
         }
 
     private fun cameraPrimaryButton(textValue: String): MaterialButton =

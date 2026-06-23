@@ -176,13 +176,29 @@ async function sendOriginalUrl(socket, message, roomManager, options) {
   }
   try {
     const items = await options.readCoursewareIndex();
-    const pdfUrl = message.url;
-    const match = pdfUrl.match(/\/([a-f0-9-]+)\.pdf$/i);
+    const connUrl = message.url;
+
+    // 匹配 PDF / ZIP 文件
+    const pdfMatch = connUrl.match(/\/([a-f0-9-]+)\.pdf$/i);
+    const zipMatch = connUrl.match(/\/([a-f0-9-]+)\.zip$/i);
+    const match = pdfMatch || zipMatch;
     if (!match) {
       return;
     }
     const id = match[1];
     const item = items.find((c) => c.id === id);
+
+    // ZIP 文件：直接用 url 作为下载链接
+    if (zipMatch) {
+      roomManager.forward(socket, {
+        type: 'courseware.original',
+        id,
+        originalUrl: item?.url || connUrl
+      });
+      return;
+    }
+
+    // PDF 课件：发送原始文件链接
     if (item?.originalUrl && item.originalUrl !== item.url) {
       roomManager.forward(socket, {
         type: 'courseware.original',

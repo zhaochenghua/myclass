@@ -427,6 +427,9 @@ function openCourseware(message) {
   cleanupPeerConnection();
   resetAnnotations();
   setAnnotationTool('pen');
+
+  // ZIP 文件：不尝试渲染，仅提供下载
+  const isZip = /\.zip(\?|$)/i.test(url);
   state.courseware = {
     url,
     title: typeof message.title === 'string' ? message.title : '课件',
@@ -441,19 +444,46 @@ function openCourseware(message) {
     fitMode: 'fit-page',
     cssWidth: 1,
     cssHeight: 1,
-    pageCount: 0,
+    pageCount: isZip ? 0 : 0,
     pdfDocument: null,
     loadingTask: null,
     renderTask: null,
     renderGeneration: 0
   };
   // 从消息中读取原始文件下载地址（服务端已注入）
-  if (typeof message.originalUrl === 'string' && message.originalUrl) {
+  // ZIP 文件：直接用 url 作为下载链接
+  if (isZip) {
+    state.downloadOriginalUrl = url;
+  } else if (typeof message.originalUrl === 'string' && message.originalUrl) {
     state.downloadOriginalUrl = message.originalUrl;
     state.courseware.downloadOriginalUrl = message.originalUrl;
   }
-  showCoursewareView();
-  loadCoursewareDocument(state.courseware);
+  if (isZip) {
+    showCoursewareViewForZip(state.courseware);
+  } else {
+    showCoursewareView();
+    loadCoursewareDocument(state.courseware);
+  }
+}
+
+function showCoursewareViewForZip(courseware) {
+  state.presentationMode = 'courseware';
+  state.downloadOriginalUrl = courseware.url;
+  showDownloadButtonIfAvailable();
+  elements.remoteVideo.hidden = true;
+  elements.coursewareCanvas.hidden = true;
+  elements.videoView.dataset.orientation = 'landscape';
+  elements.videoView.dataset.lockedZoomed = 'false';
+  document.body.classList.add('is-streaming');
+  elements.joinView.hidden = true;
+  elements.videoView.hidden = false;
+  elements.panToolButton.hidden = true;
+  elements.prevPageButton.hidden = true;
+  elements.nextPageButton.hidden = true;
+  elements.videoStatus.hidden = false;
+  elements.videoStatus.textContent = `${courseware.title}（压缩包，请下载后查看）`;
+  elements.annotationCanvas.hidden = true;
+  elements.annotationToolbar.hidden = true;
 }
 
 function showCoursewarePage(page) {
@@ -624,31 +654,27 @@ async function renderCoursewarePage() {
     const canvas = elements.coursewareCanvas;
     const containerRect = elements.videoView.getBoundingClientRect();
     const baseViewport = page.getViewport({ scale: 1 });
-    const isPortraitDocumentPage = baseViewport.height > baseViewport.width * 1.15;
-    const fitScale = isPortraitDocumentPage
-      ? containerRect.width / baseViewport.width
-      : Math.min(
-          containerRect.width / baseViewport.width,
-          containerRect.height / baseViewport.height
-        );
+    // 始终适配容器，避免一张 PPT 需要翻多屏
+    const fitScale = Math.min(
+      containerRect.width / baseViewport.width,
+      containerRect.height / baseViewport.height
+    );
     const cssViewport = page.getViewport({ scale: fitScale });
     const outputScale = Math.min(window.devicePixelRatio || 1, 2);
     const renderViewport = page.getViewport({ scale: fitScale * outputScale });
 
     canvas.width = Math.max(1, Math.round(renderViewport.width));
     canvas.height = Math.max(1, Math.round(renderViewport.height));
-    courseware.fitMode = isPortraitDocumentPage ? 'width-fill' : 'fit-page';
+    courseware.fitMode = 'fit-page';
     courseware.cssWidth = Math.round(cssViewport.width);
     courseware.cssHeight = Math.round(cssViewport.height);
-    courseware.maxOffsetX = Math.max(0, courseware.cssWidth - containerRect.width);
-    courseware.maxOffsetY = Math.max(0, courseware.cssHeight - containerRect.height);
-    courseware.pageStepY = Math.max(1, Math.round(containerRect.height * 0.9));
-    courseware.screenCount = courseware.maxOffsetY > 0
-      ? Math.ceil(courseware.maxOffsetY / courseware.pageStepY) + 1
-      : 1;
-    courseware.screen = clamp(courseware.screen || 1, 1, courseware.screenCount);
-    courseware.offsetX = clamp(courseware.offsetX || 0, 0, courseware.maxOffsetX);
-    courseware.offsetY = offsetYForCoursewareScreen(courseware, courseware.screen);
+    courseware.maxOffsetX = 0;
+    courseware.maxOffsetY = 0;
+    courseware.pageStepY = 0;
+    courseware.screenCount = 1;
+    courseware.screen = 1;
+    courseware.offsetX = 0;
+    courseware.offsetY = 0;
     updateCoursewareCanvasPlacement();
 
     const context = canvas.getContext('2d', { alpha: false });
