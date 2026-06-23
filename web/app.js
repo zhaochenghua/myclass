@@ -945,6 +945,7 @@ function setAnnotationColor(color) {
     return;
   }
   state.annotations.currentColor = color;
+  setAnnotationTool('pen');
   updateAnnotationColorButtons();
 }
 
