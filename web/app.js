@@ -291,18 +291,18 @@ async function handleSignalMessage(message) {
       showCoursewarePage(message.page);
       break;
     case 'courseware.close':
-      closeCourseware();
+      enterBlackboardMode();
       break;
     case 'courseware.original':
       handleCoursewareOriginal(message);
       break;
     case 'teacher.stop':
       cleanupPeerConnection();
-      closeCourseware(
-        state.presentationMode === 'courseware'
-          ? '课件播放已结束，等待教师连接...'
-          : '直播已停止，等待教师重新开始...'
-      );
+      if (state.presentationMode === 'courseware') {
+        enterBlackboardMode('直播已停止');
+      } else {
+        closeCourseware('直播已停止，等待教师重新开始...');
+      }
       break;
     case 'room.expired':
       setWaitingStatus('连接码已过期，正在创建新课堂...');
@@ -545,6 +545,28 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   resetAnnotations();
   showJoinView();
   setWaitingStatus(statusText);
+}
+
+function enterBlackboardMode(statusText) {
+  destroyCoursewareDocument(state.courseware);
+  state.courseware = null;
+  clearCoursewareCanvas();
+  resetAnnotations();
+  state.presentationMode = 'blackboard';
+  document.body.classList.add('is-streaming');
+  elements.joinView.hidden = true;
+  elements.videoView.hidden = false;
+  elements.remoteVideo.hidden = true;
+  elements.coursewareCanvas.hidden = true;
+  elements.panToolButton.hidden = true;
+  elements.prevPageButton.hidden = true;
+  elements.nextPageButton.hidden = true;
+  elements.selectCoursewareButton.hidden = true;
+  elements.offlineCode.hidden = true;
+  elements.downloadOriginalButton.hidden = true;
+  elements.videoStatus.textContent = statusText || '课件已结束，可用画笔当黑板';
+  setAnnotationTool('pen');
+  resizeAnnotationCanvas();
 }
 
 async function loadCoursewareDocument(courseware) {
