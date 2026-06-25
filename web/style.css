@@ -50,85 +50,114 @@ body::before {
   position: relative;
   width: 100vw;
   height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .join-view {
-  position: relative;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-items: center;
+  justify-content: center;
+  gap: clamp(0.8rem, 1.5vw, 1.5rem);
   width: 100%;
-  height: 100%;
-  padding: clamp(2rem, 4vw, 5rem);
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: clamp(1rem, 2.5vw, 3rem) clamp(1rem, 3vw, 4rem);
 }
 
 h1 {
   max-width: 92vw;
   margin: 0;
   text-align: center;
-  font-size: clamp(2.2rem, 4.5vw, 6rem);
+  font-size: clamp(1.8rem, 3.5vw, 4.5rem);
   font-weight: 800;
-  letter-spacing: 0;
-  line-height: 1.08;
-  text-shadow: 0 0 2rem rgba(101, 240, 200, 0.28);
+  line-height: 1.1;
+  text-shadow: 0 0 1.5rem rgba(101, 240, 200, 0.22);
+  flex-shrink: 0;
 }
 
 .code-panel {
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  min-width: min(44rem, 90vw);
-  padding: clamp(1.6rem, 3vw, 3.5rem);
+  display: flex;
+  flex-direction: column;
+  width: min(52rem, 94vw);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--panel);
   box-shadow:
-    0 2rem 7rem rgba(0, 0, 0, 0.32),
-    inset 0 0 2.5rem rgba(101, 240, 200, 0.07);
+    0 1.5rem 5rem rgba(0, 0, 0, 0.28),
+    inset 0 0 2rem rgba(101, 240, 200, 0.05);
   backdrop-filter: blur(18px);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.code-main {
+  display: flex;
+  align-items: center;
+  padding: clamp(1rem, 2vw, 2.5rem) clamp(1.2rem, 2.5vw, 3rem);
+  gap: clamp(1.5rem, 3vw, 3.5rem);
+}
+
+.code-left {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.code-right {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
 }
 
 .code-label {
-  margin-bottom: 0.8rem;
+  margin-bottom: 0.5rem;
   color: var(--muted);
-  font-size: clamp(1rem, 1.4vw, 1.7rem);
+  font-size: clamp(0.95rem, 1.3vw, 1.4rem);
+  white-space: nowrap;
 }
 
 .code-value {
-  min-width: 6ch;
   color: var(--warm);
   font-variant-numeric: tabular-nums;
-  font-size: clamp(5.5rem, 12vw, 16rem);
+  font-size: clamp(4rem, 10vw, 12rem);
   font-weight: 900;
-  line-height: 0.95;
+  line-height: 0.9;
   text-align: center;
-  text-shadow: 0 0 2.2rem rgba(255, 209, 102, 0.32);
+  text-shadow: 0 0 1.8rem rgba(255, 209, 102, 0.28);
+  white-space: nowrap;
 }
 
 .qr-code {
-  width: clamp(10rem, 17vw, 19rem);
-  height: clamp(10rem, 17vw, 19rem);
-  margin-top: clamp(1rem, 2vw, 2rem);
-  padding: 0.65rem;
+  width: clamp(7rem, 13vw, 14rem);
+  height: clamp(7rem, 13vw, 14rem);
+  padding: 0.5rem;
   border-radius: 8px;
   background: #f7fbff;
+  display: block;
 }
 
 .download-hint {
-  margin-top: 1rem;
+  margin-top: 0.6rem;
   color: var(--text);
-  font-size: clamp(1.1rem, 1.6vw, 2rem);
+  font-size: clamp(0.9rem, 1.2vw, 1.3rem);
+  text-align: center;
 }
 
 .download-apk-btn {
   display: inline-block;
-  margin-top: 0.8rem;
-  padding: 0.5rem 1.2rem;
+  margin-top: 0.5rem;
+  padding: 0.35rem 1rem;
   border: 1px solid var(--accent);
   border-radius: 6px;
   color: var(--accent);
-  font-size: clamp(0.95rem, 1.3vw, 1.3rem);
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
   text-decoration: none;
   transition: background 0.2s;
 }
@@ -138,26 +167,97 @@ h1 {
 }
 
 .platform-note {
-  margin-top: 0.3rem;
+  margin-top: 0.25rem;
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
+}
+
+.code-actions {
+  display: flex;
+  justify-content: center;
+  gap: clamp(0.6rem, 1.5vw, 1.2rem);
+  padding: clamp(0.5rem, 1vw, 1rem) clamp(1rem, 2vw, 2rem);
+  border-top: 1px solid rgba(142, 245, 214, 0.15);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.action-btn {
+  padding: 0.45rem 1.4rem;
+  border-radius: 6px;
+  font: inherit;
+  font-size: clamp(0.85rem, 1.1vw, 1.05rem);
+  text-decoration: none;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  white-space: nowrap;
+}
+
+.action-btn-teach {
+  border: 1px solid var(--accent);
+  background: rgba(101, 240, 200, 0.1);
+  color: var(--accent);
+}
+
+.action-btn-teach:hover {
+  background: rgba(101, 240, 200, 0.2);
+}
+
+.action-btn-exam {
+  border: 1px solid var(--warm);
+  background: rgba(255, 209, 102, 0.1);
+  color: var(--warm);
+}
+
+.action-btn-exam:hover {
+  background: rgba(255, 209, 102, 0.2);
+  color: var(--warm);
 }
 
 .status-text {
-  min-height: 2.5rem;
+  min-height: 2rem;
   color: var(--accent);
-  font-size: clamp(1.1rem, 1.6vw, 2rem);
+  font-size: clamp(0.95rem, 1.3vw, 1.5rem);
   text-align: center;
+  flex-shrink: 0;
+}
+
+.user-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  min-height: 1.8rem;
+  flex-shrink: 0;
+}
+
+.direct-teach-user {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.direct-teach-logout {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.direct-teach-logout:hover {
+  border-color: var(--alert);
+  color: var(--alert);
 }
 
 .maintenance-note {
-  position: absolute;
-  right: 1rem;
-  bottom: 0.9rem;
-  left: 1rem;
-  color: rgba(244, 251, 255, 0.56);
-  font-size: clamp(0.78rem, 1vw, 1rem);
+  padding: 0.3rem 0;
+  color: rgba(244, 251, 255, 0.45);
+  font-size: clamp(0.7rem, 0.85vw, 0.85rem);
   text-align: center;
+  flex-shrink: 0;
 }
 
 .video-view {
@@ -323,34 +423,6 @@ video {
   cursor: default;
 }
 
-.offline-code {
-  position: absolute;
-  left: 1rem;
-  top: 1rem;
-  z-index: 6;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.65rem;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(8px);
-  font-size: 0.78rem;
-  user-select: none;
-}
-
-.offline-code-label {
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.offline-code-value {
-  color: var(--warm);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  font-size: 1rem;
-}
-
 .toolbar-divider {
   width: 1px;
   height: 1.8rem;
@@ -367,53 +439,6 @@ video {
   text-align: center;
   font-size: clamp(1rem, 1.4vw, 1.6rem);
   text-shadow: 0 0 1rem #000;
-}
-
-/* 直接上课 */
-.direct-teach {
-  margin-top: 1.2rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.direct-teach-btn {
-  padding: 0.55rem 1.6rem;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: rgba(101, 240, 200, 0.1);
-  color: var(--accent);
-  font: inherit;
-  font-size: clamp(0.95rem, 1.3vw, 1.2rem);
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.direct-teach-btn:hover {
-  background: rgba(101, 240, 200, 0.2);
-}
-
-.exam-link {
-  display: inline-block;
-  margin-top: 0.6rem;
-  padding: 0.55rem 1.6rem;
-  border: 1px solid var(--warm);
-  border-radius: 6px;
-  background: rgba(255, 209, 102, 0.1);
-  color: var(--warm);
-  font: inherit;
-  font-size: clamp(0.95rem, 1.3vw, 1.2rem);
-  text-decoration: none;
-  text-align: center;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.exam-link:hover {
-  background: rgba(255, 209, 102, 0.2);
-  color: var(--warm);
 }
 
 /* ---- 抽学号（工具栏内） ---- */
@@ -455,27 +480,6 @@ video {
   0% { transform: scale(0.3); opacity: 0; }
   50% { transform: scale(1.3); opacity: 1; }
   100% { transform: scale(1); opacity: 1; }
-}
-
-.direct-teach-user {
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.direct-teach-logout {
-  padding: 0.3rem 0.8rem;
-  border: 1px solid rgba(255,255,255,0.2);
-  border-radius: 4px;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.direct-teach-logout:hover {
-  border-color: var(--alert);
-  color: var(--alert);
 }
 
 /* 课件选择弹窗 */
@@ -638,10 +642,67 @@ video {
 
 @media (max-width: 720px) {
   .join-view {
+    padding: 0.8rem;
+    justify-content: flex-start;
+    padding-top: 1.5rem;
+  }
+
+  .code-main {
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
     padding: 1.2rem;
   }
 
-  .code-panel {
-    min-width: min(22rem, 94vw);
+  .code-left {
+    flex: 0 0 auto;
+  }
+
+  .code-right {
+    flex: 0 0 auto;
+  }
+
+  .code-value {
+    font-size: clamp(3rem, 16vw, 7rem);
+  }
+
+  .qr-code {
+    width: clamp(6rem, 28vw, 10rem);
+    height: clamp(6rem, 28vw, 10rem);
+  }
+
+  .code-actions {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .action-btn {
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+  }
+}
+
+/* 超小屏幕：高度不足时的救命措施 */
+@media (max-height: 640px) {
+  h1 {
+    font-size: clamp(1.3rem, 3vw, 2.5rem);
+  }
+
+  .code-value {
+    font-size: clamp(2.5rem, 8vh, 6rem);
+  }
+
+  .qr-code {
+    width: clamp(4rem, 16vh, 8rem);
+    height: clamp(4rem, 16vh, 8rem);
+  }
+
+  .code-main {
+    padding: 0.6rem 1rem;
+    gap: 0.8rem;
+  }
+
+  .code-actions {
+    padding: 0.35rem 0.8rem;
   }
 }

@@ -118,7 +118,16 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
       fps: 24
     },
     rtc: {
-      iceServers: []
+      iceServers: [
+        {
+          urls: [
+            'turn:10.30.13.1:3478?transport=udp',
+            'turn:10.30.13.1:3478?transport=tcp'
+          ],
+          username: 'myclass',
+          credential: 'myclass2026turn'
+        }
+      ]
     }
   });
 });
