@@ -24,6 +24,7 @@
           <span class="direct-teach-user" id="directTeachUser" hidden></span>
           <button class="direct-teach-logout" id="directTeachLogout" hidden>退出</button>
         </div>
+        <a class="exam-link" href="https://exam.fclassroom.com/login?redirect=%2Fhome" target="_blank" rel="noopener">考试平台</a>
         <div class="maintenance-note">由宁波三中人工智能实验室开发维护</div>
       </section>
 
@@ -89,11 +90,14 @@
           <button class="nav-page-button" id="selectCoursewareButton" type="button" hidden>课件列表</button>
           <button class="annotation-button" id="fullscreenButton" type="button">全屏</button>
           <button class="annotation-button" id="downloadOriginalButton" type="button" hidden>↓原文件</button>
+          <div class="toolbar-divider"></div>
+          <button class="annotation-button" id="rollStudentButton" type="button">抽学号</button>
+          <span class="roll-student-result" id="rollStudentResult">??</span>
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
       </section>
     </main>
 
-    <script src="./app.js?v=20260623"></script>
+    <script src="./app.js?v=20260625"></script>
   </body>
 </html>

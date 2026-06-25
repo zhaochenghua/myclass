@@ -177,9 +177,9 @@ async function bootstrap() {
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
     window.addEventListener('resize', handleViewportResize);
-    // 首次点击页面任意位置自动全屏（排除下载按钮）
+    // 首次点击页面任意位置自动全屏（排除下载按钮、考试平台链接）
     const autoFullscreen = (e) => {
-      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker')) return;
+      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, .exam-link')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
@@ -204,10 +204,47 @@ async function bootstrap() {
     updateAnnotationButtons();
     updateAnnotationColorButtons();
     updateAnnotationToolButtons();
+    setupStudentRoller();
     connectSignaling();
   } catch (error) {
     setWaitingStatus('服务配置加载失败，请检查服务端是否启动');
   }
+}
+
+function setupStudentRoller() {
+  const MAX_NO = 50;
+  const DURATION = 1800;
+  const btn = document.getElementById('rollStudentButton');
+  const result = document.getElementById('rollStudentResult');
+  let rolling = false;
+  let timer = null;
+
+  btn.addEventListener('click', () => {
+    if (rolling) return;
+    rolling = true;
+    const startTime = Date.now();
+
+    result.classList.remove('done');
+    result.classList.add('rolling');
+
+    const tick = () => {
+      const elapsed = Date.now() - startTime;
+      if (elapsed >= DURATION) {
+        result.classList.remove('rolling');
+        const final = Math.floor(Math.random() * MAX_NO) + 1;
+        result.textContent = String(final).padStart(2, '0');
+        result.classList.add('done');
+        rolling = false;
+        return;
+      }
+      const n = Math.floor(Math.random() * MAX_NO) + 1;
+      result.textContent = String(n).padStart(2, '0');
+      const interval = elapsed < 200 ? 50 : elapsed < 800 ? 100 : elapsed < 1400 ? 180 : 280;
+      timer = setTimeout(tick, interval);
+    };
+
+    tick();
+  });
 }
 
 async function loadConfig() {

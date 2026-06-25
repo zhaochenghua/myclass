@@ -135,6 +135,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareFastSeekRunnable: Runnable? = null
     private var signalReconnectInProgress = false
     private var savedCoursewareState: CoursewareState? = null
+    private var initialIntentProcessed = false
     private val coursewareHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.MINUTES)
@@ -171,10 +172,49 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onBackPressedDispatcher.addCallback(this, backCallback)
         loadAuth()
+        ExternalFileReceiver.restoreQueue(this)
         if (authToken != null) {
+            showAuthScreen() // show immediately to avoid black screen
             verifyTokenThenProceed()
         } else {
             showAuthScreen()
+        }
+        if (!initialIntentProcessed) {
+            initialIntentProcessed = true
+            val capturedIntent = intent
+            if (capturedIntent?.action in listOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) {
+                Thread {
+                    val handled = ExternalFileReceiver.handleIncomingIntent(this, capturedIntent)
+                    runOnUiThread {
+                        when {
+                            ExternalFileReceiver.wasLastReceiveDuplicate() -> toast("该文件已在待上传列表中")
+                            handled -> {
+                                toast("课件已加入上传队列（${ExternalFileReceiver.pendingCount()} 个待上传）")
+                                triggerPendingUploadIfReady()
+                            }
+                        }
+                    }
+                }.start()
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action in listOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) {
+            Thread {
+                val handled = ExternalFileReceiver.handleIncomingIntent(this, intent)
+                runOnUiThread {
+                    when {
+                        ExternalFileReceiver.wasLastReceiveDuplicate() -> toast("该文件已在待上传列表中")
+                        handled -> {
+                            toast("课件已加入上传队列（${ExternalFileReceiver.pendingCount()} 个待上传）")
+                            triggerPendingUploadIfReady()
+                        }
+                    }
+                }
+            }.start()
         }
     }
 
@@ -313,6 +353,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         prefs.edit().remove("token").remove("username").apply()
     }
 
+    private fun triggerPendingUploadIfReady() {
+        if (authToken == null) return
+        val count = ExternalFileReceiver.pendingCount()
+        if (count > 0) {
+            toast("正在上传 ${count} 个待上传课件...")
+        }
+        Thread {
+            ExternalFileReceiver.processPendingQueue(this)
+        }.start()
+    }
+
     private fun addAuthHeader(builder: Request.Builder) {
         authToken?.let { builder.header("Authorization", "Bearer $it") }
     }
@@ -332,7 +383,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }.onFailure {
                 runOnUiThread {
                     clearAuth()
-                    showAuthScreen()
+                    // Already on auth screen, just update status
+                    updateStatus("无法连接服务器，请确认已连接教室网络")
                 }
             }
         }.start()
@@ -465,6 +517,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     val name = resp.getString("username")
                     runOnUiThread {
                         saveAuth(token, name)
+                        triggerPendingUploadIfReady()
                         showConnectScreen()
                         toast("${if (isRegister) "注册" else "登录"}成功，欢迎 $name")
                     }
@@ -554,6 +607,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         root.addView(statusText)
         root.addView(hintText)
 
+        if (ExternalFileReceiver.pendingCount() > 0) {
+            updateStatus("${ExternalFileReceiver.pendingCount()} 个课件等待上传，连接教室后自动上传")
+        }
+
         // 底部元素用 topMargin 自动推开
         root.addView(secondaryButton("用户管理：${authUsername ?: ""}").apply {
             textSize = 14f
@@ -599,10 +656,29 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 signalingClient = null
                 activeRoomCode = null
                 roomJoined = false
+                ExternalFileReceiver.clearQueue(this@MainActivity)
                 clearAuth()
                 showAuthScreen()
             }
             .show()
+    }
+
+    private fun showCoursewareManagementUploading(fileName: String) {
+        currentScreen = Screen.Connect
+        val root = baseColumn().apply {
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+        }
+        root.addView(titleText("上传课件", 22f))
+        val progressView = bodyText("正在上传：$fileName").apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(20) }
+        }
+        root.addView(progressView)
+        setContentView(root)
+        statusText = progressView
     }
 
     private fun showCoursewareManagement() {
@@ -737,7 +813,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun managementUploadProgress(uri: Uri) {
         val fileName = displayNameForUri(uri)
-        updateStatus("正在上传：$fileName")
+        showCoursewareManagementUploading(fileName)
         Thread {
             runCatching {
                 val totalBytes = contentLengthForUri(uri)
@@ -750,10 +826,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             ?: throw IOException("无法读取文件")
                         input.use {
                             val buffer = ByteArray(8 * 1024)
+                            var uploadedBytes = 0L
+                            var lastProgressAt = 0L
                             while (true) {
                                 val read = it.read(buffer)
                                 if (read == -1) break
                                 sink.write(buffer, 0, read)
+                                uploadedBytes += read
+                                val now = System.currentTimeMillis()
+                                if (now - lastProgressAt > 300L || uploadedBytes == totalBytes) {
+                                    lastProgressAt = now
+                                    runOnUiThread {
+                                        updateCoursewareUploadProgress(fileName, uploadedBytes, totalBytes)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1957,6 +2043,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             toast("连接成功")
 
+            triggerPendingUploadIfReady()
+
             if (shouldResumeCamera || currentScreen == Screen.Camera) {
                 if (currentScreen != Screen.Camera || webRtcClient == null) {
                     showCameraScreen(autoStartLive = shouldResumeLive)
@@ -2091,7 +2179,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         showMenuScreen()
     }
 
-    private fun updateStatus(message: String) {
+    fun updateStatus(message: String) {
         runOnUiThread {
             statusText?.text = message
         }
