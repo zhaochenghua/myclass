@@ -768,8 +768,8 @@ async function renderCoursewarePage() {
 
 function loadPdfJs() {
   if (!pdfJsPromise) {
-    pdfJsPromise = import('./vendor/pdfjs/build/pdf.min.mjs').then((pdfjsLib) => {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs';
+    pdfJsPromise = import('./vendor/pdfjs/build/pdf.min.js').then((pdfjsLib) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.js';
       return pdfjsLib;
     }).catch((err) => {
       console.error('PDF.js load failed:', err);
