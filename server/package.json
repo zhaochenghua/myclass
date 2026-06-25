@@ -1,0 +1,21 @@
+{
+  "name": "myclass-server",
+  "version": "1.0.0",
+  "description": "MyClass 教师投屏平台服务端",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js && node --check websocket.js && node --check roomManager.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^2.0.0",
+    "pdfjs-dist": "^6.0.227",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}
