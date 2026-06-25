@@ -51,6 +51,7 @@ const elements = {
   remoteVideo: document.getElementById('remoteVideo'),
   coursewareCanvas: document.getElementById('coursewareCanvas'),
   annotationCanvas: document.getElementById('annotationCanvas'),
+  annotationToolbar: document.getElementById('annotationToolbar'),
   penToolButton: document.getElementById('penToolButton'),
   panToolButton: document.getElementById('panToolButton'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
@@ -61,8 +62,6 @@ const elements = {
   prevPageButton: document.getElementById('prevPageButton'),
   nextPageButton: document.getElementById('nextPageButton'),
   selectCoursewareButton: document.getElementById('selectCoursewareButton'),
-  offlineCode: document.getElementById('offlineCode'),
-  offlineCodeValue: document.getElementById('offlineCodeValue'),
   downloadApkButton: document.getElementById('downloadApkButton'),
   directTeachButton: document.getElementById('directTeachButton'),
   directTeachUser: document.getElementById('directTeachUser'),
@@ -81,7 +80,28 @@ const elements = {
 
 bootstrap();
 
+function checkBrowserCompatibility() {
+  const issues = [];
+  if (typeof RTCPeerConnection === 'undefined' && typeof webkitRTCPeerConnection === 'undefined') {
+    issues.push('浏览器不支持WebRTC，请使用Chrome/Edge/Firefox最新版');
+  }
+  if (!('srcObject' in document.createElement('video'))) {
+    issues.push('浏览器不支持视频流播放');
+  }
+  if (typeof WebSocket === 'undefined') {
+    issues.push('浏览器不支持WebSocket');
+  }
+  return issues;
+}
+
 async function bootstrap() {
+  // 浏览器兼容性检测
+  const compatIssues = checkBrowserCompatibility();
+  if (compatIssues.length > 0) {
+    setWaitingStatus(compatIssues.join('；'));
+    elements.roomCode.textContent = '错误';
+    return;
+  }
   try {
     state.config = await loadConfig();
     const apkVersion = state.config?.apkVersion || 'latest';
@@ -179,7 +199,7 @@ async function bootstrap() {
     window.addEventListener('resize', handleViewportResize);
     // 首次点击页面任意位置自动全屏（排除下载按钮、考试平台链接）
     const autoFullscreen = (e) => {
-      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, .exam-link')) return;
+      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, .action-btn-exam')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
@@ -274,11 +294,9 @@ function connectSignaling() {
   socket.addEventListener('close', () => {
     cleanupPeerConnection();
     if (state.presentationMode === 'courseware') {
-      showOfflineCode();
       setWaitingStatus('信令连接已断开，可继续翻页查看课件');
     } else {
       showJoinView();
-      elements.roomCode.textContent = '----';
       setWaitingStatus('连接已断开，正在重新连接...');
     }
     state.reconnectTimer = setTimeout(connectSignaling, 1500);
@@ -296,7 +314,6 @@ async function handleSignalMessage(message) {
       setWaitingStatus('等待教师连接...');
       break;
     case 'teacher.online':
-      hideOfflineCode();
       hideDirectTeachUI();
       setWaitingStatus('教师已连接，等待直播...');
       break;
@@ -304,7 +321,6 @@ async function handleSignalMessage(message) {
       cleanupPeerConnection();
       showDirectTeachUI();
       if (state.presentationMode === 'courseware') {
-        showOfflineCode();
         setWaitingStatus('教师设备已断开，可继续翻页查看课件');
       } else {
         showJoinView();
@@ -337,11 +353,11 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.stop':
       cleanupPeerConnection();
-      closeCourseware(
-        state.presentationMode === 'courseware'
-          ? '课件已结束'
-          : '直播已停止，等待教师重新开始...'
-      );
+      if (state.presentationMode === 'courseware') {
+        closeCourseware('课件已结束');
+      } else {
+        closeCourseware('直播已停止，等待教师重新开始...');
+      }
       break;
     case 'room.expired':
       setWaitingStatus('连接码已过期，正在创建新课堂...');
@@ -357,38 +373,78 @@ async function handleSignalMessage(message) {
 async function handleOffer(sdp) {
   cleanupPeerConnection();
   const peerConnection = createPeerConnection();
+  if (!peerConnection) return;
   state.peerConnection = peerConnection;
 
-  await peerConnection.setRemoteDescription({
-    type: 'offer',
-    sdp
-  });
-  const answer = await peerConnection.createAnswer();
-  await peerConnection.setLocalDescription(answer);
-  sendMessage({
-    type: 'webrtc.answer',
-    sdp: answer.sdp
-  });
+  elements.videoStatus.textContent = '正在建立视频连接...';
+  try {
+    await peerConnection.setRemoteDescription({
+      type: 'offer',
+      sdp
+    });
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    sendMessage({
+      type: 'webrtc.answer',
+      sdp: answer.sdp
+    });
+    elements.videoStatus.textContent = '正在建立视频连接...';
+  } catch (error) {
+    console.error('handleOffer failed:', error);
+    elements.videoStatus.textContent = '建立视频连接失败，请刷新页面重试';
+    cleanupPeerConnection();
+  }
 }
 
 function createPeerConnection() {
-  const peerConnection = new RTCPeerConnection({
+  const RTCPC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+  if (!RTCPC) {
+    elements.videoStatus.textContent = '浏览器不支持WebRTC，请使用Chrome或Edge最新版';
+    return null;
+  }
+
+  const config = {
     iceServers: state.config?.rtc?.iceServers || []
-  });
+  };
+
+  const peerConnection = new RTCPC(config);
 
   // 教师端推送的媒体轨到达后，浏览器立即切换到全屏视频。
   peerConnection.addEventListener('track', (event) => {
     configureLowLatencyReceiver(event.receiver);
-    const [stream] = event.streams;
-    if (elements.remoteVideo.srcObject !== stream) {
-      elements.remoteVideo.srcObject = stream;
+
+    // 处理 stream：某些浏览器 event.streams 可能为空
+    let stream = null;
+    if (event.streams && event.streams.length > 0) {
+      stream = event.streams[0];
     }
-    showVideoView();
-    updateVideoPresentation();
-    elements.videoStatus.textContent = '';
-    elements.remoteVideo.play().catch(() => {
-      elements.videoStatus.textContent = '点击页面开始播放视频';
-    });
+
+    if (stream) {
+      if (elements.remoteVideo.srcObject !== stream) {
+        elements.remoteVideo.srcObject = stream;
+      }
+      showVideoView();
+      updateVideoPresentation();
+      elements.videoStatus.textContent = '';
+      // 带用户手势恢复的自动播放
+      const playPromise = elements.remoteVideo.play();
+      if (playPromise) {
+        playPromise.catch(() => {
+          elements.videoStatus.textContent = '点击画面开始播放';
+          // 全局点击恢复播放
+          const resumeOnClick = () => {
+            elements.remoteVideo.play().then(() => {
+              elements.videoStatus.textContent = '';
+            }).catch(() => {});
+            document.removeEventListener('click', resumeOnClick);
+          };
+          document.addEventListener('click', resumeOnClick, { once: false });
+        });
+      }
+    } else {
+      console.warn('track event received but no stream available');
+      elements.videoStatus.textContent = '收到视频信号但无法获取画面流，请刷新页面重试';
+    }
   });
 
   peerConnection.addEventListener('icecandidate', (event) => {
@@ -400,13 +456,29 @@ function createPeerConnection() {
     }
   });
 
+  // ICE 连接状态 — 提供诊断信息
+  peerConnection.addEventListener('iceconnectionstatechange', () => {
+    const iceState = peerConnection.iceConnectionState;
+    if (iceState === 'checking') {
+      elements.videoStatus.textContent = '正在建立视频连接...';
+    } else if (iceState === 'connected' || iceState === 'completed') {
+      elements.videoStatus.textContent = '';
+    } else if (iceState === 'failed') {
+      elements.videoStatus.textContent = '视频连接失败，请在手机上重新开启直播';
+    } else if (iceState === 'disconnected') {
+      elements.videoStatus.textContent = '视频连接中断，等待恢复...';
+    }
+  });
+
+  // 整体连接状态
   peerConnection.addEventListener('connectionstatechange', () => {
     const status = peerConnection.connectionState;
     if (status === 'connected') {
       showVideoView();
       elements.videoStatus.textContent = '';
-    }
-    if (status === 'failed' || status === 'disconnected' || status === 'closed') {
+    } else if (status === 'failed') {
+      elements.videoStatus.textContent = '视频连接失败，请在手机上重新开启直播';
+    } else if (status === 'disconnected') {
       elements.videoStatus.textContent = '视频连接已断开，等待教师重新开始...';
     }
   });
@@ -600,15 +672,6 @@ function updatePageNavButtons() {
   elements.nextPageButton.disabled = courseware.page >= courseware.pageCount;
 }
 
-function showOfflineCode() {
-  elements.offlineCodeValue.textContent = elements.roomCode.textContent;
-  elements.offlineCode.hidden = false;
-}
-
-function hideOfflineCode() {
-  elements.offlineCode.hidden = true;
-}
-
 function hideDirectTeachUI() {
   elements.directTeachButton.hidden = true;
   if (elements.downloadApkButton) elements.downloadApkButton.style.display = 'none';
@@ -632,7 +695,6 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   try { elements.prevPageButton.hidden = true; } catch {}
   try { elements.nextPageButton.hidden = true; } catch {}
   if (elements.selectCoursewareButton) try { elements.selectCoursewareButton.hidden = true; } catch {}
-  try { elements.offlineCode.hidden = true; } catch {}
   try { elements.remoteVideo.hidden = false; } catch {}
 
   // 2. 重置状态
@@ -1320,7 +1382,6 @@ function showJoinView() {
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
-  elements.offlineCode.hidden = true;
 }
 
 function showVideoView() {
@@ -1470,10 +1531,6 @@ function openDirectCourseware(cw) {
     state.downloadOriginalUrl = null;
   }
   openCourseware({ url: cw.url, title: cw.title, page: 1, screen: 1 });
-}
-
-function escapeAttr(str) {
-  return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function escapeHtml(str) {

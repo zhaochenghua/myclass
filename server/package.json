@@ -14,7 +14,7 @@
   "dependencies": {
     "express": "^4.19.2",
     "multer": "^2.0.0",
-    "pdfjs-dist": "^6.0.227",
+    "pdfjs-dist": "^3.11.174",
     "qrcode": "^1.5.4",
     "ws": "^8.18.0"
   }
