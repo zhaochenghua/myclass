@@ -463,8 +463,6 @@ function openCourseware(message) {
     return;
   }
 
-  cleanupPeerConnection();
-  resetAnnotations();
   setAnnotationTool('pen');
 
   // ZIP 文件：不尝试渲染，仅提供下载
@@ -498,10 +496,17 @@ function openCourseware(message) {
     state.courseware.downloadOriginalUrl = message.originalUrl;
   }
   if (isZip) {
+    cleanupPeerConnection();
+    resetAnnotations();
     showCoursewareViewForZip(state.courseware);
   } else {
+    // 先切到课件画面（隐藏 video，显示 canvas）
     showCoursewareView();
-    loadCoursewareDocument(state.courseware);
+    // PDF 加载完成后再清理 WebRTC，避免加载失败时黑屏
+    loadCoursewareDocument(state.courseware).finally(() => {
+      cleanupPeerConnection();
+      resetAnnotations();
+    });
   }
 }
 
