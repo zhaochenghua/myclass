@@ -99,7 +99,7 @@ async function bootstrap() {
   const compatIssues = checkBrowserCompatibility();
   if (compatIssues.length > 0) {
     setWaitingStatus(compatIssues.join('；'));
-    elements.roomCode.textContent = '错误';
+    elements.roomCode.innerHTML = '----';
     return;
   }
   try {
@@ -307,21 +307,20 @@ function connectSignaling() {
   });
 }
 
+function renderRoomCode(code) {
+  if (!code || code === '----') {
+    elements.roomCode.innerHTML = '----';
+    return;
+  }
+  const digits = String(code).split('');
+  elements.roomCode.innerHTML = digits.map(d => `<span class="code-digit">${d}</span>`).join('');
+}
+
 async function handleSignalMessage(message) {
   switch (message.type) {
     case 'room.created':
-      elements.roomCode.textContent = message.code;
+      renderRoomCode(message.code);
       setWaitingStatus('等待教师连接...');
-      break;
-    case 'teacher.online':
-      hideDirectTeachUI();
-      setWaitingStatus('教师已连接，等待直播...');
-      break;
-    case 'teacher.offline':
-      cleanupPeerConnection();
-      showDirectTeachUI();
-      if (state.presentationMode === 'courseware') {
-        setWaitingStatus('教师设备已断开，可继续翻页查看课件');
       } else {
         showJoinView();
         setWaitingStatus('教师已断开，等待重新连接...');
@@ -1521,7 +1520,7 @@ function showTeacherCoursewarePicker() {
 
 function openDirectCourseware(cw) {
   elements.coursewarePicker.hidden = true;
-  elements.roomCode.textContent = '----';
+  elements.roomCode.innerHTML = '----';
   setWaitingStatus('');
   state.directTeach = true;
   // 如果有原文件下载地址，直接设置
