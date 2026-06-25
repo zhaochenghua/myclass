@@ -11,6 +11,8 @@ import android.database.Cursor
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.content.res.ColorStateList
+import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
@@ -2594,6 +2596,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         TextView(this).apply {
             text = textValue
             textSize = size
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.02f
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
@@ -2606,30 +2610,36 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         TextView(this).apply {
             text = textValue
             textSize = 15f
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_muted))
         }
 
     private fun primaryButton(textValue: String): MaterialButton =
         MaterialButton(this).apply {
             text = textValue
-            textSize = 16f
-            cornerRadius = dp(8)
+            textSize = 15f
+            cornerRadius = dp(12)
+            elevation = dp(4).toFloat()
         }
 
     private fun secondaryButton(textValue: String): MaterialButton =
         MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             text = textValue
-            textSize = 16f
-            cornerRadius = dp(8)
+            textSize = 15f
+            cornerRadius = dp(12)
+            strokeWidth = dp(1)
+            setStrokeColor(ColorStateList.valueOf(Color.argb(0.3f, 1f, 1f, 1f)))
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
         }
 
     private fun deleteButton(textValue: String): MaterialButton =
-        MaterialButton(this).apply {
+        MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             text = textValue
             textSize = 13f
             setSingleLine(true)
-            cornerRadius = dp(6)
+            cornerRadius = dp(8)
+            strokeWidth = dp(1)
+            setStrokeColor(ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.myclass_alert)))
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_alert))
             insetTop = 0
             insetBottom = 0
             minHeight = dp(36)

@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="myclass_background">#071012</color>
-    <color name="myclass_surface">#102126</color>
-    <color name="myclass_primary">#38D6B3</color>
-    <color name="myclass_on_primary">#02211A</color>
-    <color name="myclass_secondary">#FFD166</color>
-    <color name="myclass_on_surface">#F4FBFF</color>
+    <color name="myclass_background">#0A0E14</color>
+    <color name="myclass_surface">#121822</color>
+    <color name="myclass_primary">#4DA6FF</color>
+    <color name="myclass_on_primary">#FFFFFF</color>
+    <color name="myclass_secondary">#7C5CFC</color>
+    <color name="myclass_on_surface">#E8EDF3</color>
+    <color name="myclass_muted">#8899AA</color>
+    <color name="myclass_accent2">#7C5CFC</color>
+    <color name="myclass_warm">#F0A040</color>
+    <color name="myclass_alert">#F87171</color>
 </resources>
