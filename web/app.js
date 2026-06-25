@@ -768,12 +768,14 @@ async function renderCoursewarePage() {
 
 function loadPdfJs() {
   if (!pdfJsPromise) {
-    pdfJsPromise = import('./vendor/pdfjs/build/pdf.min.js').then((pdfjsLib) => {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.js';
-      return pdfjsLib;
-    }).catch((err) => {
-      console.error('PDF.js load failed:', err);
-      throw new Error('PDF组件加载失败，请使用Chrome或Edge浏览器打开此页面');
+    pdfJsPromise = new Promise((resolve, reject) => {
+      const lib = window.pdfjsLib;
+      if (!lib) {
+        reject(new Error('PDF组件加载失败，请使用Chrome或Edge浏览器打开此页面'));
+        return;
+      }
+      lib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.js';
+      resolve(lib);
     });
   }
   return pdfJsPromise;
