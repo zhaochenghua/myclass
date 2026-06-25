@@ -290,7 +290,6 @@ function connectSignaling() {
 }
 
 async function handleSignalMessage(message) {
-  try {
   switch (message.type) {
     case 'room.created':
       elements.roomCode.textContent = message.code;
@@ -353,7 +352,6 @@ async function handleSignalMessage(message) {
     default:
       break;
   }
-  } catch {}
 }
 
 async function handleOffer(sdp) {
