@@ -312,16 +312,27 @@ app.use(
   `${PATH_PREFIX}/vendor/pdfjs`,
   express.static(path.join(__dirname, 'node_modules', 'pdfjs-dist'), {
     etag: true,
-    maxAge: '1h'
+    maxAge: '1h',
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.mjs')) {
+        res.setHeader('Content-Type', 'application/javascript');
+      }
+    }
   })
 );
 
+// Also serve .mjs from web root for bundled pdfjs
 app.use(
   PATH_PREFIX,
   express.static(webRoot, {
     etag: true,
     maxAge: '5m',
-    index: 'index.html'
+    index: 'index.html',
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.mjs')) {
+        res.setHeader('Content-Type', 'application/javascript');
+      }
+    }
   })
 );
 

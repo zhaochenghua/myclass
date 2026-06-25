@@ -771,6 +771,9 @@ function loadPdfJs() {
     pdfJsPromise = import('./vendor/pdfjs/build/pdf.min.mjs').then((pdfjsLib) => {
       pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs';
       return pdfjsLib;
+    }).catch((err) => {
+      console.error('PDF.js load failed:', err);
+      throw new Error('PDF组件加载失败，请使用Chrome或Edge浏览器打开此页面');
     });
   }
   return pdfJsPromise;
