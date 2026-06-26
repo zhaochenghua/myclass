@@ -76,11 +76,8 @@
         <canvas class="courseware-canvas" id="coursewareCanvas" hidden></canvas>
         <canvas class="annotation-canvas" id="annotationCanvas"></canvas>
         <div class="annotation-toolbar" id="annotationToolbar" aria-label="画笔工具">
-          <div class="annotation-modes" aria-label="操作模式">
-            <button class="annotation-mode is-active" id="penToolButton" type="button">画笔</button>
-            <button class="annotation-mode" id="panToolButton" type="button" hidden>手型</button>
-          </div>
-          <div class="annotation-colors" aria-label="画笔颜色">
+          <button class="annotation-mode" id="panToolButton" type="button" hidden>手型</button>
+          <div class="annotation-colors" id="annotationColors" aria-label="画笔颜色">
             <button class="annotation-color is-active" type="button" data-color="#ffd166" aria-label="黄色"></button>
             <button class="annotation-color" type="button" data-color="#ff4d6d" aria-label="红色"></button>
             <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
@@ -98,9 +95,41 @@
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="rollStudentButton" type="button">抽学号</button>
           <span class="roll-student-result" id="rollStudentResult">??</span>
+          <div class="toolbar-divider"></div>
+          <button class="annotation-button blackboard-toggle-btn" id="blackboardToggleButton" type="button">黑板</button>
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
       </section>
+
+      <!-- 黑板全屏覆盖层 -->
+      <div class="blackboard-overlay" id="blackboardOverlay" hidden>
+        <canvas class="blackboard-canvas" id="blackboardCanvas"></canvas>
+        <div class="blackboard-eraser-cursor" id="blackboardEraserCursor"></div>
+        <div class="blackboard-palm-indicator" id="blackboardPalmIndicator">🖐 板擦模式（松手恢复画笔）</div>
+        <div class="blackboard-toolbar">
+          <button class="annotation-button" id="blackboardPrevPageButton" type="button">上一页</button>
+          <span class="blackboard-page-indicator" id="blackboardPageIndicator">第 1 / 1 页</span>
+          <button class="annotation-button" id="blackboardNextPageButton" type="button">下一页</button>
+          <div class="toolbar-divider"></div>
+          <button class="annotation-button" id="blackboardUndoButton" type="button">撤销</button>
+          <button class="annotation-button" id="blackboardClearButton" type="button">清屏</button>
+          <button class="annotation-button blackboard-eraser-btn" id="blackboardEraserButton" type="button">板擦</button>
+          <button class="annotation-button blackboard-hand-btn" id="blackboardHandButton" type="button">手型</button>
+          <div class="toolbar-divider"></div>
+          <div class="annotation-colors" id="blackboardColors" aria-label="黑板颜色">
+            <button class="annotation-color is-active" type="button" data-color="#ffd166" aria-label="黄色"></button>
+            <button class="annotation-color" type="button" data-color="#ff4d6d" aria-label="红色"></button>
+            <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
+            <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
+            <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
+          </div>
+          <div class="toolbar-divider"></div>
+          <button class="annotation-button" id="blackboardNewPageButton" type="button">+新页</button>
+          <button class="annotation-button" id="blackboardDelPageButton" type="button">删页</button>
+          <div class="toolbar-divider"></div>
+          <button class="annotation-button" id="blackboardCloseButton" type="button">关闭黑板</button>
+        </div>
+      </div>
     </main>
 
     <script src="./vendor/pdfjs/build/pdf.min.js"></script>
