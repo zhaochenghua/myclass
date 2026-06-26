@@ -214,6 +214,16 @@ h1 {
   color: var(--warm);
 }
 
+.action-btn-exit {
+  border: 1px solid var(--danger, #ff4d6d);
+  background: rgba(255, 77, 109, 0.08);
+  color: var(--danger, #ff4d6d);
+}
+
+.action-btn-exit:hover {
+  background: rgba(255, 77, 109, 0.18);
+}
+
 .status-text {
   min-height: 2rem;
   color: var(--accent);
