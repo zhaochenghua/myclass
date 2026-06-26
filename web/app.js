@@ -76,6 +76,7 @@ const elements = {
   teacherPassword: document.getElementById('teacherPassword'),
   teacherLoginCancel: document.getElementById('teacherLoginCancel'),
   teacherLoginSubmit: document.getElementById('teacherLoginSubmit'),
+  exitPlatformButton: document.getElementById('exitPlatformButton'),
 };
 
 bootstrap();
@@ -194,12 +195,29 @@ async function bootstrap() {
     elements.closePickerButton.addEventListener('click', () => {
       elements.coursewarePicker.hidden = true;
     });
+    elements.exitPlatformButton.addEventListener('click', () => {
+      // 清理连接
+      if (state.socket) { state.socket.close(); state.socket = null; }
+      if (state.peerConnection) { state.peerConnection.close(); state.peerConnection = null; }
+      if (state.reconnectTimer) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
+      // 退出全屏（方便触摸屏手动关闭标签页）
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+      // 尝试关闭窗口
+      window.open('', '_self', '');
+      window.close();
+      // 兜底：覆盖全屏退出提示
+      setTimeout(() => {
+        document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:1rem;font-size:1.2rem;color:#8892b0;font-family:sans-serif;background:#0a1628"><div>✅ 已退出上课投屏平台</div><div style="font-size:0.9rem">请手动关闭此标签页</div></div>';
+      }, 300);
+    });
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
     window.addEventListener('resize', handleViewportResize);
     // 首次点击页面任意位置自动全屏（排除下载按钮、考试平台链接）
     const autoFullscreen = (e) => {
-      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, .action-btn-exam')) return;
+      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, .action-btn-exam, .action-btn-exit')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
