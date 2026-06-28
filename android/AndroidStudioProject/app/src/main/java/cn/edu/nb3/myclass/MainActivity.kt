@@ -11,7 +11,6 @@ import android.database.Cursor
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.drawable.GradientDrawable
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
@@ -107,7 +106,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var frameLockButton: MaterialButton? = null
     private var torchButton: MaterialButton? = null
     private var imageCastButton: MaterialButton? = null
-    private var audioToggleButton: TextView? = null
+    private var audioToggleButton: MaterialButton? = null
     private var cameraControls: LinearLayout? = null
     private var cameraVersionLabel: TextView? = null
     private var orientationListener: OrientationEventListener? = null
@@ -226,7 +225,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         super.onConfigurationChanged(newConfig)
         cameraRenderer?.requestLayout()
         updateCameraControlsLayout()
-        updateStatusBarForCamera()
         syncDeviceRotationFromDisplay(force = true)
         refreshLockedFramePreviewAfterLayout()
     }
@@ -398,30 +396,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun showAuthScreen() {
         currentScreen = Screen.Auth
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val root = baseColumn().apply {
-            setPadding(
-                if (isLandscape) dp(48) else dp(28),
-                if (isLandscape) dp(12) else dp(36),
-                if (isLandscape) dp(48) else dp(28),
-                if (isLandscape) dp(12) else dp(32)
-            )
-        }
-        root.addView(titleText("上课投屏平台", 24f))
-        root.addView(bodyText("首次使用请注册账号").apply {
-            gravity = Gravity.CENTER
-            setTextColor(Color.argb(180, 96, 96, 96))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(8) }
-        })
+
+        // 创建输入控件
         val usernameLayout = TextInputLayout(this).apply {
             hint = "用户名（2-20位）"
             boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(28) }
+            ).apply { topMargin = dp(if (isLandscape) 0 else 28) }
         }
         val usernameInput = TextInputEditText(usernameLayout.context).apply {
             inputType = InputType.TYPE_CLASS_TEXT
@@ -492,14 +475,69 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ).apply { topMargin = dp(18) }
         }
 
-        root.addView(usernameLayout)
-        root.addView(passwordLayout)
-        root.addView(loginButton)
-        root.addView(registerButton)
-        root.addView(statusView)
-        root.addView(footerLabel())
-        root.addView(versionLabel())
-        setContentView(if (isLandscape) ScrollView(this).apply { addView(root) } else root)
+        if (isLandscape) {
+            // 横屏：左右结构
+            val root = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                gravity = Gravity.CENTER
+            }
+            val leftPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(24)
+                }
+            }
+            leftPanel.addView(titleText("上课投屏平台", 22f))
+            leftPanel.addView(bodyText("首次使用请注册账号").apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.argb(180, 96, 96, 96))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) }
+            })
+            leftPanel.addView(statusView)
+            leftPanel.addView(footerLabel().apply {
+                (layoutParams as LinearLayout.LayoutParams).topMargin = dp(16)
+            })
+            leftPanel.addView(versionLabel())
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            rightPanel.addView(usernameLayout)
+            rightPanel.addView(passwordLayout)
+            rightPanel.addView(loginButton)
+            rightPanel.addView(registerButton)
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            // 竖屏：垂直结构
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(36), dp(28), dp(32))
+            }
+            root.addView(titleText("上课投屏平台", 24f))
+            root.addView(bodyText("首次使用请注册账号").apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.argb(180, 96, 96, 96))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) }
+            })
+            root.addView(usernameLayout)
+            root.addView(passwordLayout)
+            root.addView(loginButton)
+            root.addView(registerButton)
+            root.addView(statusView)
+            root.addView(footerLabel())
+            root.addView(versionLabel())
+            setContentView(root)
+        }
     }
 
     private fun performAuth(isRegister: Boolean, username: String, password: String) {
@@ -545,16 +583,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun showConnectScreen() {
         currentScreen = Screen.Connect
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val root = baseColumn().apply {
-            setPadding(
-                if (isLandscape) dp(56) else dp(28),
-                if (isLandscape) dp(12) else dp(36),
-                if (isLandscape) dp(56) else dp(28),
-                if (isLandscape) dp(12) else dp(20)
-            )
-        }
-
-        root.addView(titleText(getString(R.string.platform_title), 22f))
 
         val inputLayout = TextInputLayout(this).apply {
             hint = "连接码"
@@ -563,7 +591,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(28)
+                topMargin = dp(if (isLandscape) 0 else 28)
             }
         }
         val codeInput = TextInputEditText(inputLayout.context).apply {
@@ -619,17 +647,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
 
-        root.addView(inputLayout)
-        root.addView(connectButton)
-        root.addView(statusText)
-        root.addView(hintText)
-
-        if (ExternalFileReceiver.pendingCount() > 0) {
-            updateStatus("${ExternalFileReceiver.pendingCount()} 个课件等待上传，连接教室后自动上传")
-        }
-
-        // 底部元素用 topMargin 自动推开
-        root.addView(secondaryButton("用户管理：${authUsername ?: ""}").apply {
+        val userButton = secondaryButton("用户管理：${authUsername ?: ""}").apply {
             textSize = 14f
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -640,14 +658,67 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 showUserManagementDialog()
             }
-        })
-        root.addView(versionLabel().apply {
-            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(6)
-        })
-        root.addView(footerLabel().apply {
-            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(2)
-        })
-        setContentView(if (isLandscape) ScrollView(this).apply { addView(root) } else root)
+        }
+
+        if (ExternalFileReceiver.pendingCount() > 0) {
+            updateStatus("${ExternalFileReceiver.pendingCount()} 个课件等待上传，连接教室后自动上传")
+        }
+
+        if (isLandscape) {
+            // 横屏：左右结构
+            val root = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                gravity = Gravity.CENTER
+            }
+            val leftPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(24)
+                }
+            }
+            leftPanel.addView(titleText(getString(R.string.platform_title), 22f))
+            leftPanel.addView(statusText)
+            leftPanel.addView(hintText)
+            leftPanel.addView(userButton.apply {
+                (layoutParams as LinearLayout.LayoutParams).topMargin = dp(16)
+            })
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            rightPanel.addView(inputLayout)
+            rightPanel.addView(connectButton)
+            rightPanel.addView(versionLabel().apply {
+                (layoutParams as LinearLayout.LayoutParams).topMargin = dp(12)
+            })
+            rightPanel.addView(footerLabel().apply {
+                (layoutParams as LinearLayout.LayoutParams).topMargin = dp(2)
+            })
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            // 竖屏：垂直结构
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(36), dp(28), dp(20))
+            }
+            root.addView(titleText(getString(R.string.platform_title), 22f))
+            root.addView(inputLayout)
+            root.addView(connectButton)
+            root.addView(statusText)
+            root.addView(hintText)
+            root.addView(userButton)
+            root.addView(versionLabel().apply {
+                (layoutParams as LinearLayout.LayoutParams).topMargin = dp(6)
+            })
+            root.addView(footerLabel().apply {
+                (layoutParams as LinearLayout.LayoutParams).topMargin = dp(2)
+            })
+            setContentView(root)
+        }
     }
 
     private fun showUserManagementDialog() {
@@ -928,14 +999,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun showMenuScreen() {
         currentScreen = Screen.Menu
-        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val root = baseColumn().apply {
-            setPadding(
-                if (isLandscape) dp(56) else dp(28),
-                if (isLandscape) dp(12) else dp(32),
-                if (isLandscape) dp(56) else dp(28),
-                if (isLandscape) dp(12) else dp(32)
-            )
+            setPadding(dp(28), dp(32), dp(28), dp(32))
         }
 
         root.addView(titleText("功能菜单", 28f))
@@ -994,7 +1059,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         root.addView(statusText)
         root.addView(versionLabel())
-        setContentView(if (isLandscape) ScrollView(this).apply { addView(root) } else root)
+        setContentView(root)
     }
 
     private fun requestScreenSharePermission() {
@@ -1942,22 +2007,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 launchImagePickerForProjection()
             }
         }
-        // 悬浮圆形喇叭按钮
-        audioToggleButton = TextView(this).apply {
+        audioToggleButton = MaterialButton(this).apply {
             text = "🔇"
-            textSize = 20f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.argb(140, 0, 0, 0))
-                setStroke(dp(2), Color.argb(200, 255, 255, 255))
-            }
-            isClickable = true
-            isFocusable = true
+            textSize = 18f
+            contentDescription = "开启麦克风"
+            insetTop = 0
+            insetBottom = 0
+            setBackgroundColor(Color.argb(160, 0, 0, 0))
+            strokeColor = ColorStateList.valueOf(Color.argb(80, 255, 255, 255))
+            strokeWidth = dp(1)
+            cornerRadius = dp(24)
+            setPadding(0, 0, 0, 0)
+            isEnabled = true
             setOnClickListener {
                 val nextEnabled = webRtcClient?.toggleAudio() == true
-                text = if (nextEnabled) "🔊" else "🔇"
+                updateAudioButton(isEnabled = nextEnabled)
                 toast(if (nextEnabled) "麦克风已开启" else "麦克风已静音")
             }
         }
@@ -1967,15 +2031,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             controls,
             controls.layoutParams ?: cameraControlsLayoutParams(isLandscape = false)
         )
-        // 悬浮喇叭图标放在控件栏上方
+        // 悬浮喇叭图标，置于预览右下角
+        val audioBtn = audioToggleButton!!
         root.addView(
-            audioToggleButton,
-            FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM or Gravity.END).apply {
-                setMargins(0, 0, dp(12), dp(14))
+            audioBtn,
+            FrameLayout.LayoutParams(dp(48), dp(48)).apply {
+                gravity = Gravity.BOTTOM or Gravity.END
+                setMargins(0, 0, dp(16), dp(16))
             }
         )
 
-        updateStatusBarForCamera()
         setContentView(root)
         startOrientationTracking()
 
@@ -2224,9 +2289,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         cameraControls = null
         cameraVersionLabel = null
         activePresentationMode = PresentationMode.Camera
-        // 恢复状态栏
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
     }
 
     private fun returnToMenuFromCamera() {
@@ -2301,7 +2363,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun updateAudioButton(isEnabled: Boolean) {
-        audioToggleButton?.text = if (isEnabled) "🔊" else "🔇"
+        audioToggleButton?.apply {
+            text = if (isEnabled) "🔊" else "🔇"
+            contentDescription = if (isEnabled) "关闭麦克风" else "开启麦克风"
+        }
     }
 
     private fun showSelectedImage(uri: Uri) {
@@ -2328,17 +2393,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val imageButton = imageCastButton ?: return
         val version = cameraVersionLabel ?: return
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-
-        // 更新悬浮喇叭图标位置
-        val audioFloat = audioToggleButton
-        if (audioFloat != null && audioFloat.parent == null) {
-            // 如果浮动图标被移除，需要重新添加到根布局
-            (audioFloat.parent as? ViewGroup)?.removeView(audioFloat)
-            val rootView = window.decorView.findViewById<ViewGroup>(android.R.id.content) ?: return
-            rootView.addView(audioFloat, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM or Gravity.END).apply {
-                setMargins(0, 0, dp(12), dp(14))
-            })
-        }
 
         listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton, version).forEach { view ->
             (view.parent as? ViewGroup)?.removeView(view)
@@ -2370,79 +2424,62 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 controls.addView(button)
             }
             version.visibility = View.GONE
-            // 横屏时调整悬浮喇叭位置到底部右侧
-            audioFloat?.let {
-                (it.layoutParams as? FrameLayout.LayoutParams)?.apply {
-                    gravity = Gravity.BOTTOM or Gravity.END
-                    setMargins(0, 0, dp(92), dp(12))
-                }
-                it.requestLayout()
-            }
-        } else {
-            listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton).forEach { button ->
-                setCameraButtonTextRotation(button, 0f)
-                button.ellipsize = TextUtils.TruncateAt.END
-                button.maxLines = 1
-            }
+            return
+        }
 
-            val liveRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-            }
-            startButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginEnd = dp(8)
-            }
-            stopButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginStart = dp(8)
-            }
-            liveRow.addView(startButton)
-            liveRow.addView(stopButton)
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton).forEach { button ->
+            setCameraButtonTextRotation(button, 0f)
+            button.ellipsize = TextUtils.TruncateAt.END
+            button.maxLines = 1
+        }
 
-            val toolsRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = dp(12)
-                }
-            }
-            // 竖屏：4个工具按钮均分宽度
-            switchButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginEnd = dp(6)
-            }
-            lockButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginStart = dp(6)
-                marginEnd = dp(6)
-            }
-            lightButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginStart = dp(6)
-                marginEnd = dp(6)
-            }
-            imageButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginStart = dp(6)
-            }
-            toolsRow.addView(switchButton)
-            toolsRow.addView(lockButton)
-            toolsRow.addView(lightButton)
-            toolsRow.addView(imageButton)
+        val liveRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        startButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginEnd = dp(8)
+        }
+        stopButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(8)
+        }
+        liveRow.addView(startButton)
+        liveRow.addView(stopButton)
 
-            version.visibility = View.VISIBLE
-            controls.addView(liveRow)
-            controls.addView(toolsRow)
-            controls.addView(version)
-
-            // 竖屏时调整悬浮喇叭位置到底部右侧
-            audioFloat?.let {
-                (it.layoutParams as? FrameLayout.LayoutParams)?.apply {
-                    gravity = Gravity.BOTTOM or Gravity.END
-                    setMargins(0, 0, dp(12), dp(14))
-                }
-                it.requestLayout()
+        val toolsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(12)
             }
         }
-        updateStatusBarForCamera()
+        switchButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginEnd = dp(6)
+        }
+        lockButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(6)
+            marginEnd = dp(6)
+        }
+        lightButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(6)
+            marginEnd = dp(6)
+        }
+        imageButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(6)
+            marginEnd = dp(6)
+        }
+        toolsRow.addView(switchButton)
+        toolsRow.addView(lockButton)
+        toolsRow.addView(lightButton)
+        toolsRow.addView(imageButton)
+
+        version.visibility = View.VISIBLE
+        controls.addView(liveRow)
+        controls.addView(toolsRow)
+        controls.addView(version)
     }
 
     private fun cameraControlsLayoutParams(isLandscape: Boolean): FrameLayout.LayoutParams =
@@ -2455,21 +2492,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 Gravity.BOTTOM
             )
         }
-
-    private fun updateStatusBarForCamera() {
-        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        if (isLandscape) {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
-        }
-    }
 
     private fun startOrientationTracking() {
         if (orientationListener == null) {
