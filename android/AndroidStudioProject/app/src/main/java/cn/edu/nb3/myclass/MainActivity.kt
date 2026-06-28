@@ -66,6 +66,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         Courseware
     }
 
+    private enum class CoursewareSubScreen {
+        None,
+        Source,
+        ListLoading,
+        ServerList,
+        Playback
+    }
+
     private enum class PresentationMode {
         Camera,
         ScreenShare
@@ -138,6 +146,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareFastSeekRunnable: Runnable? = null
     private var signalReconnectInProgress = false
     private var savedCoursewareState: CoursewareState? = null
+    private var coursewareSubScreen: CoursewareSubScreen = CoursewareSubScreen.None
     private var initialIntentProcessed = false
     private val coursewareHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -235,9 +244,25 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 cameraRenderer?.requestLayout()
                 refreshLockedFramePreviewAfterLayout()
             }
-            Screen.ScreenShare,
+            Screen.ScreenShare -> {
+                // 共享屏幕页面布局简单，无需重建
+            }
             Screen.Courseware -> {
-                // 这些页面的布局在 onConfigurationChanged 中无需特殊处理
+                // 根据子页面类型重建课件界面
+                when (coursewareSubScreen) {
+                    CoursewareSubScreen.Source -> showCoursewareSourceScreen()
+                    CoursewareSubScreen.ListLoading -> showCoursewareListLoadingScreen()
+                    CoursewareSubScreen.ServerList -> {
+                        // 服务器列表由异步数据填充，此处重建为加载中状态
+                        showCoursewareListLoadingScreen()
+                        loadServerCoursewareList()
+                    }
+                    CoursewareSubScreen.Playback -> showCoursewareScreen(
+                        title = coursewareTitle,
+                        isUploading = coursewareUploadInProgress
+                    )
+                    CoursewareSubScreen.None -> {}
+                }
             }
         }
         syncDeviceRotationFromDisplay(force = true)
@@ -1246,22 +1271,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun showCoursewareSourceScreen() {
         currentScreen = Screen.Courseware
-        val root = baseColumn().apply {
-            setPadding(dp(28), dp(32), dp(28), dp(32))
-        }
-        root.addView(titleText("播放课件", 28f))
-        root.addView(primaryButton("服务器课件").apply {
+        coursewareSubScreen = CoursewareSubScreen.Source
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+        val serverBtn = primaryButton("服务器课件").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
             ).apply {
-                topMargin = dp(34)
+                topMargin = dp(if (isLandscape) 0 else 34)
             }
             setOnClickListener {
                 loadServerCoursewareList()
             }
-        })
-        root.addView(primaryButton("本地上传").apply {
+        }
+        val uploadBtn = primaryButton("本地上传").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1271,8 +1295,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 launchCoursewarePicker()
             }
-        })
-        root.addView(secondaryButton("返回菜单").apply {
+        }
+        val backBtn = secondaryButton("返回菜单").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1282,19 +1306,58 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 showMenuScreen()
             }
-        })
+        }
         statusText = bodyText("可直接打开服务器暂存课件，或从手机重新上传").apply {
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(24)
+                topMargin = dp(if (isLandscape) 12 else 24)
             }
         }
-        root.addView(statusText)
-        root.addView(versionLabel())
-        setContentView(root)
+
+        if (isLandscape) {
+            // 横屏：左右结构
+            val root = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                gravity = Gravity.CENTER
+            }
+            val leftPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(24)
+                }
+            }
+            leftPanel.addView(titleText("播放课件", 22f))
+            leftPanel.addView(statusText)
+            leftPanel.addView(versionLabel())
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            rightPanel.addView(serverBtn)
+            rightPanel.addView(uploadBtn)
+            rightPanel.addView(backBtn)
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            // 竖屏：垂直结构
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("播放课件", 28f))
+            root.addView(serverBtn)
+            root.addView(uploadBtn)
+            root.addView(backBtn)
+            root.addView(statusText)
+            root.addView(versionLabel())
+            setContentView(root)
+        }
     }
 
     private fun loadServerCoursewareList() {
@@ -1321,98 +1384,60 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun showCoursewareListLoadingScreen() {
         currentScreen = Screen.Courseware
-        val root = baseColumn().apply {
-            setPadding(dp(28), dp(32), dp(28), dp(32))
-        }
-        root.addView(titleText("服务器课件", 28f))
+        coursewareSubScreen = CoursewareSubScreen.ListLoading
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
         statusText = bodyText("正在加载服务器暂存课件...").apply {
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(24)
+                topMargin = dp(if (isLandscape) 12 else 24)
             }
         }
-        root.addView(statusText)
-        root.addView(versionLabel())
-        setContentView(root)
+
+        if (isLandscape) {
+            val root = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                gravity = Gravity.CENTER
+            }
+            val leftPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(24)
+                }
+            }
+            leftPanel.addView(titleText("服务器课件", 22f))
+            leftPanel.addView(versionLabel())
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            rightPanel.addView(statusText)
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("服务器课件", 28f))
+            root.addView(statusText)
+            root.addView(versionLabel())
+            setContentView(root)
+        }
     }
 
     private fun showServerCoursewareList(items: List<StoredCoursewareItem>) {
         currentScreen = Screen.Courseware
-        val root = baseColumn().apply {
-            setPadding(dp(28), dp(32), dp(28), dp(32))
-        }
-        root.addView(titleText("服务器课件", 28f))
+        coursewareSubScreen = CoursewareSubScreen.ServerList
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        if (items.isEmpty()) {
-            statusText = bodyText("服务器还没有暂存课件").apply {
-                gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = dp(24)
-                }
-            }
-            root.addView(statusText)
-        } else {
-            val listColumn = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-            }
-            items.forEachIndexed { index, item ->
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply {
-                        if (index > 0) {
-                            topMargin = dp(4)
-                        }
-                    }
-                }
-                row.addView(secondaryButton("${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}").apply {
-                    maxLines = 2
-                    setSingleLine(false)
-                    ellipsize = TextUtils.TruncateAt.END
-                    layoutParams = LinearLayout.LayoutParams(
-                        0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        1f
-                    ).apply {
-                        marginEnd = dp(4)
-                    }
-                    setOnClickListener {
-                        openStoredCourseware(item)
-                    }
-                })
-                row.addView(deleteButton("删除").apply {
-                    setOnClickListener {
-                        confirmDeleteServerCourseware(item)
-                    }
-                })
-                listColumn.addView(row)
-            }
-            root.addView(ScrollView(this).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    0,
-                    1f
-                ).apply {
-                    topMargin = dp(16)
-                }
-                addView(listColumn)
-            })
-        }
-
-        root.addView(primaryButton("本地上传").apply {
+        val uploadBtn = primaryButton("本地上传").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1422,8 +1447,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 launchCoursewarePicker()
             }
-        })
-        root.addView(secondaryButton("返回").apply {
+        }
+        val backBtn = secondaryButton("返回").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1433,9 +1458,152 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 showCoursewareSourceScreen()
             }
-        })
-        root.addView(versionLabel())
-        setContentView(root)
+        }
+
+        if (isLandscape) {
+            // 横屏：左侧列表，右侧按钮
+            val root = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+            }
+            val leftPanel = baseColumn().apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    marginEnd = dp(20)
+                }
+            }
+            leftPanel.addView(titleText("服务器课件", 22f))
+
+            if (items.isEmpty()) {
+                leftPanel.addView(bodyText("服务器还没有暂存课件").apply {
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(24) }
+                })
+            } else {
+                val listColumn = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                items.forEachIndexed { index, item ->
+                    val row = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            if (index > 0) topMargin = dp(4)
+                        }
+                    }
+                    row.addView(secondaryButton("${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}").apply {
+                        maxLines = 2
+                        setSingleLine(false)
+                        ellipsize = TextUtils.TruncateAt.END
+                        layoutParams = LinearLayout.LayoutParams(
+                            0,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            1f
+                        ).apply { marginEnd = dp(4) }
+                        setOnClickListener { openStoredCourseware(item) }
+                    })
+                    row.addView(deleteButton("删除").apply {
+                        setOnClickListener { confirmDeleteServerCourseware(item) }
+                    })
+                    listColumn.addView(row)
+                }
+                leftPanel.addView(ScrollView(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                    ).apply { topMargin = dp(16) }
+                    addView(listColumn)
+                })
+            }
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = dp(20)
+                }
+            }
+            rightPanel.addView(uploadBtn)
+            rightPanel.addView(backBtn)
+            rightPanel.addView(versionLabel())
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            // 竖屏
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("服务器课件", 28f))
+
+            if (items.isEmpty()) {
+                root.addView(bodyText("服务器还没有暂存课件").apply {
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(24) }
+                })
+            } else {
+                val listColumn = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                items.forEachIndexed { index, item ->
+                    val row = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            if (index > 0) topMargin = dp(4)
+                        }
+                    }
+                    row.addView(secondaryButton("${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}").apply {
+                        maxLines = 2
+                        setSingleLine(false)
+                        ellipsize = TextUtils.TruncateAt.END
+                        layoutParams = LinearLayout.LayoutParams(
+                            0,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            1f
+                        ).apply { marginEnd = dp(4) }
+                        setOnClickListener { openStoredCourseware(item) }
+                    })
+                    row.addView(deleteButton("删除").apply {
+                        setOnClickListener { confirmDeleteServerCourseware(item) }
+                    })
+                    listColumn.addView(row)
+                }
+                root.addView(ScrollView(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                    ).apply { topMargin = dp(16) }
+                    addView(listColumn)
+                })
+            }
+
+            root.addView(uploadBtn)
+            root.addView(backBtn)
+            root.addView(versionLabel())
+            setContentView(root)
+        }
     }
 
     private fun fetchServerCoursewareListBlocking(): List<StoredCoursewareItem> {
@@ -1705,11 +1873,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun showCoursewareScreen(title: String, isUploading: Boolean) {
         currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.Playback
         coursewareUploadInProgress = isUploading
-        val root = baseColumn().apply {
-            setPadding(dp(28), dp(32), dp(28), dp(32))
-        }
-        root.addView(titleText("播放课件", 28f))
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
         statusText = bodyText(
             if (isUploading) {
                 "正在上传并转换：$title"
@@ -1724,10 +1891,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(24)
+                topMargin = dp(if (isLandscape) 12 else 24)
             }
         }
-        root.addView(statusText)
 
         val pageRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1736,7 +1902,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
             ).apply {
-                topMargin = dp(32)
+                topMargin = dp(if (isLandscape) 16 else 32)
             }
         }
         pageRow.addView(secondaryButton("上一屏").apply {
@@ -1753,46 +1919,93 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             configureCoursewareNavigationButton(this, 1)
         })
-        root.addView(pageRow)
 
-        if (isUploading) {
-            root.addView(secondaryButton("返回菜单").apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(58)
-                ).apply {
-                    topMargin = dp(16)
+        if (isLandscape) {
+            // 横屏：左侧标题+状态+版本，右侧翻页按钮+操作按钮
+            val root = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                gravity = Gravity.CENTER
+            }
+            val leftPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(24)
                 }
-                setOnClickListener {
-                    closeCoursewareAndReturnMenu()
-                }
-            })
+            }
+            leftPanel.addView(titleText("播放课件", 22f))
+            leftPanel.addView(statusText)
+            leftPanel.addView(versionLabel())
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            rightPanel.addView(pageRow)
+            if (isUploading) {
+                rightPanel.addView(secondaryButton("返回菜单").apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(58)
+                    ).apply { topMargin = dp(16) }
+                    setOnClickListener { closeCoursewareAndReturnMenu() }
+                })
+            } else {
+                rightPanel.addView(primaryButton("返回主菜单").apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(58)
+                    ).apply { topMargin = dp(16) }
+                    setOnClickListener { pauseCoursewareAndReturnMenu() }
+                })
+                rightPanel.addView(secondaryButton("结束播放").apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(58)
+                    ).apply { topMargin = dp(12) }
+                    setOnClickListener { closeCoursewareAndReturnMenu() }
+                })
+            }
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
         } else {
-            root.addView(primaryButton("返回主菜单").apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(58)
-                ).apply {
-                    topMargin = dp(16)
-                }
-                setOnClickListener {
-                    pauseCoursewareAndReturnMenu()
-                }
-            })
-            root.addView(secondaryButton("结束播放").apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(58)
-                ).apply {
-                    topMargin = dp(12)
-                }
-                setOnClickListener {
-                    closeCoursewareAndReturnMenu()
-                }
-            })
+            // 竖屏
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("播放课件", 28f))
+            root.addView(statusText)
+            root.addView(pageRow)
+
+            if (isUploading) {
+                root.addView(secondaryButton("返回菜单").apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(58)
+                    ).apply { topMargin = dp(16) }
+                    setOnClickListener { closeCoursewareAndReturnMenu() }
+                })
+            } else {
+                root.addView(primaryButton("返回主菜单").apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(58)
+                    ).apply { topMargin = dp(16) }
+                    setOnClickListener { pauseCoursewareAndReturnMenu() }
+                })
+                root.addView(secondaryButton("结束播放").apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(58)
+                    ).apply { topMargin = dp(12) }
+                    setOnClickListener { closeCoursewareAndReturnMenu() }
+                })
+            }
+            root.addView(versionLabel())
+            setContentView(root)
         }
-        root.addView(versionLabel())
-        setContentView(root)
     }
 
     private fun coursewareStatusText(title: String): String {
@@ -1931,11 +2144,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareTitle = ""
         coursewareUrl = ""
         savedCoursewareState = null
+        coursewareSubScreen = CoursewareSubScreen.None
         showMenuScreen()
     }
 
     private fun pauseCoursewareAndReturnMenu() {
         cancelCoursewareFastSeek()
+        coursewareSubScreen = CoursewareSubScreen.None
         savedCoursewareState = CoursewareState(
             title = coursewareTitle,
             url = coursewareUrl,
