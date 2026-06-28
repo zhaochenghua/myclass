@@ -518,6 +518,14 @@ function createPeerConnection() {
   peerConnection.addEventListener('track', (event) => {
     configureLowLatencyReceiver(event.receiver);
 
+    // Unmute video element when audio track arrives
+    if (event.track.kind === 'audio') {
+      elements.remoteVideo.muted = false;
+      event.track.addEventListener('unmute', () => {
+        elements.remoteVideo.muted = false;
+      });
+    }
+
     // 处理 stream：某些浏览器 event.streams 可能为空
     let stream = null;
     if (event.streams && event.streams.length > 0) {
