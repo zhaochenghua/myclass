@@ -106,6 +106,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var frameLockButton: MaterialButton? = null
     private var torchButton: MaterialButton? = null
     private var imageCastButton: MaterialButton? = null
+    private var audioToggleButton: MaterialButton? = null
     private var cameraControls: LinearLayout? = null
     private var cameraVersionLabel: TextView? = null
     private var orientationListener: OrientationEventListener? = null
@@ -163,7 +164,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             showCameraScreen(openImagePicker = shouldOpenImagePicker)
         } else {
             openImagePickerAfterPermission = false
-            toast("需要摄像头权限才能直播")
+            toast("需要摄像头和麦克风权限才能直播")
         }
     }
 
@@ -1921,6 +1922,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 launchImagePickerForProjection()
             }
         }
+        audioToggleButton = cameraSecondaryButton("🔇 静音").apply {
+            isEnabled = true
+            setOnClickListener {
+                val nextEnabled = webRtcClient?.toggleAudio() == true
+                updateAudioButton(isEnabled = nextEnabled)
+                toast(if (nextEnabled) "麦克风已开启" else "麦克风已静音")
+            }
+        }
         cameraVersionLabel = versionLabel(onDark = true)
         updateCameraControlsLayout()
         root.addView(
@@ -2000,7 +2009,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun ensureCameraPermissions(openImagePicker: Boolean = false) {
         openImagePickerAfterPermission = openImagePicker
         val permissions = arrayOf(
-            Manifest.permission.CAMERA
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
         )
         val allGranted = permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
@@ -2171,6 +2181,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         frameLockButton = null
         torchButton = null
         imageCastButton = null
+        audioToggleButton = null
         cameraControls = null
         cameraVersionLabel = null
         activePresentationMode = PresentationMode.Camera
@@ -2247,6 +2258,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         setCameraButtonText(imageCastButton, if (isProjecting) "恢复摄像头" else "图片投屏")
     }
 
+    private fun updateAudioButton(isEnabled: Boolean) {
+        setCameraButtonText(audioToggleButton, if (isEnabled) "🔊 有声" else "🔇 静音")
+    }
+
     private fun showSelectedImage(uri: Uri) {
         runCatching {
             webRtcClient?.setFrameLocked(false)
@@ -2269,10 +2284,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val lockButton = frameLockButton ?: return
         val lightButton = torchButton ?: return
         val imageButton = imageCastButton ?: return
+        val audioButton = audioToggleButton ?: return
         val version = cameraVersionLabel ?: return
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton, version).forEach { view ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton, audioButton, version).forEach { view ->
             (view.parent as? ViewGroup)?.removeView(view)
         }
         controls.removeAllViews()
@@ -2287,7 +2303,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         )
 
         if (isLandscape) {
-            listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton).forEach { button ->
+            listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton, audioButton).forEach { button ->
                 setCameraButtonTextRotation(button, 0f)
                 button.ellipsize = TextUtils.TruncateAt.END
                 button.maxLines = 2
@@ -2305,7 +2321,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
 
-        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton).forEach { button ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton, audioButton).forEach { button ->
             setCameraButtonTextRotation(button, 0f)
             button.ellipsize = TextUtils.TruncateAt.END
             button.maxLines = 1
@@ -2347,11 +2363,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         imageButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
             marginStart = dp(6)
+            marginEnd = dp(6)
+        }
+        audioButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+            marginStart = dp(6)
         }
         toolsRow.addView(switchButton)
         toolsRow.addView(lockButton)
         toolsRow.addView(lightButton)
         toolsRow.addView(imageButton)
+        toolsRow.addView(audioButton)
 
         version.visibility = View.VISIBLE
         controls.addView(liveRow)
