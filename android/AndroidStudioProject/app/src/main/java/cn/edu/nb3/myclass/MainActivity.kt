@@ -223,10 +223,24 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        cameraRenderer?.requestLayout()
-        updateCameraControlsLayout()
+        // 横竖屏切换时重建当前页面布局
+        when (currentScreen) {
+            Screen.Auth -> showAuthScreen()
+            Screen.Connect -> showConnectScreen()
+            Screen.Menu -> showMenuScreen()
+            Screen.Camera -> {
+                // 不重建整个相机页面（会中断预览），仅更新按钮布局和悬浮按钮位置
+                updateCameraControlsLayout()
+                updateAudioButtonPosition()
+                cameraRenderer?.requestLayout()
+                refreshLockedFramePreviewAfterLayout()
+            }
+            Screen.ScreenShare,
+            Screen.Courseware -> {
+                // 这些页面的布局在 onConfigurationChanged 中无需特殊处理
+            }
+        }
         syncDeviceRotationFromDisplay(force = true)
-        refreshLockedFramePreviewAfterLayout()
     }
 
     override fun onResume() {
@@ -999,23 +1013,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun showMenuScreen() {
         currentScreen = Screen.Menu
-        val root = baseColumn().apply {
-            setPadding(dp(28), dp(32), dp(28), dp(32))
-        }
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        root.addView(titleText("功能菜单", 28f))
-        root.addView(primaryButton("摄像头直播").apply {
+        val cameraBtn = primaryButton("摄像头直播").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
             ).apply {
-                topMargin = dp(34)
+                topMargin = dp(if (isLandscape) 0 else 34)
             }
             setOnClickListener {
                 ensureCameraPermissions()
             }
-        })
-        root.addView(primaryButton("图片投屏").apply {
+        }
+        val imageBtn = primaryButton("图片投屏").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1025,8 +1036,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 ensureCameraPermissions(openImagePicker = true)
             }
-        })
-        root.addView(primaryButton("共享屏幕").apply {
+        }
+        val screenBtn = primaryButton("共享屏幕").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1036,8 +1047,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 requestScreenSharePermission()
             }
-        })
-        root.addView(primaryButton(if (savedCoursewareState != null) "继续播放课件" else "播放课件").apply {
+        }
+        val coursewareBtn = primaryButton(if (savedCoursewareState != null) "继续播放课件" else "播放课件").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1047,19 +1058,60 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 resumeOrShowCoursewareSource()
             }
-        })
+        }
         statusText = bodyText("已连接课堂").apply {
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(24)
+                topMargin = dp(if (isLandscape) 12 else 24)
             }
         }
-        root.addView(statusText)
-        root.addView(versionLabel())
-        setContentView(root)
+
+        if (isLandscape) {
+            // 横屏：左右结构
+            val root = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                gravity = Gravity.CENTER
+            }
+            val leftPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(24)
+                }
+            }
+            leftPanel.addView(titleText("功能菜单", 22f))
+            leftPanel.addView(statusText)
+            leftPanel.addView(versionLabel())
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            rightPanel.addView(cameraBtn)
+            rightPanel.addView(imageBtn)
+            rightPanel.addView(screenBtn)
+            rightPanel.addView(coursewareBtn)
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            // 竖屏：垂直结构
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("功能菜单", 28f))
+            root.addView(cameraBtn)
+            root.addView(imageBtn)
+            root.addView(screenBtn)
+            root.addView(coursewareBtn)
+            root.addView(statusText)
+            root.addView(versionLabel())
+            setContentView(root)
+        }
     }
 
     private fun requestScreenSharePermission() {
@@ -2009,14 +2061,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         audioToggleButton = MaterialButton(this).apply {
             text = "🔇"
-            textSize = 18f
+            textSize = 20f
             contentDescription = "开启麦克风"
             insetTop = 0
             insetBottom = 0
-            setBackgroundColor(Color.argb(160, 0, 0, 0))
-            strokeColor = ColorStateList.valueOf(Color.argb(80, 255, 255, 255))
-            strokeWidth = dp(1)
-            cornerRadius = dp(24)
+            setBackgroundColor(Color.argb(180, 40, 40, 40))
+            strokeColor = ColorStateList.valueOf(Color.argb(120, 255, 255, 255))
+            strokeWidth = dp(2)
+            cornerRadius = dp(26)
             setPadding(0, 0, 0, 0)
             isEnabled = true
             setOnClickListener {
@@ -2027,18 +2079,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         cameraVersionLabel = versionLabel(onDark = true)
         updateCameraControlsLayout()
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         root.addView(
             controls,
-            controls.layoutParams ?: cameraControlsLayoutParams(isLandscape = false)
+            controls.layoutParams ?: cameraControlsLayoutParams(isLandscape)
         )
-        // 悬浮喇叭图标，置于预览右下角
+        // 悬浮麦克风图标，根据横竖屏调整位置
         val audioBtn = audioToggleButton!!
         root.addView(
             audioBtn,
-            FrameLayout.LayoutParams(dp(48), dp(48)).apply {
-                gravity = Gravity.BOTTOM or Gravity.END
-                setMargins(0, 0, dp(16), dp(16))
-            }
+            audioButtonLayoutParams(isLandscape)
         )
 
         setContentView(root)
@@ -2364,9 +2414,29 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun updateAudioButton(isEnabled: Boolean) {
         audioToggleButton?.apply {
-            text = if (isEnabled) "🔊" else "🔇"
+            text = if (isEnabled) "🎤" else "🔇"
             contentDescription = if (isEnabled) "关闭麦克风" else "开启麦克风"
         }
+    }
+
+    private fun audioButtonLayoutParams(isLandscape: Boolean): FrameLayout.LayoutParams =
+        FrameLayout.LayoutParams(dp(52), dp(52)).apply {
+            if (isLandscape) {
+                // 横屏：右侧偏左，避免挡住右侧控制栏
+                gravity = Gravity.BOTTOM or Gravity.END
+                setMargins(0, 0, dp(100), dp(24))
+            } else {
+                // 竖屏：右下角调高，避免挡住底部控制按钮
+                gravity = Gravity.BOTTOM or Gravity.END
+                setMargins(0, 0, dp(20), dp(110))
+            }
+        }
+
+    private fun updateAudioButtonPosition() {
+        val btn = audioToggleButton ?: return
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        btn.layoutParams = audioButtonLayoutParams(isLandscape)
+        btn.requestLayout()
     }
 
     private fun showSelectedImage(uri: Uri) {
