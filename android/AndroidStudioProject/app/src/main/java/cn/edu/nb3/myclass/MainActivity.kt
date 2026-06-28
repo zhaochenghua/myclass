@@ -2052,6 +2052,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 if (webRtcClient?.isImageProjectionActive() == true) {
                     updateImageCastButton(isProjecting = false)
+                    audioToggleButton?.visibility = View.VISIBLE
                     webRtcClient?.clearImageProjection()
                     sendCurrentDeviceOrientation(force = true)
                     return@setOnClickListener
@@ -2428,7 +2429,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             } else {
                 // 竖屏：右下角调高，避免挡住底部控制按钮
                 gravity = Gravity.BOTTOM or Gravity.END
-                setMargins(0, 0, dp(20), dp(110))
+                setMargins(0, 0, dp(20), dp(150))
             }
         }
 
@@ -2446,6 +2447,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             webRtcClient?.showImage(uri)
         }.onSuccess {
             updateImageCastButton(isProjecting = true)
+            audioToggleButton?.visibility = View.GONE
             sendCurrentDeviceOrientation(force = true)
         }.onFailure {
             updateStatus(it.message ?: "图片投屏失败")
