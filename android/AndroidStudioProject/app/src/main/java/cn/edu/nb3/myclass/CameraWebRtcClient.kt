@@ -10,6 +10,8 @@ import android.media.projection.MediaProjection
 import android.net.Uri
 import android.util.Log
 import android.util.Size
+import org.webrtc.AudioSource
+import org.webrtc.AudioTrack
 import org.webrtc.CandidatePairChangeEvent
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
@@ -63,10 +65,13 @@ class CameraWebRtcClient(
     private var cameraCapturer: ControlledCamera2Capturer? = null
     private var videoSource: VideoSource? = null
     private var localVideoTrack: VideoTrack? = null
+    private var localAudioTrack: AudioTrack? = null
     private var localVideoSender: RtpSender? = null
+    private var localAudioSender: RtpSender? = null
     private var peerConnection: PeerConnection? = null
     private var useFrontCamera = initialUseFrontCamera
     private var previewStarted = false
+    private var audioEnabled = false
 
     init {
         initializeFactoryOnce(appContext)
@@ -117,6 +122,14 @@ class CameraWebRtcClient(
         cameraCapturer = capturer as? ControlledCamera2Capturer
         videoSource = source
         localVideoTrack = videoTrack
+
+        // Create audio track (disabled by default)
+        val audioConstraints = MediaConstraints()
+        val audioSource = factory.createAudioSource(audioConstraints)
+        val audioTrack = factory.createAudioTrack("myclass-audio", audioSource)
+        audioTrack.setEnabled(false)
+        localAudioTrack = audioTrack
+
         previewStarted = true
         if (captureMode == WebRtcCaptureMode.Screen) {
             updateStatus("屏幕共享已准备")
@@ -207,10 +220,16 @@ class CameraWebRtcClient(
                 configureVideoSender(sender)
             }
         }
+        // Add audio track (disabled by default)
+        localAudioTrack?.let {
+            connection.addTrack(it, listOf("myclass-stream"))?.also { sender ->
+                localAudioSender = sender
+            }
+        }
         resendStaticPresentationBurst()
 
         val constraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         }
 
@@ -232,6 +251,20 @@ class CameraWebRtcClient(
     }
 
     fun isLive(): Boolean = peerConnection != null
+
+    fun isAudioEnabled(): Boolean = audioEnabled
+
+    fun setAudioEnabled(enabled: Boolean): Boolean {
+        audioEnabled = enabled
+        localAudioTrack?.setEnabled(enabled)
+        return true
+    }
+
+    fun toggleAudio(): Boolean {
+        audioEnabled = !audioEnabled
+        localAudioTrack?.setEnabled(audioEnabled)
+        return audioEnabled
+    }
 
     fun setTorchEnabled(enabled: Boolean): Boolean =
         cameraCapturer?.setTorchEnabled(enabled) == true
@@ -401,6 +434,7 @@ class CameraWebRtcClient(
         peerConnection?.dispose()
         peerConnection = null
         localVideoSender = null
+        localAudioSender = null
         updateStatus("直播已停止，摄像头预览保留")
     }
 
@@ -416,10 +450,12 @@ class CameraWebRtcClient(
         cameraCapturer = null
         surfaceTextureHelper?.dispose()
         localVideoTrack?.dispose()
+        localAudioTrack?.dispose()
         videoSource?.dispose()
         factory.dispose()
         eglBase.release()
         previewStarted = false
+        audioEnabled = false
     }
 
     private fun configureVideoSender(sender: RtpSender) {
