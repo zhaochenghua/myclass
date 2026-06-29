@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="myclass_background">#0A0E14</color>
+    <color name="myclass_background">#000000</color>
     <color name="myclass_surface">#121822</color>
     <color name="myclass_primary">#4DA6FF</color>
     <color name="myclass_on_primary">#FFFFFF</color>
