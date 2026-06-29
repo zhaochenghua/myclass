@@ -516,8 +516,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             // 横屏：左右结构
-            val root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+            val root = landscapeRoot().apply {
                 setPadding(dp(24), dp(16), dp(24), dp(16))
                 gravity = Gravity.CENTER
             }
@@ -705,8 +704,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             // 横屏：左右结构
-            val root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+            val root = landscapeRoot().apply {
                 setPadding(dp(24), dp(16), dp(24), dp(16))
                 gravity = Gravity.CENTER
             }
@@ -1096,8 +1094,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             // 横屏：左右结构
-            val root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+            val root = landscapeRoot().apply {
                 setPadding(dp(24), dp(16), dp(24), dp(16))
                 gravity = Gravity.CENTER
             }
@@ -1319,8 +1316,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             // 横屏：左右结构
-            val root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+            val root = landscapeRoot().apply {
                 setPadding(dp(24), dp(16), dp(24), dp(16))
                 gravity = Gravity.CENTER
             }
@@ -1398,8 +1394,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         if (isLandscape) {
-            val root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+            val root = landscapeRoot().apply {
                 setPadding(dp(24), dp(16), dp(24), dp(16))
                 gravity = Gravity.CENTER
             }
@@ -1462,8 +1457,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             // 横屏：左侧列表，右侧按钮
-            val root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+            val root = landscapeRoot().apply {
                 setPadding(dp(24), dp(16), dp(24), dp(16))
             }
             val leftPanel = baseColumn().apply {
@@ -1922,8 +1916,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             // 横屏：左侧标题+状态+版本，右侧翻页按钮+操作按钮
-            val root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+            val root = landscapeRoot().apply {
                 setPadding(dp(24), dp(16), dp(24), dp(16))
                 gravity = Gravity.CENTER
             }
@@ -2999,6 +2992,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
+            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_background))
+        }
+
+    private fun landscapeRoot(): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_background))
         }
 

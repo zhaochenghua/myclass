@@ -3,6 +3,7 @@
     <style name="Theme.MyClass" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/myclass_background</item>
         <item name="android:navigationBarColor">@color/myclass_background</item>
         <item name="android:statusBarColor">@color/myclass_background</item>
         <item name="colorPrimary">@color/myclass_primary</item>
