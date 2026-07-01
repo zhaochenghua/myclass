@@ -5,7 +5,7 @@ const state = {
   reconnectTimer: null,
   teacherConnected: false,
   roomCode: null,
-  coursewareConnTimer: null,
+
   presentationMode: 'waiting',
   courseware: null,
   videoOrientation: {
@@ -461,6 +461,7 @@ async function handleSignalMessage(message) {
     case 'room.created':
       state.roomCode = message.code;
       elements.roomCode.textContent = message.code;
+      elements.coursewareConnCode.textContent = message.code;
       setWaitingStatus('等待教师连接...');
       break;
     case 'teacher.online':
@@ -1108,31 +1109,13 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   // 4. 清理下载相关
   try { hideDownloadButton(); } catch {}
 
-  // 5. 更新提示 & 隐藏连接码角标
-  try { elements.coursewareConnIndicator.hidden = true; } catch {}
-  if (state.coursewareConnTimer) { clearTimeout(state.coursewareConnTimer); state.coursewareConnTimer = null; }
+  // 5. 更新提示
   try { setWaitingStatus(statusText); } catch {}
 }
 
 function updateCoursewareConnectionIndicator() {
-  const isCourseware = state.presentationMode === 'courseware';
-  const shouldShow = isCourseware && !state.teacherConnected;
-
-  // 清除已有的自动隐藏定时器
-  if (state.coursewareConnTimer) {
-    clearTimeout(state.coursewareConnTimer);
-    state.coursewareConnTimer = null;
-  }
-
-  elements.coursewareConnIndicator.hidden = !shouldShow;
-  if (shouldShow) {
-    elements.coursewareConnCode.textContent = state.roomCode || '----';
-    // 8 秒后自动隐藏
-    state.coursewareConnTimer = setTimeout(() => {
-      elements.coursewareConnIndicator.hidden = true;
-      state.coursewareConnTimer = null;
-    }, 8000);
-  }
+  // 连接码始终保持可见，仅更新显示内容
+  elements.coursewareConnCode.textContent = state.roomCode || '----';
 }
 
 async function loadCoursewareDocument(courseware) {
@@ -1946,7 +1929,6 @@ function showJoinView() {
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
-  elements.coursewareConnIndicator.hidden = true;
 }
 
 function showVideoView() {
@@ -1961,8 +1943,6 @@ function showVideoView() {
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   elements.videoStatus.hidden = false;
-  elements.coursewareConnIndicator.hidden = true;
-  if (state.coursewareConnTimer) { clearTimeout(state.coursewareConnTimer); state.coursewareConnTimer = null; }
 }
 
 function showCoursewareView() {
