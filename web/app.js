@@ -29,10 +29,19 @@ const state = {
     pages: [{ strokes: [] }],  // 每页保存已完成笔画
     currentPage: 0,
     activeStrokes: new Map(),  // 黑板当前页活跃笔画，支持多点
-    tool: 'pen',               // 'pen' | 'eraser' | 'hand'
+    tool: 'pen',               // 'pen' | 'eraser' | 'hand' | 'select'
     eraserWidth: 40,           // 板擦半径(px)
-    palmDetected: false,       // 是否由手掌触发板擦
     currentColor: '#ffd166',   // 黑板专用颜色
+    // 圈选系统
+    selection: {
+      lassoPoints: [],          // 正在绘制的套索多边形点
+      drawing: false,           // 是否正在绘制套索
+      confirmedIndices: [],     // 已确认选中的笔画索引（按 page.strokes 顺序）
+      bbox: null,               // 选中笔画的包围盒 { minX, minY, maxX, maxY }
+      dragging: false,          // 是否正在拖拽移动选中笔画
+      dragStartWX: 0, dragStartWY: 0, // 拖拽起始世界坐标
+      dragSnapshot: null,       // 拖拽前的笔画深拷贝（用于实时渲染）
+    },
     panX: 0, panY: 0,          // 视口在世界坐标中的偏移(px)
     scale: 1,                  // 缩放级别
     MIN_SCALE: 0.3,
@@ -135,8 +144,9 @@ const elements = {
   blackboardClearButton: document.getElementById('blackboardClearButton'),
   blackboardEraserButton: document.getElementById('blackboardEraserButton'),
   blackboardEraserCursor: document.getElementById('blackboardEraserCursor'),
-  blackboardPalmIndicator: document.getElementById('blackboardPalmIndicator'),
   blackboardHandButton: document.getElementById('blackboardHandButton'),
+  blackboardSelectButton: document.getElementById('blackboardSelectButton'),
+  blackboardDeleteSelButton: document.getElementById('blackboardDeleteSelButton'),
   blackboardColorButtons: Array.from(document.querySelectorAll('#blackboardColors .annotation-color')),
   blackboardColorsContainer: document.getElementById('blackboardColors'),
   // 视频播放器
@@ -317,6 +327,8 @@ async function bootstrap() {
     elements.blackboardClearButton.addEventListener('click', clearBlackboard);
     elements.blackboardEraserButton.addEventListener('click', toggleBlackboardEraser);
     elements.blackboardHandButton.addEventListener('click', toggleBlackboardHand);
+    elements.blackboardSelectButton.addEventListener('click', toggleBlackboardSelect);
+    elements.blackboardDeleteSelButton.addEventListener('click', deleteBlackboardSelection);
     elements.blackboardColorButtons.forEach((btn) => {
       btn.addEventListener('click', () => setBlackboardColor(btn.dataset.color));
     });
@@ -2107,16 +2119,15 @@ function toggleBlackboard(forceState) {
   if (open) {
     flushBlackboardActiveStrokes();
     state.blackboard.activeStrokes.clear();
-    state.blackboard.palmDetected = false;
     state.blackboard.panX = 0;
     state.blackboard.panY = 0;
     state.blackboard.scale = 1;
     state.blackboard._panActive = false;
     state.blackboard._pinch.active = false;
     state.blackboard._activePointers.clear();
+    clearBlackboardSelection();
     setBlackboardTool('pen');
     updateBlackboardColorButtons();
-    hidePalmIndicator();
     resizeBlackboardCanvas();
     renderBlackboard();
     updateBlackboardPageIndicator();
@@ -2140,17 +2151,10 @@ function beginBlackboardStroke(event) {
     return;
   }
 
-  // 手掌检测：触屏设备上接触面积 > 22px 判定为手掌 → 自动切板擦
-  // 阈值 50px：大屏上单指触摸不会超过此值，但手掌会
-  const PALM_THRESHOLD = 50;
-  const isPalmTouch = event.pointerType === 'touch'
-    && event.width > PALM_THRESHOLD
-    && event.height > PALM_THRESHOLD;
-
-  if (isPalmTouch && state.blackboard.tool !== 'eraser') {
-    state.blackboard.palmDetected = true;
-    setBlackboardTool('eraser');
-    showPalmIndicator();
+  // 圈选工具：启动套索绘制或拖拽
+  if (state.blackboard.tool === 'select') {
+    beginBlackboardSelect(event);
+    return;
   }
 
   const point = blackboardPointerToPoint(event);
@@ -2174,6 +2178,12 @@ function continueBlackboardStroke(event) {
 
   // 始终更新指针位置缓存
   state.blackboard._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+  // 圈选工具：套索绘制 或 拖拽移动
+  if (state.blackboard.tool === 'select') {
+    continueBlackboardSelect(event);
+    return;
+  }
 
   // 手型捏合缩放中
   if (state.blackboard._pinch.active) {
@@ -2208,6 +2218,12 @@ function finishBlackboardStroke(event) {
   // 清理指针缓存
   state.blackboard._activePointers.delete(event.pointerId);
 
+  // 圈选工具：套索完成 或 拖拽结束
+  if (state.blackboard.tool === 'select') {
+    finishBlackboardSelect(event);
+    return;
+  }
+
   // 捏合缩放结束
   if (state.blackboard._pinch.active) {
     endBlackboardPinch();
@@ -2232,13 +2248,6 @@ function finishBlackboardStroke(event) {
   }
   state.blackboard.activeStrokes.delete(event.pointerId);
   runCatching(() => elements.blackboardCanvas.releasePointerCapture(event.pointerId));
-
-  // 手掌板擦自动恢复：所有手指离开后回到画笔模式
-  if (state.blackboard.palmDetected && state.blackboard.activeStrokes.size === 0) {
-    state.blackboard.palmDetected = false;
-    setBlackboardTool('pen');
-    hidePalmIndicator();
-  }
 
   renderBlackboard();
   updateBlackboardPageIndicator();
@@ -2296,6 +2305,9 @@ function renderBlackboard() {
   for (const stroke of state.blackboard.activeStrokes.values()) {
     drawBlackboardStroke(ctx, stroke);
   }
+
+  // 渲染圈选
+  renderBlackboardSelection(ctx);
 }
 
 function drawBlackboardStroke(ctx, stroke) {
@@ -2357,6 +2369,7 @@ function flushBlackboardActiveStrokes() {
 
 function navigateBlackboardPage(delta) {
   flushBlackboardActiveStrokes();
+  clearBlackboardSelection();
   const pages = state.blackboard.pages;
   const newPage = state.blackboard.currentPage + (delta < 0 ? -1 : 1);
   if (newPage < 0 || newPage >= pages.length) return;
@@ -2370,6 +2383,7 @@ function navigateBlackboardPage(delta) {
 
 function addBlackboardPage() {
   flushBlackboardActiveStrokes();
+  clearBlackboardSelection();
   const pages = state.blackboard.pages;
   // 在当前页之后插入新页
   const insertAt = state.blackboard.currentPage + 1;
@@ -2386,6 +2400,7 @@ function deleteBlackboardPage() {
   const pages = state.blackboard.pages;
   if (pages.length <= 1) return; // 至少保留一页
   flushBlackboardActiveStrokes();
+  clearBlackboardSelection();
   const idx = state.blackboard.currentPage;
   pages.splice(idx, 1);
   if (state.blackboard.currentPage >= pages.length) {
@@ -2412,10 +2427,15 @@ function updateBlackboardPageIndicator() {
 }
 
 function setBlackboardTool(tool) {
+  // 切换工具时清除旧圈选状态
+  if (tool !== 'select') clearBlackboardSelection();
+
   if (tool === 'eraser') {
     state.blackboard.tool = 'eraser';
   } else if (tool === 'hand') {
     state.blackboard.tool = 'hand';
+  } else if (tool === 'select') {
+    state.blackboard.tool = 'select';
   } else {
     state.blackboard.tool = 'pen';
   }
@@ -2423,11 +2443,17 @@ function setBlackboardTool(tool) {
   const isEraser = state.blackboard.tool === 'eraser';
   const isHand = state.blackboard.tool === 'hand';
   const isPen = state.blackboard.tool === 'pen';
+  const isSelect = state.blackboard.tool === 'select';
 
   elements.blackboardCanvas.classList.toggle('is-eraser', isEraser);
   elements.blackboardCanvas.classList.toggle('is-hand-tool', isHand);
+  elements.blackboardCanvas.classList.toggle('is-select-tool', isSelect);
   elements.blackboardEraserButton.classList.toggle('is-active', isEraser);
   elements.blackboardHandButton.classList.toggle('is-active', isHand);
+  elements.blackboardSelectButton.classList.toggle('is-active', isSelect);
+
+  // 删除按钮仅在圈选工具有选中内容时显示
+  elements.blackboardDeleteSelButton.style.display = (isSelect && state.blackboard.selection.confirmedIndices.length > 0) ? '' : 'none';
 
   // 非画笔模式只移除调色盘选中圈，调色盘保持可见
   if (isPen) {
@@ -2444,14 +2470,13 @@ function setBlackboardTool(tool) {
 }
 
 function toggleBlackboardHand() {
-  state.blackboard.palmDetected = false;
-  hidePalmIndicator();
   const newTool = state.blackboard.tool === 'hand' ? 'pen' : 'hand';
   setBlackboardTool(newTool);
 }
 
 function undoBlackboardStroke() {
   flushBlackboardActiveStrokes();
+  clearBlackboardSelection();
   const page = state.blackboard.pages[state.blackboard.currentPage];
   if (page && page.strokes.length > 0) {
     page.strokes.pop();
@@ -2462,6 +2487,7 @@ function undoBlackboardStroke() {
 
 function clearBlackboard() {
   flushBlackboardActiveStrokes();
+  clearBlackboardSelection();
   const page = state.blackboard.pages[state.blackboard.currentPage];
   if (page) {
     page.strokes = [];
@@ -2469,19 +2495,6 @@ function clearBlackboard() {
   state.blackboard.activeStrokes.clear();
   renderBlackboard();
   updateBlackboardPageIndicator();
-}
-
-function showPalmIndicator() {
-  elements.blackboardPalmIndicator.style.display = '';
-  clearTimeout(elements.blackboardPalmIndicator._hideTimer);
-  elements.blackboardPalmIndicator._hideTimer = setTimeout(() => {
-    hidePalmIndicator();
-  }, 3000);
-}
-
-function hidePalmIndicator() {
-  elements.blackboardPalmIndicator.style.display = 'none';
-  clearTimeout(elements.blackboardPalmIndicator._hideTimer);
 }
 
 function beginBlackboardPan(event) {
@@ -2611,9 +2624,353 @@ function updateBlackboardColorButtons() {
 }
 
 function toggleBlackboardEraser() {
-  // 手动切换板擦 → 清除手掌标记
-  state.blackboard.palmDetected = false;
-  hidePalmIndicator();
   const newTool = state.blackboard.tool === 'eraser' ? 'pen' : 'eraser';
   setBlackboardTool(newTool);
+}
+
+// ========== 圈选系统 ==========
+
+function clearBlackboardSelection() {
+  const sel = state.blackboard.selection;
+  sel.lassoPoints = [];
+  sel.drawing = false;
+  sel.confirmedIndices = [];
+  sel.bbox = null;
+  sel.dragging = false;
+  sel.dragStartWX = 0;
+  sel.dragStartWY = 0;
+  sel.dragSnapshot = null;
+  elements.blackboardDeleteSelButton.style.display = 'none';
+}
+
+function toggleBlackboardSelect() {
+  flushBlackboardActiveStrokes();
+  if (state.blackboard.tool === 'select') {
+    setBlackboardTool('pen');
+  } else {
+    setBlackboardTool('select');
+  }
+}
+
+function beginBlackboardSelect(event) {
+  const sel = state.blackboard.selection;
+
+  // 如果已有确认的选中内容，尝试拖拽
+  if (sel.confirmedIndices.length > 0) {
+    const point = blackboardPointerToPoint(event);
+    if (!point) return;
+    // 判断点击是否落在已选区域的包围盒内
+    if (sel.bbox && point.x >= sel.bbox.minX - 20 && point.x <= sel.bbox.maxX + 20
+        && point.y >= sel.bbox.minY - 20 && point.y <= sel.bbox.maxY + 20) {
+      // 启动拖拽
+      event.preventDefault();
+      elements.blackboardCanvas.setPointerCapture(event.pointerId);
+      sel.dragging = true;
+      sel.dragStartWX = point.x;
+      sel.dragStartWY = point.y;
+      sel.dragSnapshot = deepCopyStrokesForSelection();
+      return;
+    }
+    // 点击在选区外 → 取消选中
+    if (sel.confirmedIndices.length > 0) {
+      clearBlackboardSelection();
+      renderBlackboard();
+      return;
+    }
+  }
+
+  // 否则开始绘制套索
+  const point = blackboardPointerToPoint(event);
+  if (!point) return;
+
+  // 清空旧结果
+  sel.confirmedIndices = [];
+  sel.bbox = null;
+  sel.dragSnapshot = null;
+  elements.blackboardDeleteSelButton.style.display = 'none';
+
+  event.preventDefault();
+  elements.blackboardCanvas.setPointerCapture(event.pointerId);
+  sel.drawing = true;
+  sel.lassoPoints = [point];
+  renderBlackboard();
+}
+
+function continueBlackboardSelect(event) {
+  const sel = state.blackboard.selection;
+
+  // 拖拽移动中
+  if (sel.dragging && sel.dragSnapshot) {
+    event.preventDefault();
+    const point = blackboardPointerToPoint(event);
+    if (!point) return;
+    const dx = point.x - sel.dragStartWX;
+    const dy = point.y - sel.dragStartWY;
+    applyDragOffsetToSnapshot(sel.dragSnapshot, dx, dy);
+    sel.dragStartWX = point.x;
+    sel.dragStartWY = point.y;
+    renderBlackboard();
+    return;
+  }
+
+  // 套索绘制中
+  if (!sel.drawing) return;
+  event.preventDefault();
+  const point = blackboardPointerToPoint(event);
+  if (!point) return;
+
+  // 距离阈值，避免点过密
+  const last = sel.lassoPoints[sel.lassoPoints.length - 1];
+  if (last && Math.hypot(point.x - last.x, point.y - last.y) < 5) return;
+
+  sel.lassoPoints.push(point);
+  renderBlackboard();
+}
+
+function finishBlackboardSelect(event) {
+  const sel = state.blackboard.selection;
+
+  // 拖拽结束：提交
+  if (sel.dragging) {
+    sel.dragging = false;
+    runCatching(() => elements.blackboardCanvas.releasePointerCapture(event.pointerId));
+    commitDragSelection(sel.dragSnapshot);
+    sel.dragSnapshot = null;
+    renderBlackboard();
+    return;
+  }
+
+  // 套索完成
+  if (!sel.drawing) return;
+  sel.drawing = false;
+  runCatching(() => elements.blackboardCanvas.releasePointerCapture(event.pointerId));
+
+  // 需要至少3个点才能形成闭合区域
+  if (sel.lassoPoints.length < 3) {
+    sel.lassoPoints = [];
+    clearBlackboardSelection();
+    renderBlackboard();
+    return;
+  }
+
+  // 闭合套索（首尾相连）
+  const poly = [...sel.lassoPoints];
+  if (poly.length > 2) {
+    poly.push({ x: poly[0].x, y: poly[0].y });
+  }
+
+  // 检测哪些笔画在套索内
+  flushBlackboardActiveStrokes();
+  const page = state.blackboard.pages[state.blackboard.currentPage];
+  if (!page) {
+    sel.lassoPoints = [];
+    renderBlackboard();
+    return;
+  }
+
+  const indices = [];
+  for (let i = 0; i < page.strokes.length; i++) {
+    if (isStrokeInPolygon(page.strokes[i], poly)) {
+      indices.push(i);
+    }
+  }
+
+  if (indices.length > 0) {
+    sel.confirmedIndices = indices;
+    sel.bbox = computeBBox(indices.map(i => page.strokes[i]));
+    elements.blackboardDeleteSelButton.style.display = '';
+  } else {
+    clearBlackboardSelection();
+  }
+
+  sel.lassoPoints = [];
+  renderBlackboard();
+}
+
+// 射线法判断点是否在多边形内
+function isPointInPolygon(px, py, polygon) {
+  let inside = false;
+  const n = polygon.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// 判断笔画是否与套索有交集（至少一个点落在多边形内）
+function isStrokeInPolygon(stroke, polygon) {
+  if (!stroke.points || stroke.points.length === 0) return false;
+  for (const p of stroke.points) {
+    if (isPointInPolygon(p.x, p.y, polygon)) return true;
+  }
+  return false;
+}
+
+// 计算笔画集合的包围盒
+function computeBBox(strokes) {
+  if (!strokes || strokes.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const s of strokes) {
+    if (!s.points) continue;
+    for (const p of s.points) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+// 深拷贝选中的笔画（用于拖拽预览）
+function deepCopyStrokesForSelection() {
+  const page = state.blackboard.pages[state.blackboard.currentPage];
+  if (!page) return [];
+  return state.blackboard.selection.confirmedIndices.map(i => ({
+    color: page.strokes[i].color,
+    width: page.strokes[i].width,
+    points: page.strokes[i].points.map(p => ({ x: p.x, y: p.y })),
+  }));
+}
+
+// 对拖拽快照中的所有笔画点位施加偏移
+function applyDragOffsetToSnapshot(snapshot, dx, dy) {
+  for (const s of snapshot) {
+    for (const p of s.points) {
+      p.x += dx;
+      p.y += dy;
+    }
+  }
+}
+
+// 提交拖拽：从原始page中删除旧笔画，插入偏移后的新笔画
+function commitDragSelection(snapshot) {
+  if (!snapshot || snapshot.length === 0) return;
+  const page = state.blackboard.pages[state.blackboard.currentPage];
+  if (!page) return;
+  const indices = [...state.blackboard.selection.confirmedIndices].sort((a, b) => b - a);
+  for (const i of indices) {
+    page.strokes.splice(i, 1);
+  }
+  // 追加新笔画
+  for (const s of snapshot) {
+    page.strokes.push({
+      color: s.color,
+      width: s.width,
+      points: s.points.map(p => ({ x: p.x, y: p.y })),
+    });
+  }
+  // 新确认的索引是刚追加的这些
+  state.blackboard.selection.confirmedIndices = [];
+  for (let i = page.strokes.length - snapshot.length; i < page.strokes.length; i++) {
+    state.blackboard.selection.confirmedIndices.push(i);
+  }
+  state.blackboard.selection.bbox = computeBBox(snapshot);
+  if (state.blackboard.selection.confirmedIndices.length > 0) {
+    elements.blackboardDeleteSelButton.style.display = '';
+  }
+}
+
+// 删除圈选的笔画
+function deleteBlackboardSelection() {
+  flushBlackboardActiveStrokes();
+  const page = state.blackboard.pages[state.blackboard.currentPage];
+  if (!page) return;
+  const indices = [...state.blackboard.selection.confirmedIndices].sort((a, b) => b - a);
+  for (const i of indices) {
+    page.strokes.splice(i, 1);
+  }
+  clearBlackboardSelection();
+  renderBlackboard();
+  updateBlackboardPageIndicator();
+}
+
+// 渲染圈选视觉
+function renderBlackboardSelection(ctx) {
+  const sel = state.blackboard.selection;
+  const page = state.blackboard.pages[state.blackboard.currentPage];
+
+  // 1. 渲染正在绘制的套索
+  if (sel.drawing && sel.lassoPoints.length >= 2) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath();
+    ctx.moveTo(sel.lassoPoints[0].x, sel.lassoPoints[0].y);
+    for (let i = 1; i < sel.lassoPoints.length; i++) {
+      ctx.lineTo(sel.lassoPoints[i].x, sel.lassoPoints[i].y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // 2. 拖拽预览：绘制偏移中的笔画
+  if (sel.dragging && sel.dragSnapshot) {
+    for (const s of sel.dragSnapshot) {
+      drawBlackboardStroke(ctx, s);
+    }
+    // 绘制拖拽中的包围盒
+    const bb = computeBBox(sel.dragSnapshot);
+    if (bb) drawSelectionBBox(ctx, bb);
+    return;
+  }
+
+  // 3. 已确认的选中笔画高亮
+  if (sel.confirmedIndices.length > 0 && page) {
+    // 对被选中的笔画绘制光晕
+    for (const i of sel.confirmedIndices) {
+      const s = page.strokes[i];
+      if (!s || s.points.length === 0) continue;
+      ctx.save();
+      // 外层光晕
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.25)';
+      ctx.lineWidth = s.width + 8;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(s.points[0].x, s.points[0].y);
+      for (let j = 1; j < s.points.length; j++) {
+        ctx.lineTo(s.points[j].x, s.points[j].y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+    // 绘制包围盒
+    if (sel.bbox) drawSelectionBBox(ctx, sel.bbox);
+  }
+}
+
+// 绘制选中包围盒
+function drawSelectionBBox(ctx, bbox) {
+  const pad = 8;
+  const w = bbox.maxX - bbox.minX + pad * 2;
+  const h = bbox.maxY - bbox.minY + pad * 2;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 3]);
+  ctx.strokeRect(bbox.minX - pad, bbox.minY - pad, w, h);
+
+  // 四个角拖拽手柄
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(56, 189, 248, 0.9)';
+  const handleSize = 6;
+  const corners = [
+    { x: bbox.minX - pad, y: bbox.minY - pad },
+    { x: bbox.maxX + pad, y: bbox.minY - pad },
+    { x: bbox.minX - pad, y: bbox.maxY + pad },
+    { x: bbox.maxX + pad, y: bbox.maxY + pad },
+  ];
+  for (const c of corners) {
+    ctx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
+  }
+  ctx.restore();
 }
