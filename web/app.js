@@ -5,6 +5,7 @@ const state = {
   reconnectTimer: null,
   teacherConnected: false,
   roomCode: null,
+  coursewareConnTimer: null,
   presentationMode: 'waiting',
   courseware: null,
   videoOrientation: {
@@ -1104,15 +1105,28 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
 
   // 5. 更新提示 & 隐藏连接码角标
   try { elements.coursewareConnIndicator.hidden = true; } catch {}
+  if (state.coursewareConnTimer) { clearTimeout(state.coursewareConnTimer); state.coursewareConnTimer = null; }
   try { setWaitingStatus(statusText); } catch {}
 }
 
 function updateCoursewareConnectionIndicator() {
   const isCourseware = state.presentationMode === 'courseware';
   const shouldShow = isCourseware && !state.teacherConnected;
+
+  // 清除已有的自动隐藏定时器
+  if (state.coursewareConnTimer) {
+    clearTimeout(state.coursewareConnTimer);
+    state.coursewareConnTimer = null;
+  }
+
   elements.coursewareConnIndicator.hidden = !shouldShow;
   if (shouldShow) {
     elements.coursewareConnCode.textContent = state.roomCode || '----';
+    // 8 秒后自动隐藏
+    state.coursewareConnTimer = setTimeout(() => {
+      elements.coursewareConnIndicator.hidden = true;
+      state.coursewareConnTimer = null;
+    }, 8000);
   }
 }
 
@@ -1943,6 +1957,7 @@ function showVideoView() {
   elements.nextPageButton.hidden = true;
   elements.videoStatus.hidden = false;
   elements.coursewareConnIndicator.hidden = true;
+  if (state.coursewareConnTimer) { clearTimeout(state.coursewareConnTimer); state.coursewareConnTimer = null; }
 }
 
 function showCoursewareView() {
@@ -2805,8 +2820,10 @@ function finishBlackboardSelect(event) {
 
   const indices = [];
   for (let i = 0; i < page.strokes.length; i++) {
-    // 跳过板擦笔迹（isEraser 标记的笔画不算真正笔迹）
+    // 跳过板擦笔迹本身
     if (page.strokes[i].isEraser) continue;
+    // 跳过已被后续板擦笔迹完全覆盖的笔迹
+    if (isStrokeFullyErased(i, page)) continue;
     if (isStrokeInPolygon(page.strokes[i], poly)) {
       indices.push(i);
     }
@@ -2822,6 +2839,68 @@ function finishBlackboardSelect(event) {
 
   sel.lassoPoints = [];
   renderBlackboard();
+}
+
+// 判断笔迹是否被后续的板擦笔迹完全覆盖（视觉上已被擦除）
+function isStrokeFullyErased(strokeIndex, page) {
+  const stroke = page.strokes[strokeIndex];
+  if (!stroke || !stroke.points || stroke.points.length === 0) return true;
+
+  // 遍历当前笔迹之后的所有板擦笔迹
+  for (let j = strokeIndex + 1; j < page.strokes.length; j++) {
+    const eraser = page.strokes[j];
+    if (!eraser.isEraser) continue;
+    if (!eraser.points || eraser.points.length < 2) continue;
+
+    const eraserRadius = (eraser.width || 40) / 2;
+
+    // 检查当前笔迹的所有点是否都在板擦覆盖范围内
+    let allCovered = true;
+    for (const pt of stroke.points) {
+      if (!isPointWithinEraserPath(pt, eraser.points, eraserRadius)) {
+        allCovered = false;
+        break;
+      }
+    }
+    if (allCovered) return true;
+  }
+  return false;
+}
+
+// 判断一个点是否在板擦路径覆盖范围内（点到任意线段的距离 <= 板擦半径）
+function isPointWithinEraserPath(pt, eraserPoints, radius) {
+  for (let k = 0; k < eraserPoints.length - 1; k++) {
+    const seg = { x1: eraserPoints[k].x, y1: eraserPoints[k].y, x2: eraserPoints[k + 1].x, y2: eraserPoints[k + 1].y };
+    if (pointToSegmentDistSq(pt.x, pt.y, seg.x1, seg.y1, seg.x2, seg.y2) <= radius * radius) {
+      return true;
+    }
+  }
+  // 单独检查最后一个孤立点（如果板擦只有一个点）
+  if (eraserPoints.length === 1) {
+    const dx = pt.x - eraserPoints[0].x;
+    const dy = pt.y - eraserPoints[0].y;
+    return dx * dx + dy * dy <= radius * radius;
+  }
+  return false;
+}
+
+// 点 (px,py) 到线段 (x1,y1)-(x2,y2) 的平方距离
+function pointToSegmentDistSq(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) {
+    const ex = px - x1;
+    const ey = py - y1;
+    return ex * ex + ey * ey;
+  }
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+  const ex = px - projX;
+  const ey = py - projY;
+  return ex * ex + ey * ey;
 }
 
 // 射线法判断点是否在多边形内
