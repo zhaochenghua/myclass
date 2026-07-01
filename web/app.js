@@ -1852,7 +1852,8 @@ function beginBlackboardStroke(event) {
   }
 
   // 手掌检测：触屏设备上接触面积 > 22px 判定为手掌 → 自动切板擦
-  const PALM_THRESHOLD = 22;
+  // 阈值 50px：大屏上单指触摸不会超过此值，但手掌会
+  const PALM_THRESHOLD = 50;
   const isPalmTouch = event.pointerType === 'touch'
     && event.width > PALM_THRESHOLD
     && event.height > PALM_THRESHOLD;
