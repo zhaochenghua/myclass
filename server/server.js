@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.4.0-20260701';
+const APP_VERSION = process.env.APP_VERSION || '1.4.1-20260701';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -303,6 +303,42 @@ app.post(`${PATH_PREFIX}/api/courseware`, requireAuth, upload.single('file'), as
     if (req.file?.path) {
       fs.promises.unlink(req.file.path).catch(() => {});
     }
+  }
+});
+
+// 链接课件上传（不包含文件，仅标题+URL）
+app.post(`${PATH_PREFIX}/api/courseware/link`, requireAuth, express.json(), async (req, res, next) => {
+  try {
+    const { title, url } = req.body;
+    if (!title || !url) {
+      res.status(400).json({ error: '请提供 title 和 url' });
+      return;
+    }
+    // 基本 URL 校验
+    let parsed;
+    try { parsed = new URL(url); } catch {
+      res.status(400).json({ error: '无效的 URL' });
+      return;
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      res.status(400).json({ error: '仅支持 http/https 链接' });
+      return;
+    }
+    const id = crypto.randomUUID();
+    const result = {
+      id,
+      userId: req.user.id,
+      title,
+      fileName: url,
+      size: 0,
+      linkUrl: url,
+      url,
+      createdAt: new Date().toISOString()
+    };
+    await rememberCourseware(result);
+    res.json(result);
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -639,6 +675,8 @@ async function listStoredCourseware(userId) {
     .filter((item) => item && item.id && item.url)
     .filter((item) => !userId || !item.userId || item.userId === 'admin' || item.userId === userId || item.userId === 'legacy')
     .filter((item) => {
+      // 链接类型课件不需要检查磁盘文件
+      if (item.linkUrl) return true;
       const fileExt = path.extname(new URL(item.url, 'http://localhost').pathname);
       return fs.existsSync(path.join(coursewareRoot, `${item.id}${fileExt}`));
     })
