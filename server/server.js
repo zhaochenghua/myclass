@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.3.3-20260629';
+const APP_VERSION = process.env.APP_VERSION || '1.4.0-20260701';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -429,8 +429,26 @@ async function publishCourseware(file, fields = {}, userId) {
     };
     await rememberCourseware(result);
     return result;
+  } else if (ext === '.mp4' || ext === '.mov' || ext === '.avi' || ext === '.webm' || ext === '.mkv' || ext === '.3gp') {
+    const videoPath = path.join(coursewareRoot, `${id}${ext}`);
+    await fs.promises.copyFile(file.path, videoPath);
+    const stat = await fs.promises.stat(videoPath);
+    downloadOnly = true;
+    const result = {
+      id,
+      userId: userId || 'legacy',
+      title: path.basename(originalName, ext),
+      fileName: originalName,
+      size: stat.size,
+      downloadOnly: false,
+      videoUrl: `${PATH_PREFIX}/public/courseware/${id}${ext}`,
+      url: `${PATH_PREFIX}/public/courseware/${id}${ext}`,
+      createdAt: new Date().toISOString()
+    };
+    await rememberCourseware(result);
+    return result;
   } else {
-    throw publicError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP 文件');
+    throw publicError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP、视频文件');
   }
 
   const stat = await fs.promises.stat(pdfPath);
