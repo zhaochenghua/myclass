@@ -200,6 +200,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     runOnUiThread {
                         when {
                             ExternalFileReceiver.wasLastReceiveDuplicate() -> toast("该文件已在待上传列表中")
+                            handled && ExternalFileReceiver.isLatestPendingVideo() -> {
+                                showVideoNameDialog()
+                            }
                             handled -> {
                                 toast("课件已加入上传队列（${ExternalFileReceiver.pendingCount()} 个待上传）")
                                 triggerPendingUploadIfReady()
@@ -220,6 +223,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 runOnUiThread {
                     when {
                         ExternalFileReceiver.wasLastReceiveDuplicate() -> toast("该文件已在待上传列表中")
+                        handled && ExternalFileReceiver.isLatestPendingVideo() -> {
+                            showVideoNameDialog()
+                        }
                         handled -> {
                             toast("课件已加入上传队列（${ExternalFileReceiver.pendingCount()} 个待上传）")
                             triggerPendingUploadIfReady()
@@ -1012,6 +1018,40 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             .setNegativeButton("取消", null)
             .setPositiveButton("删除") { _, _ ->
                 deleteManagementCourseware(item)
+            }
+            .show()
+    }
+
+    private fun showVideoNameDialog() {
+        val input = android.widget.EditText(this).apply {
+            hint = "请输入视频名称"
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+            filters = arrayOf(InputFilter.LengthFilter(50))
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("导入视频")
+            .setMessage("请输入该视频的名称")
+            .setView(input)
+            .setNegativeButton("取消") { _, _ ->
+                ExternalFileReceiver.clearQueue(this)
+                toast("已取消视频导入")
+            }
+            .setPositiveButton("确定") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    toast("名称不能为空")
+                    showVideoNameDialog()
+                } else {
+                    ExternalFileReceiver.setLatestPendingName(name, this)
+                    toast("视频已加入上传队列")
+                    triggerPendingUploadIfReady()
+                }
+            }
+            .setOnCancelListener {
+                ExternalFileReceiver.clearQueue(this)
+                toast("已取消视频导入")
             }
             .show()
     }

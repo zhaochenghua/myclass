@@ -74,7 +74,12 @@ const state = {
   downloadOriginalUrl: null,
   teacherToken: null,
   directTeach: false,
-  teacherCoursewareList: []
+  teacherCoursewareList: [],
+  videoPlayer: {
+    active: false,
+    idleTimer: null,
+    scrubbing: false
+  }
 };
 
 let pdfJsPromise = null;
@@ -134,6 +139,20 @@ const elements = {
   blackboardHandButton: document.getElementById('blackboardHandButton'),
   blackboardColorButtons: Array.from(document.querySelectorAll('#blackboardColors .annotation-color')),
   blackboardColorsContainer: document.getElementById('blackboardColors'),
+  // 视频播放器
+  videoPlayerOverlay: document.getElementById('videoPlayerOverlay'),
+  coursewareVideo: document.getElementById('coursewareVideo'),
+  videoControls: document.getElementById('videoControls'),
+  videoPlayPause: document.getElementById('videoPlayPause'),
+  videoProgressContainer: document.getElementById('videoProgressContainer'),
+  videoProgressTrack: document.getElementById('videoProgressTrack'),
+  videoProgressFill: document.getElementById('videoProgressFill'),
+  videoProgressThumb: document.getElementById('videoProgressThumb'),
+  videoTime: document.getElementById('videoTime'),
+  videoMuteBtn: document.getElementById('videoMuteBtn'),
+  videoVolumeSlider: document.getElementById('videoVolumeSlider'),
+  videoFullscreenBtn: document.getElementById('videoFullscreenBtn'),
+  videoCloseBtn: document.getElementById('videoCloseBtn'),
 };
 
 bootstrap();
@@ -648,8 +667,21 @@ function openCourseware(message) {
 
   setAnnotationTool('pen');
 
+  // 视频文件：直接播放
+  const isVideo = /\.(mp4|mov|avi|webm|mkv|3gp)(\?|$)/i.test(url);
   // ZIP 文件：不尝试渲染，仅提供下载
   const isZip = /\.zip(\?|$)/i.test(url);
+
+  if (isVideo) {
+    cleanupPeerConnection();
+    resetAnnotations();
+    showCoursewareViewForVideo({
+      url,
+      title: typeof message.title === 'string' ? message.title : '视频'
+    });
+    return;
+  }
+
   state.courseware = {
     url,
     title: typeof message.title === 'string' ? message.title : '课件',
@@ -713,6 +745,203 @@ function showCoursewareViewForZip(courseware) {
   elements.annotationCanvas.hidden = true;
   elements.annotationToolbar.hidden = true;
 }
+
+// ---- 视频课件播放器 ----
+
+function showCoursewareViewForVideo(info) {
+  state.presentationMode = 'courseware';
+  state.videoPlayer.active = true;
+  document.body.classList.add('is-streaming');
+  elements.joinView.hidden = true;
+  elements.videoView.hidden = true;
+  elements.remoteVideo.hidden = true;
+  elements.coursewareCanvas.hidden = true;
+  elements.annotationCanvas.hidden = true;
+  elements.annotationToolbar.hidden = true;
+  elements.panToolButton.hidden = true;
+  elements.prevPageButton.hidden = true;
+  elements.nextPageButton.hidden = true;
+  if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
+
+  const video = elements.coursewareVideo;
+  video.src = info.url;
+  video.volume = elements.videoVolumeSlider.value / 100;
+  video.currentTime = 0;
+
+  elements.videoPlayerOverlay.hidden = false;
+  elements.videoPlayPause.textContent = '⏸';
+  elements.videoTime.textContent = '0:00 / 0:00';
+  elements.videoProgressFill.style.width = '0%';
+  elements.videoProgressThumb.style.left = '0%';
+
+  bindVideoEvents();
+  video.play().catch(() => {});
+}
+
+function bindVideoEvents() {
+  const video = elements.coursewareVideo;
+
+  // 移除旧事件（避免重复绑定）
+  const newVideo = video.cloneNode(false);
+  video.parentNode.replaceChild(newVideo, video);
+  elements.coursewareVideo = newVideo;
+
+  const v = elements.coursewareVideo;
+
+  v.addEventListener('timeupdate', () => {
+    if (!state.videoPlayer.scrubbing && v.duration) {
+      const pct = (v.currentTime / v.duration) * 100;
+      elements.videoProgressFill.style.width = pct + '%';
+      elements.videoProgressThumb.style.left = pct + '%';
+      elements.videoTime.textContent = formatTime(v.currentTime) + ' / ' + formatTime(v.duration);
+    }
+  });
+
+  v.addEventListener('loadedmetadata', () => {
+    elements.videoTime.textContent = '0:00 / ' + formatTime(v.duration);
+  });
+
+  v.addEventListener('play', () => {
+    elements.videoPlayPause.textContent = '⏸';
+  });
+
+  v.addEventListener('pause', () => {
+    elements.videoPlayPause.textContent = '▶';
+  });
+
+  v.addEventListener('ended', () => {
+    elements.videoPlayPause.textContent = '↺';
+  });
+
+  v.addEventListener('click', () => {
+    if (v.paused) {
+      if (v.ended) { v.currentTime = 0; }
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  });
+
+  // 控制栏自动隐藏
+  v.addEventListener('mousemove', resetVideoIdleTimer);
+  v.addEventListener('touchstart', resetVideoIdleTimer);
+  elements.videoControls.addEventListener('mousemove', (e) => { e.stopPropagation(); resetVideoIdleTimer(); });
+  elements.videoControls.addEventListener('touchstart', (e) => { e.stopPropagation(); resetVideoIdleTimer(); });
+  resetVideoIdleTimer();
+}
+
+function resetVideoIdleTimer() {
+  elements.videoPlayerOverlay.classList.remove('idle');
+  if (state.videoPlayer.idleTimer) clearTimeout(state.videoPlayer.idleTimer);
+  state.videoPlayer.idleTimer = setTimeout(() => {
+    if (!elements.coursewareVideo.paused) {
+      elements.videoPlayerOverlay.classList.add('idle');
+    }
+  }, 3000);
+}
+
+function formatTime(seconds) {
+  if (isNaN(seconds) || !isFinite(seconds)) return '0:00';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function closeVideoPlayer() {
+  const v = elements.coursewareVideo;
+  v.pause();
+  v.src = '';
+  v.removeAttribute('src');
+  state.videoPlayer.active = false;
+  if (state.videoPlayer.idleTimer) clearTimeout(state.videoPlayer.idleTimer);
+  elements.videoPlayerOverlay.hidden = true;
+  elements.videoPlayerOverlay.classList.remove('idle');
+  closeCourseware('视频播放已结束');
+}
+
+// 进度条拖拽
+elements.videoProgressContainer.addEventListener('mousedown', (e) => {
+  state.videoPlayer.scrubbing = true;
+  elements.videoProgressContainer.classList.add('scrubbing');
+  scrubVideo(e);
+});
+elements.videoProgressContainer.addEventListener('touchstart', (e) => {
+  state.videoPlayer.scrubbing = true;
+  elements.videoProgressContainer.classList.add('scrubbing');
+  scrubVideo(e.touches[0]);
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (state.videoPlayer.scrubbing) scrubVideo(e);
+});
+document.addEventListener('touchmove', (e) => {
+  if (state.videoPlayer.scrubbing) scrubVideo(e.touches[0]);
+}, { passive: false });
+document.addEventListener('mouseup', () => {
+  if (state.videoPlayer.scrubbing) {
+    state.videoPlayer.scrubbing = false;
+    elements.videoProgressContainer.classList.remove('scrubbing');
+  }
+});
+document.addEventListener('touchend', () => {
+  if (state.videoPlayer.scrubbing) {
+    state.videoPlayer.scrubbing = false;
+    elements.videoProgressContainer.classList.remove('scrubbing');
+  }
+});
+
+function scrubVideo(e) {
+  const rect = elements.videoProgressTrack.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const v = elements.coursewareVideo;
+  if (v.duration) {
+    v.currentTime = pct * v.duration;
+    elements.videoProgressFill.style.width = (pct * 100) + '%';
+    elements.videoProgressThumb.style.left = (pct * 100) + '%';
+    elements.videoTime.textContent = formatTime(v.currentTime) + ' / ' + formatTime(v.duration);
+  }
+}
+
+// 播放/暂停
+elements.videoPlayPause.addEventListener('click', () => {
+  const v = elements.coursewareVideo;
+  if (v.paused) {
+    if (v.ended) { v.currentTime = 0; }
+    v.play().catch(() => {});
+  } else {
+    v.pause();
+  }
+});
+
+// 静音
+elements.videoMuteBtn.addEventListener('click', () => {
+  const v = elements.coursewareVideo;
+  v.muted = !v.muted;
+  elements.videoMuteBtn.textContent = v.muted ? '🔇' : '🔊';
+  if (!v.muted) elements.videoVolumeSlider.value = Math.round(v.volume * 100);
+});
+
+// 音量
+elements.videoVolumeSlider.addEventListener('input', () => {
+  const v = elements.coursewareVideo;
+  v.volume = elements.videoVolumeSlider.value / 100;
+  v.muted = v.volume === 0;
+  elements.videoMuteBtn.textContent = v.muted || v.volume === 0 ? '🔇' : '🔊';
+});
+
+// 全屏
+elements.videoFullscreenBtn.addEventListener('click', () => {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    elements.videoPlayerOverlay.requestFullscreen().catch(() => {});
+  }
+});
+
+// 关闭
+elements.videoCloseBtn.addEventListener('click', () => {
+  closeVideoPlayer();
+});
 
 function showCoursewarePage(page) {
   if (!state.courseware) {
@@ -809,6 +1038,10 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   try { elements.joinView.hidden = false; } catch {}
   try { elements.videoView.hidden = true; } catch {}
   try { elements.coursewareCanvas.hidden = true; } catch {}
+  try { elements.videoPlayerOverlay.hidden = true; } catch {}
+  if (state.videoPlayer.idleTimer) { clearTimeout(state.videoPlayer.idleTimer); state.videoPlayer.idleTimer = null; }
+  try { elements.coursewareVideo.pause(); elements.coursewareVideo.src = ''; elements.coursewareVideo.removeAttribute('src'); } catch {}
+  try { state.videoPlayer.active = false; } catch {}
   try { elements.panToolButton.hidden = true; } catch {}
   try { elements.prevPageButton.hidden = true; } catch {}
   try { elements.nextPageButton.hidden = true; } catch {}
@@ -1751,12 +1984,17 @@ async function loadTeacherCourseware() {
     if (!items.length) {
       elements.coursewareGrid.innerHTML = '<p style="color:var(--muted);text-align:center">暂无课件，请通过管理后台上传</p>';
     } else {
-      elements.coursewareGrid.innerHTML = items.map((c, i) => `
+      elements.coursewareGrid.innerHTML = items.map((c, i) => {
+        const fileName = c.fileName || c.url || '';
+        const isVideo = /\.(mp4|mov|avi|webm|mkv|3gp)(\?|$)/i.test(fileName);
+        const badge = isVideo ? '<span class="courseware-video-badge">视频</span>' : '';
+        return `
         <div class="courseware-item" data-index="${i}">
-          <div class="courseware-item-title">${escapeHtml(c.title)}</div>
-          <div class="courseware-item-meta">${c.fileName || ''} · ${formatSize(c.size)}</div>
+          <div class="courseware-item-title">${escapeHtml(c.title)}${badge}</div>
+          <div class="courseware-item-meta">${escapeHtml(fileName)} · ${formatSize(c.size)}</div>
         </div>
-      `).join('');
+        `;
+      }).join('');
       elements.coursewareGrid.querySelectorAll('.courseware-item').forEach((item) => {
         item.addEventListener('click', () => {
           const idx = parseInt(item.dataset.index, 10);

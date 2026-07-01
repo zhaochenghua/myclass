@@ -43,6 +43,12 @@
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="video/mp4" />
+                <data android:mimeType="video/x-msvideo" />
+                <data android:mimeType="video/quicktime" />
+                <data android:mimeType="video/webm" />
+                <data android:mimeType="video/3gpp" />
+                <data android:mimeType="video/*" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="*/*" />
             </intent-filter>
@@ -56,6 +62,12 @@
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="video/mp4" />
+                <data android:mimeType="video/x-msvideo" />
+                <data android:mimeType="video/quicktime" />
+                <data android:mimeType="video/webm" />
+                <data android:mimeType="video/3gpp" />
+                <data android:mimeType="video/*" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="*/*" />
             </intent-filter>
