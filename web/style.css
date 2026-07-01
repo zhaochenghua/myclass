@@ -929,6 +929,21 @@ video {
   color: #38bdf8;
 }
 
+.blackboard-select-btn.is-active {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+}
+
+.blackboard-delete-sel-btn {
+  border-color: #ff4d6d;
+  color: #ff4d6d;
+  background: transparent;
+}
+.blackboard-delete-sel-btn:hover {
+  background: rgba(255, 77, 109, 0.2);
+}
+
 /* 板擦光标 */
 .blackboard-canvas.is-eraser {
   cursor: none;
@@ -936,6 +951,13 @@ video {
 
 .blackboard-canvas.is-hand-tool {
   cursor: grab;
+}
+
+.blackboard-canvas.is-select-tool {
+  cursor: crosshair;
+}
+.blackboard-canvas.is-select-tool [data-has-selection="true"] {
+  cursor: move;
 }
 
 .blackboard-canvas.is-panning {
@@ -956,29 +978,6 @@ video {
 
 .blackboard-canvas.is-eraser ~ .blackboard-eraser-cursor {
   display: block;
-}
-
-/* 手掌握拳提示 */
-.blackboard-palm-indicator {
-  position: fixed;
-  top: 1rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 20;
-  padding: 0.5rem 1.2rem;
-  border-radius: 8px;
-  background: rgba(255, 209, 102, 0.18);
-  border: 1px solid var(--warm);
-  color: var(--warm);
-  font-size: 1rem;
-  pointer-events: none;
-  animation: palmFadeIn 0.2s ease-out;
-  display: none;
-}
-
-@keyframes palmFadeIn {
-  from { opacity: 0; transform: translateX(-50%) translateY(-0.5rem); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 /* 超小屏幕：高度不足时的救命措施 */

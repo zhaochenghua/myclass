@@ -126,7 +126,6 @@
       <div class="blackboard-overlay" id="blackboardOverlay" hidden>
         <canvas class="blackboard-canvas" id="blackboardCanvas"></canvas>
         <div class="blackboard-eraser-cursor" id="blackboardEraserCursor"></div>
-        <div class="blackboard-palm-indicator" id="blackboardPalmIndicator">🖐 板擦模式（松手恢复画笔）</div>
         <div class="blackboard-toolbar">
           <button class="annotation-button" id="blackboardPrevPageButton" type="button">上一页</button>
           <span class="blackboard-page-indicator" id="blackboardPageIndicator">第 1 / 1 页</span>
@@ -136,6 +135,8 @@
           <button class="annotation-button" id="blackboardClearButton" type="button">清屏</button>
           <button class="annotation-button blackboard-eraser-btn" id="blackboardEraserButton" type="button">板擦</button>
           <button class="annotation-button blackboard-hand-btn" id="blackboardHandButton" type="button">手型</button>
+          <button class="annotation-button blackboard-select-btn" id="blackboardSelectButton" type="button">圈选</button>
+          <button class="annotation-button blackboard-delete-sel-btn" id="blackboardDeleteSelButton" type="button" style="display:none">删除</button>
           <div class="toolbar-divider"></div>
           <div class="annotation-colors" id="blackboardColors" aria-label="黑板颜色">
             <button class="annotation-color is-active" type="button" data-color="#ffd166" aria-label="黄色"></button>
@@ -154,6 +155,6 @@
     </main>
 
     <script src="./vendor/pdfjs/build/pdf.min.js"></script>
-    <script src="./app.js?v=20260701c"></script>
+    <script src="./app.js?v=20260701e"></script>
   </body>
 </html>
