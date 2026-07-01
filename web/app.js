@@ -634,6 +634,8 @@ function createPeerConnection() {
   peerConnection.addEventListener('connectionstatechange', () => {
     const status = peerConnection.connectionState;
     if (status === 'connected') {
+      state.teacherConnected = true;
+      updateCoursewareConnectionIndicator();
       showVideoView();
       elements.videoStatus.textContent = '';
     } else if (status === 'failed') {
@@ -1925,6 +1927,7 @@ function showJoinView() {
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
+  elements.coursewareConnIndicator.hidden = true;
 }
 
 function showVideoView() {
@@ -2198,6 +2201,7 @@ function beginBlackboardStroke(event) {
     pointerId: event.pointerId,
     color: isEraser ? '#2c2f36' : state.blackboard.currentColor,
     width: isEraser ? state.blackboard.eraserWidth : 6,
+    isEraser: isEraser,
     points: [point]
   });
   renderBlackboard();
@@ -2273,6 +2277,7 @@ function finishBlackboardStroke(event) {
     pages[state.blackboard.currentPage].strokes.push({
       color: stroke.color,
       width: stroke.width,
+      isEraser: !!stroke.isEraser,
       points: stroke.points
     });
   }
@@ -2391,7 +2396,7 @@ function flushBlackboardActiveStrokes() {
   if (!page) return;
   for (const stroke of state.blackboard.activeStrokes.values()) {
     if (stroke.points.length > 0) {
-      page.strokes.push({ color: stroke.color, width: stroke.width, points: stroke.points });
+      page.strokes.push({ color: stroke.color, width: stroke.width, isEraser: !!stroke.isEraser, points: stroke.points });
     }
   }
   state.blackboard.activeStrokes.clear();
@@ -2800,8 +2805,8 @@ function finishBlackboardSelect(event) {
 
   const indices = [];
   for (let i = 0; i < page.strokes.length; i++) {
-    // 跳过板擦笔迹（背景色笔画不算真正笔迹）
-    if (page.strokes[i].color === '#2c2f36') continue;
+    // 跳过板擦笔迹（isEraser 标记的笔画不算真正笔迹）
+    if (page.strokes[i].isEraser) continue;
     if (isStrokeInPolygon(page.strokes[i], poly)) {
       indices.push(i);
     }
@@ -2865,6 +2870,7 @@ function deepCopyStrokesForSelection() {
   return state.blackboard.selection.confirmedIndices.map(i => ({
     color: page.strokes[i].color,
     width: page.strokes[i].width,
+    isEraser: !!page.strokes[i].isEraser,
     points: page.strokes[i].points.map(p => ({ x: p.x, y: p.y })),
   }));
 }
@@ -2893,6 +2899,7 @@ function commitDragSelection(snapshot) {
     page.strokes.push({
       color: s.color,
       width: s.width,
+      isEraser: !!s.isEraser,
       points: s.points.map(p => ({ x: p.x, y: p.y })),
     });
   }
