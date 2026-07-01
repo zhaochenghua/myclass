@@ -2770,6 +2770,8 @@ function finishBlackboardSelect(event) {
 
   const indices = [];
   for (let i = 0; i < page.strokes.length; i++) {
+    // 跳过板擦笔迹（背景色笔画不算真正笔迹）
+    if (page.strokes[i].color === '#2c2f36') continue;
     if (isStrokeInPolygon(page.strokes[i], poly)) {
       indices.push(i);
     }
