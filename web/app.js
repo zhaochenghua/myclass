@@ -3,6 +3,8 @@ const state = {
   peerConnection: null,
   config: null,
   reconnectTimer: null,
+  teacherConnected: false,
+  roomCode: null,
   presentationMode: 'waiting',
   courseware: null,
   videoOrientation: {
@@ -163,6 +165,9 @@ const elements = {
   videoVolumeSlider: document.getElementById('videoVolumeSlider'),
   videoFullscreenBtn: document.getElementById('videoFullscreenBtn'),
   videoCloseBtn: document.getElementById('videoCloseBtn'),
+  // 课件连接码角标
+  coursewareConnIndicator: document.getElementById('coursewareConnIndicator'),
+  coursewareConnCode: document.getElementById('coursewareConnCode'),
 };
 
 bootstrap();
@@ -429,7 +434,9 @@ function connectSignaling() {
 
   socket.addEventListener('close', () => {
     cleanupPeerConnection();
+    state.teacherConnected = false;
     if (state.presentationMode === 'courseware') {
+      updateCoursewareConnectionIndicator();
       setWaitingStatus('信令连接已断开，可继续翻页查看课件');
     } else {
       showJoinView();
@@ -446,17 +453,22 @@ function connectSignaling() {
 async function handleSignalMessage(message) {
   switch (message.type) {
     case 'room.created':
+      state.roomCode = message.code;
       elements.roomCode.textContent = message.code;
       setWaitingStatus('等待教师连接...');
       break;
     case 'teacher.online':
+      state.teacherConnected = true;
       hideDirectTeachUI();
+      updateCoursewareConnectionIndicator();
       setWaitingStatus('教师已连接，等待直播...');
       break;
     case 'teacher.offline':
+      state.teacherConnected = false;
       cleanupPeerConnection();
       showDirectTeachUI();
       if (state.presentationMode === 'courseware') {
+        updateCoursewareConnectionIndicator();
         setWaitingStatus('教师设备已断开，可继续翻页查看课件');
       } else {
         showJoinView();
@@ -491,6 +503,7 @@ async function handleSignalMessage(message) {
       handleCoursewareOriginal(message);
       break;
     case 'teacher.stop':
+      state.teacherConnected = false;
       cleanupPeerConnection();
       if (state.presentationMode === 'courseware') {
         closeCourseware('课件已结束');
@@ -766,6 +779,7 @@ function showCoursewareViewForZip(courseware) {
   elements.videoStatus.textContent = `${courseware.title}（压缩包，请下载后查看）`;
   elements.annotationCanvas.hidden = true;
   elements.annotationToolbar.hidden = true;
+  updateCoursewareConnectionIndicator();
 }
 
 // ---- 视频课件播放器 ----
@@ -800,6 +814,7 @@ function showCoursewareViewForVideo(info) {
   elements.videoProgressThumb.style.left = '0%';
 
   video.play().catch(() => {});
+  updateCoursewareConnectionIndicator();
 }
 
 function bindVideoEvents() {
@@ -1085,8 +1100,18 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   // 4. 清理下载相关
   try { hideDownloadButton(); } catch {}
 
-  // 5. 更新提示
+  // 5. 更新提示 & 隐藏连接码角标
+  try { elements.coursewareConnIndicator.hidden = true; } catch {}
   try { setWaitingStatus(statusText); } catch {}
+}
+
+function updateCoursewareConnectionIndicator() {
+  const isCourseware = state.presentationMode === 'courseware';
+  const shouldShow = isCourseware && !state.teacherConnected;
+  elements.coursewareConnIndicator.hidden = !shouldShow;
+  if (shouldShow) {
+    elements.coursewareConnCode.textContent = state.roomCode || '----';
+  }
 }
 
 async function loadCoursewareDocument(courseware) {
@@ -1914,6 +1939,7 @@ function showVideoView() {
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   elements.videoStatus.hidden = false;
+  elements.coursewareConnIndicator.hidden = true;
 }
 
 function showCoursewareView() {
@@ -1933,6 +1959,7 @@ function showCoursewareView() {
   elements.videoStatus.hidden = true;
   updatePageNavButtons();
   resizeAnnotationCanvas();
+  updateCoursewareConnectionIndicator();
 }
 
 
