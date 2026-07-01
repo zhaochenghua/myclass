@@ -665,11 +665,10 @@ function openCourseware(message) {
     return;
   }
 
-  // 链接类型课件：打开新窗口
+  // 链接类型课件：弹窗提示用户在大屏端打开
   const linkUrl = typeof message.linkUrl === 'string' ? message.linkUrl : '';
   if (linkUrl) {
-    window.open(linkUrl, '_blank', 'noopener,noreferrer');
-    setWaitingStatus(`链接课件「${message.title || '课件'}」已在新窗口打开`);
+    showLinkPrompt(message.title || '课件', linkUrl);
     return;
   }
 
@@ -2037,10 +2036,9 @@ function openDirectCourseware(cw) {
   setWaitingStatus('');
   state.directTeach = true;
 
-  // 链接类型课件：直接打开新窗口
+  // 链接类型课件：弹窗提示用户在大屏端打开
   if (cw.linkUrl) {
-    window.open(cw.linkUrl, '_blank', 'noopener,noreferrer');
-    setWaitingStatus(`链接课件「${cw.title}」已在新窗口打开`);
+    showLinkPrompt(cw.title, cw.linkUrl);
     return;
   }
 
@@ -2063,6 +2061,38 @@ function formatSize(b) {
   if (!b) return '0B';
   if (b < 1024 * 1024) return Math.round(b / 1024) + 'KB';
   return (b / 1024 / 1024).toFixed(1) + 'MB';
+}
+
+// ---- 链接课件提示弹窗 ----
+function showLinkPrompt(title, linkUrl) {
+  // 移除已有弹窗
+  const existing = document.querySelector('.link-prompt-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay link-prompt-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card" style="width:420px;text-align:center">
+      <h3>🔗 ${escapeHtml(title)}</h3>
+      <p style="color:var(--muted);margin:0.5rem 0 1.2rem;word-break:break-all;font-size:0.85rem">${escapeHtml(linkUrl)}</p>
+      <p style="margin:0 0 1.2rem">教师已推送链接课件，是否在新窗口打开？</p>
+      <div class="modal-actions" style="justify-content:center">
+        <button class="btn-secondary" id="link-prompt-cancel">取消</button>
+        <button class="btn-primary" id="link-prompt-open" style="margin-left:0.75rem">打开链接</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#link-prompt-cancel').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#link-prompt-open').addEventListener('click', () => {
+    window.open(linkUrl, '_blank', 'noopener,noreferrer');
+    overlay.remove();
+  });
+  // 点击遮罩关闭
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
 }
 
 // ---- 黑板系统 ----

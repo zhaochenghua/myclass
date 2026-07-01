@@ -876,7 +876,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         if (index > 0) topMargin = dp(4)
                     }
                 }
-                row.addView(secondaryButton("${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}").apply {
+                row.addView(secondaryButton(coursewareButtonText(item)).apply {
                     maxLines = 2
                     setSingleLine(false)
                     ellipsize = TextUtils.TruncateAt.END
@@ -1562,7 +1562,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             if (index > 0) topMargin = dp(4)
                         }
                     }
-                    row.addView(secondaryButton("${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}").apply {
+                    row.addView(secondaryButton(coursewareButtonText(item)).apply {
                         maxLines = 2
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
@@ -1635,7 +1635,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             if (index > 0) topMargin = dp(4)
                         }
                     }
-                    row.addView(secondaryButton("${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}").apply {
+                    row.addView(secondaryButton(coursewareButtonText(item)).apply {
                         maxLines = 2
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
@@ -1751,15 +1751,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareScreenCount = 1
         coursewareTitle = item.title
 
-        // 链接类型课件：直接跳转系统浏览器打开外部链接
+        // 链接类型课件：通过信令推送到大屏网页端，提示用户跳转
         if (item.linkUrl.isNotBlank()) {
-            try {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(item.linkUrl))
-                startActivity(intent)
-                toast("已在浏览器中打开：${item.title}")
-            } catch (e: Exception) {
-                toast("无法打开链接：${e.message}")
-            }
+            signalingClient?.sendCoursewareOpen(item.url, item.title, 1, 1, item.linkUrl)
+            showCoursewareScreen(title = item.title, isUploading = false)
+            toast("链接课件已推送到大屏")
             return
         }
 
@@ -1778,10 +1774,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
     private fun coursewareFormatLabel(item: StoredCoursewareItem): String {
+        if (item.linkUrl.isNotBlank()) return "[链接]"
         // 优先用原始文件扩展名（PPT/DOC 转 PDF 后仍显示原格式）
         val source = if (item.originalUrl.isNotBlank()) item.originalUrl else item.url
         val ext = source.substringAfterLast('.', "").uppercase()
         return if (ext.isNotEmpty()) "[$ext]" else ""
+    }
+
+    private fun coursewareButtonText(item: StoredCoursewareItem): String {
+        return if (item.linkUrl.isNotBlank()) {
+            "${item.title} [链接]"
+        } else {
+            "${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}"
+        }
     }
 
     private fun launchCoursewarePicker() {
