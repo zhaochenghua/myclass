@@ -763,6 +763,9 @@ function showCoursewareViewForVideo(info) {
   elements.nextPageButton.hidden = true;
   if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
 
+  // 先绑定事件（内部会 cloneNode 替换元素），再设置 src 避免被 cloneNode(false) 丢弃
+  bindVideoEvents();
+
   const video = elements.coursewareVideo;
   video.src = info.url;
   video.volume = elements.videoVolumeSlider.value / 100;
@@ -774,7 +777,6 @@ function showCoursewareViewForVideo(info) {
   elements.videoProgressFill.style.width = '0%';
   elements.videoProgressThumb.style.left = '0%';
 
-  bindVideoEvents();
   video.play().catch(() => {});
 }
 
