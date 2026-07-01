@@ -203,6 +203,16 @@ h1 {
   background: rgba(101, 240, 200, 0.2);
 }
 
+.action-btn-blackboard {
+  border: 1px solid #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  color: #38bdf8;
+}
+
+.action-btn-blackboard:hover {
+  background: rgba(56, 189, 248, 0.2);
+}
+
 .action-btn-exam {
   border: 1px solid var(--warm);
   background: rgba(255, 209, 102, 0.1);

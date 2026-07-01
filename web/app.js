@@ -134,6 +134,7 @@ const elements = {
   teacherLoginCancel: document.getElementById('teacherLoginCancel'),
   teacherLoginSubmit: document.getElementById('teacherLoginSubmit'),
   exitPlatformButton: document.getElementById('exitPlatformButton'),
+  quickBlackboardButton: document.getElementById('quickBlackboardButton'),
   blackboardOverlay: document.getElementById('blackboardOverlay'),
   blackboardCanvas: document.getElementById('blackboardCanvas'),
   blackboardToggleButton: document.getElementById('blackboardToggleButton'),
@@ -240,6 +241,10 @@ async function bootstrap() {
     // 直接上课
     elements.directTeachButton.addEventListener('click', () => {
       elements.loginModal.hidden = false;
+    });
+    // 主页快捷黑板
+    elements.quickBlackboardButton.addEventListener('click', () => {
+      toggleBlackboard(true);
     });
     elements.teacherLoginCancel.addEventListener('click', () => {
       elements.loginModal.hidden = true;
