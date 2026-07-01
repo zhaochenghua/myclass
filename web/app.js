@@ -473,12 +473,15 @@ async function handleSignalMessage(message) {
       handleTeacherOrientation(message);
       break;
     case 'courseware.open':
+      if (state.blackboard.active) toggleBlackboard(false);
       openCourseware(message);
       break;
     case 'courseware.navigate':
+      if (state.blackboard.active) toggleBlackboard(false);
       navigateCourseware(message.delta);
       break;
     case 'courseware.page':
+      if (state.blackboard.active) toggleBlackboard(false);
       showCoursewarePage(message.page);
       break;
     case 'courseware.close':
