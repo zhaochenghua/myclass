@@ -35,6 +35,13 @@ data class PendingFile(
     val queuedAtMillis: Long
 )
 
+data class PendingLink(
+    val id: String,
+    val displayName: String,
+    val url: String,
+    val queuedAtMillis: Long
+)
+
 object ExternalFileReceiver {
 
     private val SUPPORTED_EXTENSIONS = setOf("pdf", "ppt", "pptx", "doc", "docx", "zip", "mp4", "mov", "avi", "webm", "mkv", "3gp")
@@ -42,6 +49,9 @@ object ExternalFileReceiver {
 
     @Volatile
     private var queue = mutableListOf<PendingFile>()
+
+    @Volatile
+    private var linkQueue = mutableListOf<PendingLink>()
 
     @Volatile
     private var lastReceiveDuplicate = false
@@ -91,26 +101,107 @@ object ExternalFileReceiver {
         persistQueue(activity)
     }
 
-    fun handleIncomingIntent(activity: Activity, intent: Intent?): Boolean {
+    enum class HandleResult {
+        IGNORED, FILE, LINK, DUPLICATE
+    }
+
+    fun handleIncomingIntent(activity: Activity, intent: Intent?): HandleResult {
         return runCatching {
             handleIncomingIntentInternal(activity, intent)
         }.getOrElse { e ->
             activity.runOnUiThread {
-                Toast.makeText(activity, "文件导入失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, "导入失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
-            false
+            HandleResult.IGNORED
         }
     }
 
-    private fun handleIncomingIntentInternal(activity: Activity, intent: Intent?): Boolean {
-        val uri = extractUri(intent) ?: return false
+    @Synchronized
+    fun isLatestPendingLink(): Boolean = linkQueue.isNotEmpty()
+
+    @Synchronized
+    fun setLatestLinkName(newName: String, activity: Activity) {
+        val last = linkQueue.lastOrNull() ?: return
+        val idx = linkQueue.lastIndex
+        linkQueue[idx] = last.copy(displayName = newName)
+        persistLinkQueue(activity)
+    }
+
+    @Synchronized
+    fun processPendingLinks(activity: Activity): Int {
+        if (linkQueue.isEmpty()) return 0
+
+        val prefs = activity.getSharedPreferences("myclass_auth", Context.MODE_PRIVATE)
+        val token = prefs.getString("token", null) ?: return 0
+
+        var attempted = 0
+        val baseUrl = BuildConfig.SERVER_BASE_URL.trimEnd('/')
+
+        val iterator = linkQueue.iterator()
+        while (iterator.hasNext()) {
+            val pending = iterator.next()
+            activity.runOnUiThread {
+                Toast.makeText(activity, "正在添加链接课件: ${pending.displayName}", Toast.LENGTH_SHORT).show()
+            }
+
+            try {
+                uploadLink(baseUrl, token, pending)
+                iterator.remove()
+                attempted++
+                activity.runOnUiThread {
+                    Toast.makeText(activity, "${pending.displayName} 添加完成", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                activity.runOnUiThread {
+                    Toast.makeText(activity, "添加失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+                break
+            }
+        }
+
+        persistLinkQueue(activity)
+        return attempted
+    }
+
+    private fun handleIncomingIntentInternal(activity: Activity, intent: Intent?): HandleResult {
+        // 优先检测 text/plain（链接分享）
+        val sharedText = extractSharedText(intent)
+        if (sharedText != null) {
+            val url = extractUrl(sharedText)
+            if (url != null) {
+                val id = UUID.randomUUID().toString()
+                // 从 URL 生成默认名称
+                val defaultName = url.removePrefix("https://").removePrefix("http://")
+                    .substringBefore('/').substringBefore('?').ifBlank { "链接" }
+                synchronized(this) {
+                    lastReceiveDuplicate = false
+                    val dup = linkQueue.find { it.url == url }
+                    if (dup != null) {
+                        lastReceiveDuplicate = true
+                        return HandleResult.DUPLICATE
+                    }
+                    linkQueue.add(PendingLink(
+                        id = id,
+                        displayName = defaultName,
+                        url = url,
+                        queuedAtMillis = System.currentTimeMillis()
+                    ))
+                    persistLinkQueue(activity)
+                }
+                return HandleResult.LINK
+            }
+            // 纯文本不是 URL，忽略
+            return HandleResult.IGNORED
+        }
+
+        val uri = extractUri(intent) ?: return HandleResult.IGNORED
         val (displayName, extension) = resolveFileInfo(activity, uri)
 
         if (extension !in SUPPORTED_EXTENSIONS) {
             activity.runOnUiThread {
                 Toast.makeText(activity, "不支持的文件格式，仅支持 PDF/PPT/DOC/ZIP/视频", Toast.LENGTH_SHORT).show()
             }
-            return false
+            return HandleResult.IGNORED
         }
 
         val id = UUID.randomUUID().toString()
@@ -129,7 +220,7 @@ object ExternalFileReceiver {
             activity.runOnUiThread {
                 Toast.makeText(activity, "文件导入失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
-            return false
+            return HandleResult.IGNORED
         }
 
         val sizeBytes = targetFile.length()
@@ -142,7 +233,7 @@ object ExternalFileReceiver {
                 targetFile.delete()
                 dir.deleteRecursively()
                 lastReceiveDuplicate = true
-                return false
+                return HandleResult.DUPLICATE
             }
 
             val pending = PendingFile(
@@ -155,7 +246,7 @@ object ExternalFileReceiver {
             queue.add(pending)
             persistQueue(activity)
         }
-        return true
+        return HandleResult.FILE
     }
 
     @Synchronized
@@ -222,28 +313,54 @@ object ExternalFileReceiver {
         }
         queue.clear()
         persistQueue(activity)
+        linkQueue.clear()
+        persistLinkQueue(activity)
     }
 
     fun restoreQueue(activity: Activity) {
         synchronized(this) {
             if (queue.isNotEmpty()) return
             val prefs = activity.getSharedPreferences("myclass_queue", Context.MODE_PRIVATE)
-            val json = prefs.getString("queue", null) ?: return
-            val arr = runCatching { JSONArray(json) }.getOrNull() ?: return
-            val restored = mutableListOf<PendingFile>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val id = obj.optString("id")
-                val displayName = obj.optString("displayName")
-                val sizeBytes = obj.optLong("sizeBytes")
-                val fingerprint = obj.optString("fingerprint")
-                val queuedAtMillis = obj.optLong("queuedAtMillis")
-                if (id.isEmpty() || displayName.isEmpty()) continue
-                val f = File(activity.cacheDir, "shared/$id/$displayName")
-                if (!f.exists()) continue
-                restored.add(PendingFile(id, displayName, sizeBytes, fingerprint, queuedAtMillis))
+            val json = prefs.getString("queue", null)
+            if (json != null) {
+                val arr = runCatching { JSONArray(json) }.getOrNull()
+                if (arr != null) {
+                    val restored = mutableListOf<PendingFile>()
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val id = obj.optString("id")
+                        val displayName = obj.optString("displayName")
+                        val sizeBytes = obj.optLong("sizeBytes")
+                        val fingerprint = obj.optString("fingerprint")
+                        val queuedAtMillis = obj.optLong("queuedAtMillis")
+                        if (id.isEmpty() || displayName.isEmpty()) continue
+                        val f = File(activity.cacheDir, "shared/$id/$displayName")
+                        if (!f.exists()) continue
+                        restored.add(PendingFile(id, displayName, sizeBytes, fingerprint, queuedAtMillis))
+                    }
+                    queue = restored
+                }
             }
-            queue = restored
+            // 恢复链接队列
+            if (linkQueue.isEmpty()) {
+                val linkJson = prefs.getString("link_queue", null)
+                if (linkJson != null) {
+                    val arr = runCatching { JSONArray(linkJson) }.getOrNull()
+                    if (arr != null) {
+                        val restored = mutableListOf<PendingLink>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i) ?: continue
+                            val id = obj.optString("id")
+                            val displayName = obj.optString("displayName")
+                            val url = obj.optString("url")
+                            val queuedAtMillis = obj.optLong("queuedAtMillis")
+                            if (id.isEmpty() || url.isEmpty()) continue
+                            restored.add(PendingLink(id, displayName, url, queuedAtMillis))
+                        }
+                        linkQueue = restored
+                    }
+                }
+            }
         }
     }
 
@@ -387,5 +504,63 @@ object ExternalFileReceiver {
             .edit()
             .putString("queue", arr.toString())
             .apply()
+    }
+
+    private fun persistLinkQueue(activity: Activity) {
+        val arr = JSONArray()
+        for (p in linkQueue) {
+            arr.put(JSONObject().apply {
+                put("id", p.id)
+                put("displayName", p.displayName)
+                put("url", p.url)
+                put("queuedAtMillis", p.queuedAtMillis)
+            })
+        }
+        activity.getSharedPreferences("myclass_queue", Context.MODE_PRIVATE)
+            .edit()
+            .putString("link_queue", arr.toString())
+            .apply()
+    }
+
+    private fun extractSharedText(intent: Intent?): String? {
+        if (intent == null) return null
+        if (intent.type != "text/plain") return null
+        intent.getStringExtra(Intent.EXTRA_TEXT)?.let { return it }
+        return null
+    }
+
+    private fun extractUrl(text: String): String? {
+        val trimmed = text.trim()
+        // 匹配 http:// 或 https:// 开头的 URL
+        val urlRegex = Regex("""(https?://[^\s]+)""")
+        val match = urlRegex.find(trimmed)
+        return match?.value
+    }
+
+    private fun uploadLink(baseUrl: String, token: String, pending: PendingLink) {
+        val json = JSONObject().apply {
+            put("title", pending.displayName)
+            put("url", pending.url)
+        }
+
+        val body = okhttp3.RequestBody.create(
+            "application/json; charset=utf-8".toMediaTypeOrNull(),
+            json.toString()
+        )
+
+        val request = Request.Builder()
+            .url("$baseUrl/api/courseware/link")
+            .header("Authorization", "Bearer $token")
+            .post(body)
+            .build()
+
+        uploadClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val msg = runCatching {
+                    JSONObject(response.body?.string().orEmpty()).optString("error")
+                }.getOrNull() ?: "HTTP ${response.code}"
+                throw java.io.IOException(msg)
+            }
+        }
     }
 }

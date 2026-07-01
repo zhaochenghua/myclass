@@ -665,6 +665,14 @@ function openCourseware(message) {
     return;
   }
 
+  // 链接类型课件：打开新窗口
+  const linkUrl = typeof message.linkUrl === 'string' ? message.linkUrl : '';
+  if (linkUrl) {
+    window.open(linkUrl, '_blank', 'noopener,noreferrer');
+    setWaitingStatus(`链接课件「${message.title || '课件'}」已在新窗口打开`);
+    return;
+  }
+
   setAnnotationTool('pen');
 
   // 视频文件：直接播放
@@ -1989,11 +1997,14 @@ async function loadTeacherCourseware() {
       elements.coursewareGrid.innerHTML = items.map((c, i) => {
         const fileName = c.fileName || c.url || '';
         const isVideo = /\.(mp4|mov|avi|webm|mkv|3gp)(\?|$)/i.test(fileName);
-        const badge = isVideo ? '<span class="courseware-video-badge">视频</span>' : '';
+        const isLink = !!c.linkUrl;
+        let badge = '';
+        if (isLink) badge = '<span class="courseware-link-badge">链接</span>';
+        else if (isVideo) badge = '<span class="courseware-video-badge">视频</span>';
         return `
         <div class="courseware-item" data-index="${i}">
           <div class="courseware-item-title">${escapeHtml(c.title)}${badge}</div>
-          <div class="courseware-item-meta">${escapeHtml(fileName)} · ${formatSize(c.size)}</div>
+          <div class="courseware-item-meta">${escapeHtml(fileName)} · ${isLink ? '外部链接' : formatSize(c.size)}</div>
         </div>
         `;
       }).join('');
@@ -2025,6 +2036,14 @@ function openDirectCourseware(cw) {
   elements.roomCode.textContent = '----';
   setWaitingStatus('');
   state.directTeach = true;
+
+  // 链接类型课件：直接打开新窗口
+  if (cw.linkUrl) {
+    window.open(cw.linkUrl, '_blank', 'noopener,noreferrer');
+    setWaitingStatus(`链接课件「${cw.title}」已在新窗口打开`);
+    return;
+  }
+
   // 如果有原文件下载地址，直接设置
   if (cw.originalUrl && cw.originalUrl !== cw.url) {
     state.downloadOriginalUrl = cw.originalUrl;
