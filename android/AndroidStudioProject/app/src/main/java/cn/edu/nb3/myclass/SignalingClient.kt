@@ -90,7 +90,7 @@ class SignalingClient(
     fun sendStop(): Boolean =
         sendJson(JSONObject().put("type", "teacher.stop"))
 
-    fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1): Boolean =
+    fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1, linkUrl: String? = null): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.open")
@@ -98,6 +98,7 @@ class SignalingClient(
                 .put("title", title)
                 .put("page", page)
                 .put("screen", screen)
+                .apply { linkUrl?.let { put("linkUrl", it) } }
         )
 
     fun sendCoursewareNavigate(delta: Int): Boolean =
