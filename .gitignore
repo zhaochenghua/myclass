@@ -5,10 +5,7 @@ npm-debug.log*
 Thumbs.db
 
 web/public/myclass.apk
-web/public/courseware/*.pdf
-web/public/courseware/*.pptx
-web/public/courseware/*.docx
-web/public/courseware/index.json
+web/public/courseware/
 
 android/AndroidStudioProject/.gradle/
 android/AndroidStudioProject/local.properties
