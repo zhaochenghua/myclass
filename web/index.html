@@ -101,6 +101,27 @@
         <div class="video-status" id="videoStatus">等待教师连接...</div>
       </section>
 
+      <!-- 视频播放器覆盖层 -->
+      <div class="video-player-overlay" id="videoPlayerOverlay" hidden>
+        <video id="coursewareVideo" playsinline></video>
+        <div class="video-controls" id="videoControls">
+          <button class="video-ctrl-btn" id="videoPlayPause" title="播放/暂停">▶</button>
+          <div class="video-progress-container" id="videoProgressContainer">
+            <div class="video-progress-track" id="videoProgressTrack">
+              <div class="video-progress-fill" id="videoProgressFill"></div>
+              <div class="video-progress-thumb" id="videoProgressThumb"></div>
+            </div>
+          </div>
+          <span class="video-time" id="videoTime">0:00 / 0:00</span>
+          <div class="video-volume-container">
+            <button class="video-ctrl-btn" id="videoMuteBtn" title="静音">🔊</button>
+            <input type="range" class="video-volume-slider" id="videoVolumeSlider" min="0" max="100" value="100">
+          </div>
+          <button class="video-ctrl-btn" id="videoFullscreenBtn" title="全屏">⛶</button>
+          <button class="video-ctrl-btn" id="videoCloseBtn" title="关闭视频">✕</button>
+        </div>
+      </div>
+
       <!-- 黑板全屏覆盖层 -->
       <div class="blackboard-overlay" id="blackboardOverlay" hidden>
         <canvas class="blackboard-canvas" id="blackboardCanvas"></canvas>
@@ -133,6 +154,6 @@
     </main>
 
     <script src="./vendor/pdfjs/build/pdf.min.js"></script>
-    <script src="./app.js?v=20260625"></script>
+    <script src="./app.js?v=20260701"></script>
   </body>
 </html>

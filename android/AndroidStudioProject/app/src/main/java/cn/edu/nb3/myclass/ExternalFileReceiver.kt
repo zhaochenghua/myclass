@@ -37,7 +37,8 @@ data class PendingFile(
 
 object ExternalFileReceiver {
 
-    private val SUPPORTED_EXTENSIONS = setOf("pdf", "ppt", "pptx", "doc", "docx", "zip")
+    private val SUPPORTED_EXTENSIONS = setOf("pdf", "ppt", "pptx", "doc", "docx", "zip", "mp4", "mov", "avi", "webm", "mkv", "3gp")
+    private val VIDEO_EXTENSIONS = setOf("mp4", "mov", "avi", "webm", "mkv", "3gp")
 
     @Volatile
     private var queue = mutableListOf<PendingFile>()
@@ -63,6 +64,33 @@ object ExternalFileReceiver {
         return v
     }
 
+    @Synchronized
+    fun isLatestPendingVideo(): Boolean {
+        val last = queue.lastOrNull() ?: return false
+        val ext = last.displayName.substringAfterLast('.', "").lowercase()
+        return ext in VIDEO_EXTENSIONS
+    }
+
+    @Synchronized
+    fun setLatestPendingName(newName: String, activity: Activity) {
+        val last = queue.lastOrNull() ?: return
+        val ext = last.displayName.substringAfterLast('.', "").lowercase()
+        val newFullName = if (ext.isNotEmpty() && !newName.endsWith(".$ext")) {
+            "$newName.$ext"
+        } else {
+            newName
+        }
+        // Update queue item
+        val idx = queue.lastIndex
+        queue[idx] = last.copy(displayName = newFullName)
+        // Rename the cached file
+        val dir = File(activity.cacheDir, "shared/${last.id}")
+        val oldFile = File(dir, last.displayName)
+        val newFile = File(dir, newFullName)
+        oldFile.renameTo(newFile)
+        persistQueue(activity)
+    }
+
     fun handleIncomingIntent(activity: Activity, intent: Intent?): Boolean {
         return runCatching {
             handleIncomingIntentInternal(activity, intent)
@@ -80,7 +108,7 @@ object ExternalFileReceiver {
 
         if (extension !in SUPPORTED_EXTENSIONS) {
             activity.runOnUiThread {
-                Toast.makeText(activity, "不支持的文件格式，仅支持 PDF/PPT/DOC/ZIP", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, "不支持的文件格式，仅支持 PDF/PPT/DOC/ZIP/视频", Toast.LENGTH_SHORT).show()
             }
             return false
         }
@@ -263,6 +291,7 @@ object ExternalFileReceiver {
             type.contains("powerpoint") || type.contains("presentation") -> "pptx"
             type.contains("msword") || type.contains("word") -> "docx"
             type.contains("zip") || type.contains("x-zip") -> "zip"
+            type.contains("video") || type.contains("mp4") || type.contains("quicktime") || type.contains("avi") || type.contains("webm") || type.contains("3gpp") -> "mp4"
             else -> "pdf"
         }
     }
