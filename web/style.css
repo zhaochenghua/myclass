@@ -849,6 +849,19 @@ video {
   vertical-align: middle;
 }
 
+/* 链接课件列表标签 */
+.courseware-link-badge {
+  display: inline-block;
+  background: #4a90d9;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
 /* ---- 黑板系统 ---- */
 .blackboard-overlay {
   position: fixed;

@@ -98,7 +98,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val title: String,
         val url: String,
         val size: Long,
-        val originalUrl: String = ""
+        val originalUrl: String = "",
+        val linkUrl: String = ""
     )
 
     private var currentScreen = Screen.Connect
@@ -194,46 +195,38 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (!initialIntentProcessed) {
             initialIntentProcessed = true
             val capturedIntent = intent
-            if (capturedIntent?.action in listOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) {
-                Thread {
-                    val handled = ExternalFileReceiver.handleIncomingIntent(this, capturedIntent)
-                    runOnUiThread {
-                        when {
-                            ExternalFileReceiver.wasLastReceiveDuplicate() -> toast("该文件已在待上传列表中")
-                            handled && ExternalFileReceiver.isLatestPendingVideo() -> {
-                                showVideoNameDialog()
-                            }
-                            handled -> {
-                                toast("课件已加入上传队列（${ExternalFileReceiver.pendingCount()} 个待上传）")
-                                triggerPendingUploadIfReady()
-                            }
-                        }
-                    }
-                }.start()
-            }
+            handleShareIntent(capturedIntent)
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.action in listOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) {
-            Thread {
-                val handled = ExternalFileReceiver.handleIncomingIntent(this, intent)
-                runOnUiThread {
-                    when {
-                        ExternalFileReceiver.wasLastReceiveDuplicate() -> toast("该文件已在待上传列表中")
-                        handled && ExternalFileReceiver.isLatestPendingVideo() -> {
+        handleShareIntent(intent)
+    }
+
+    private fun handleShareIntent(intent: Intent?) {
+        if (intent?.action !in listOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) return
+        Thread {
+            val result = ExternalFileReceiver.handleIncomingIntent(this, intent)
+            runOnUiThread {
+                when (result) {
+                    ExternalFileReceiver.HandleResult.DUPLICATE -> toast("该文件已在待上传列表中")
+                    ExternalFileReceiver.HandleResult.FILE -> {
+                        if (ExternalFileReceiver.isLatestPendingVideo()) {
                             showVideoNameDialog()
-                        }
-                        handled -> {
+                        } else {
                             toast("课件已加入上传队列（${ExternalFileReceiver.pendingCount()} 个待上传）")
                             triggerPendingUploadIfReady()
                         }
                     }
+                    ExternalFileReceiver.HandleResult.LINK -> {
+                        showLinkNameDialog()
+                    }
+                    ExternalFileReceiver.HandleResult.IGNORED -> { /* ignore */ }
                 }
-            }.start()
-        }
+            }
+        }.start()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -409,6 +402,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         Thread {
             ExternalFileReceiver.processPendingQueue(this)
+            ExternalFileReceiver.processPendingLinks(this)
         }.start()
     }
 
@@ -1056,6 +1050,40 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             .show()
     }
 
+    private fun showLinkNameDialog() {
+        val input = android.widget.EditText(this).apply {
+            hint = "请输入课件名称"
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+            filters = arrayOf(InputFilter.LengthFilter(50))
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("导入链接课件")
+            .setMessage("请输入该链接课件的名称")
+            .setView(input)
+            .setNegativeButton("取消") { _, _ ->
+                ExternalFileReceiver.clearQueue(this)
+                toast("已取消链接导入")
+            }
+            .setPositiveButton("确定") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    toast("名称不能为空")
+                    showLinkNameDialog()
+                } else {
+                    ExternalFileReceiver.setLatestLinkName(name, this)
+                    toast("链接课件已加入队列")
+                    triggerPendingUploadIfReady()
+                }
+            }
+            .setOnCancelListener {
+                ExternalFileReceiver.clearQueue(this)
+                toast("已取消链接导入")
+            }
+            .show()
+    }
+
     private fun deleteManagementCourseware(item: StoredCoursewareItem) {
         Thread {
             runCatching {
@@ -1660,12 +1688,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     return@mapNotNull null
                 }
                 val originalUrl = item.optString("originalUrl", "")
+                val linkUrl = item.optString("linkUrl", "")
                 StoredCoursewareItem(
                     id = id,
                     title = item.optString("title", "课件"),
                     url = url,
                     size = item.optLong("size", 0L),
-                    originalUrl = originalUrl
+                    originalUrl = originalUrl,
+                    linkUrl = linkUrl
                 )
             }
         }
@@ -1720,6 +1750,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareScreen = 1
         coursewareScreenCount = 1
         coursewareTitle = item.title
+
+        // 链接类型课件：直接跳转系统浏览器打开外部链接
+        if (item.linkUrl.isNotBlank()) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(item.linkUrl))
+                startActivity(intent)
+                toast("已在浏览器中打开：${item.title}")
+            } catch (e: Exception) {
+                toast("无法打开链接：${e.message}")
+            }
+            return
+        }
+
         coursewareUrl = item.url
         signalingClient?.sendStop()
         signalingClient?.sendCoursewareOpen(item.url, item.title, coursewarePage, coursewareScreen)

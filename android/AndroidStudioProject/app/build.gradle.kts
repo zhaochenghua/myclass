@@ -37,8 +37,8 @@ android {
         applicationId = "cn.edu.nb3.myclass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2026070101
-        versionName = "1.4.0-20260701"
+        versionCode = 2026070102
+        versionName = "1.4.1-20260701"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
         buildConfigField("int", "VIDEO_WIDTH", "1920")
