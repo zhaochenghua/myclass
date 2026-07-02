@@ -115,7 +115,11 @@ const elements = {
   clearAnnotationButton: document.getElementById('clearAnnotationButton'),
   annotationColorButtons: Array.from(document.querySelectorAll('.annotation-color')),
   fullscreenButton: document.getElementById('fullscreenButton'),
-  downloadOriginalButton: document.getElementById('downloadOriginalButton'),
+  coursewareDropdown: document.getElementById('coursewareDropdown'),
+  coursewareMenuButton: document.getElementById('coursewareMenuButton'),
+  coursewareDropdownMenu: document.getElementById('coursewareDropdownMenu'),
+  downloadOriginalMenuItem: document.getElementById('downloadOriginalMenuItem'),
+  switchCoursewareMenuItem: document.getElementById('switchCoursewareMenuItem'),
   prevPageButton: document.getElementById('prevPageButton'),
   nextPageButton: document.getElementById('nextPageButton'),
   selectCoursewareButton: document.getElementById('selectCoursewareButton'),
@@ -314,7 +318,7 @@ async function bootstrap() {
     window.addEventListener('resize', handleViewportResize);
     // 首次点击页面任意位置自动全屏（排除下载按钮、考试平台链接）
     const autoFullscreen = (e) => {
-      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, .action-btn-exam, .action-btn-exit')) return;
+      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, .action-btn-exam, .action-btn-exit')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
@@ -360,7 +364,26 @@ async function bootstrap() {
     elements.undoAnnotationButton.addEventListener('click', undoAnnotationStroke);
     elements.clearAnnotationButton.addEventListener('click', clearAnnotations);
     elements.fullscreenButton.addEventListener('click', toggleFullscreen);
-    elements.downloadOriginalButton.addEventListener('click', downloadOriginalFile);
+    // 课件下拉菜单
+    elements.coursewareMenuButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = elements.coursewareDropdownMenu;
+      menu.hidden = !menu.hidden;
+    });
+    elements.downloadOriginalMenuItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      elements.coursewareDropdownMenu.hidden = true;
+      downloadOriginalFile();
+    });
+    elements.switchCoursewareMenuItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      elements.coursewareDropdownMenu.hidden = true;
+      showTeacherCoursewarePicker();
+    });
+    // 点击其他区域关闭下拉菜单
+    document.addEventListener('click', () => {
+      elements.coursewareDropdownMenu.hidden = true;
+    });
     elements.prevPageButton.addEventListener('click', () => navigatePage(-1));
     elements.nextPageButton.addEventListener('click', () => navigatePage(1));
     if (elements.selectCoursewareButton) elements.selectCoursewareButton.addEventListener('click', showTeacherCoursewarePicker);
@@ -1987,8 +2010,8 @@ function handleCoursewareOriginal(message) {
   state.courseware = state.courseware || {};
   state.courseware.downloadOriginalUrl = message.originalUrl;
   state.downloadOriginalUrl = message.originalUrl;
-  if (elements.downloadOriginalButton) {
-    elements.downloadOriginalButton.hidden = false;
+  if (elements.coursewareDropdown) {
+    elements.coursewareDropdown.hidden = false;
   }
 }
 
@@ -2008,14 +2031,15 @@ function downloadOriginalFile() {
 
 function hideDownloadButton() {
   state.downloadOriginalUrl = null;
-  if (elements.downloadOriginalButton) {
-    elements.downloadOriginalButton.hidden = true;
+  if (elements.coursewareDropdown) {
+    elements.coursewareDropdown.hidden = true;
+    elements.coursewareDropdownMenu.hidden = true;
   }
 }
 
 function showDownloadButtonIfAvailable() {
   if (state.downloadOriginalUrl) {
-    elements.downloadOriginalButton.hidden = false;
+    elements.coursewareDropdown.hidden = false;
   }
 }
 

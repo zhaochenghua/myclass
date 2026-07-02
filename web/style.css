@@ -428,6 +428,62 @@ video {
   border-color: rgba(255, 255, 255, 0.12);
 }
 
+/* 课件下拉菜单 */
+.toolbar-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.toolbar-dropdown-btn {
+  cursor: pointer;
+}
+
+.toolbar-dropdown-btn::after {
+  content: ' ▾';
+  font-size: 0.8em;
+  opacity: 0.6;
+}
+
+.toolbar-dropdown-menu {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 7.5rem;
+  padding: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 0.4rem 1.2rem rgba(0, 0, 0, 0.5);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.toolbar-dropdown-item {
+  display: block;
+  width: 100%;
+  min-height: 2.3rem;
+  padding: 0 0.8rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 0.95rem;
+  text-align: center;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.toolbar-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
 .nav-page-button {
   min-width: 4.2rem;
   height: 2.5rem;
