@@ -1171,6 +1171,11 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
 
   // 5. 更新提示
   try { setWaitingStatus(statusText); } catch {}
+
+  // 6. 恢复连接码显示（directTeach 模式下可能被覆盖为 ----）
+  if (state.roomCode) {
+    try { elements.roomCode.textContent = state.roomCode; } catch {}
+  }
 }
 
 function updateCoursewareConnectionIndicator() {
