@@ -92,7 +92,13 @@
           <button class="nav-page-button" id="nextPageButton" type="button" hidden>下一页</button>
           <button class="nav-page-button" id="selectCoursewareButton" type="button" hidden>课件列表</button>
           <button class="annotation-button" id="fullscreenButton" type="button">全屏</button>
-          <button class="annotation-button" id="downloadOriginalButton" type="button" hidden>↓原文件</button>
+          <div class="toolbar-dropdown" id="coursewareDropdown" hidden>
+            <button class="annotation-button toolbar-dropdown-btn" id="coursewareMenuButton" type="button">课件</button>
+            <div class="toolbar-dropdown-menu" id="coursewareDropdownMenu" hidden>
+              <button class="toolbar-dropdown-item" id="downloadOriginalMenuItem">↓原文件</button>
+              <button class="toolbar-dropdown-item" id="switchCoursewareMenuItem">切换课件</button>
+            </div>
+          </div>
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="rollStudentButton" type="button">抽学号</button>
           <span class="roll-student-result" id="rollStudentResult">??</span>
