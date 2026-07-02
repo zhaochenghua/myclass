@@ -387,7 +387,16 @@ setupWebSocket(server, {
   apkUrl: APK_URL,
   isAllowedHost,
   isAllowedOrigin,
-  readCoursewareIndex
+  readCoursewareIndex,
+  verifyTeacherToken: async (token) => {
+    if (!token) return null;
+    const users = await readUsers();
+    const user = users.find((u) => u.token === token);
+    if (!user) return null;
+    user.lastLoginAt = new Date().toISOString();
+    await writeUsers(users);
+    return { id: user.id, username: user.username };
+  }
 });
 
 app.use((error, req, res, next) => {

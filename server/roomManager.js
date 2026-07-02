@@ -39,7 +39,7 @@ class RoomManager {
     return room;
   }
 
-  joinAsTeacher(code, teacherSocket) {
+  joinAsTeacher(code, teacherSocket, teacherInfo = null) {
     const room = this.rooms.get(code);
     if (!room || this.#isExpired(room)) {
       if (room) {
@@ -60,7 +60,13 @@ class RoomManager {
 
     room.teacherSocket = teacherSocket;
     this.socketIndex.set(teacherSocket, { code, role: 'teacher' });
-    sendJson(room.viewerSocket, { type: 'teacher.online' });
+
+    // 通知大屏端教师上线，携带用户信息用于同步登录
+    const onlineMsg = { type: 'teacher.online' };
+    if (teacherInfo) {
+      onlineMsg.username = teacherInfo.username;
+    }
+    sendJson(room.viewerSocket, onlineMsg);
 
     return { ok: true, room };
   }
