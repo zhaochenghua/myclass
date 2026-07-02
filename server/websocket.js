@@ -90,6 +90,8 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'courseware.state':
     case 'teacher.orientation':
     case 'teacher.stop':
+    case 'viewer.courseware.open':
+    case 'viewer.courseware.close':
       handleForward(socket, message, roomManager, options);
       break;
     default:
@@ -164,6 +166,12 @@ function handleForward(socket, message, roomManager, options) {
 
   if (message.type === 'webrtc.answer' && binding.role !== 'viewer') {
     sendJson(socket, { type: 'error', message: '只有教室端可以返回 answer' });
+    return;
+  }
+
+  // viewer.courseware.* 仅允许大屏端发送
+  if (message.type.startsWith('viewer.courseware.') && binding.role !== 'viewer') {
+    sendJson(socket, { type: 'error', message: '只有教室端可以发送该消息' });
     return;
   }
 
