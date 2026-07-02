@@ -860,6 +860,7 @@ function showCoursewareViewForVideo(info) {
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
+  if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
 
   // 先绑定事件（内部会 cloneNode 替换元素），再设置 src 避免被 cloneNode(false) 丢弃
   bindVideoEvents();
@@ -2001,6 +2002,7 @@ function showVideoView() {
 function showCoursewareView() {
   state.presentationMode = 'courseware';
   showDownloadButtonIfAvailable();
+  if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
   elements.remoteVideo.hidden = true;
   elements.coursewareCanvas.hidden = false;
   elements.videoView.dataset.orientation = 'landscape';
