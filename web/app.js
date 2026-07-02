@@ -245,7 +245,15 @@ async function bootstrap() {
     }
     // 直接上课
     elements.directTeachButton.addEventListener('click', () => {
-      elements.loginModal.hidden = false;
+      if (state.teacherToken) {
+        showTeacherCoursewarePicker();
+      } else {
+        elements.loginModal.hidden = false;
+      }
+    });
+    // 主页快捷黑板
+    elements.quickBlackboardButton.addEventListener('click', () => {
+      toggleBlackboard(true);
     });
     // 主页快捷黑板
     elements.quickBlackboardButton.addEventListener('click', () => {
@@ -492,15 +500,14 @@ async function handleSignalMessage(message) {
     case 'teacher.online':
       state.teacherConnected = true;
       if (message.username && message.token) {
-        // 教师手机端已登录，大屏自动同步登录（使用真实 token）
+        // 教师手机端已登录，大屏同步登录态（使用真实 token）
+        // 不自动弹出课件列表，保留"打开课件"按钮供教师主动操作
         state.teacherToken = message.token;
         state.syncedFromTeacher = true;
         state.directTeach = true;
-        elements.directTeachButton.hidden = true;
         elements.directTeachUser.textContent = `已登录：${message.username}`;
         elements.directTeachUser.hidden = false;
         elements.directTeachLogout.hidden = false;
-        loadTeacherCourseware();
       } else {
         hideDirectTeachUI();
       }
