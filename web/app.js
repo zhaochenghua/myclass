@@ -278,6 +278,7 @@ async function bootstrap() {
         elements.loginModal.hidden = true;
         elements.teacherUsername.value = '';
         elements.teacherPassword.value = '';
+        updateSwitchCoursewareVisibility();
         loadTeacherCourseware();
       } catch (err) {
         elements.teacherLoginError.textContent = err.message;
@@ -292,6 +293,7 @@ async function bootstrap() {
       elements.directTeachUser.hidden = true;
       elements.directTeachLogout.hidden = true;
       elements.coursewarePicker.hidden = true;
+      updateSwitchCoursewareVisibility();
     });
     elements.closePickerButton.addEventListener('click', () => {
       elements.coursewarePicker.hidden = true;
@@ -2012,6 +2014,7 @@ function handleCoursewareOriginal(message) {
   state.downloadOriginalUrl = message.originalUrl;
   if (elements.coursewareDropdown) {
     elements.coursewareDropdown.hidden = false;
+    updateSwitchCoursewareVisibility();
   }
 }
 
@@ -2040,6 +2043,13 @@ function hideDownloadButton() {
 function showDownloadButtonIfAvailable() {
   if (state.downloadOriginalUrl) {
     elements.coursewareDropdown.hidden = false;
+  }
+  updateSwitchCoursewareVisibility();
+}
+
+function updateSwitchCoursewareVisibility() {
+  if (elements.switchCoursewareMenuItem) {
+    elements.switchCoursewareMenuItem.hidden = !state.teacherToken;
   }
 }
 
