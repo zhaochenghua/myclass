@@ -562,15 +562,8 @@ async function handleSignalMessage(message) {
       handleCoursewareOriginal(message);
       break;
     case 'teacher.stop':
+      // teacher.stop 仅表示停止推流/课件播放，手机端仍在线，不清除登录态
       state.teacherConnected = false;
-      // 清除手机同步登录状态
-      if (state.syncedFromTeacher) {
-        state.teacherToken = null;
-        state.syncedFromTeacher = false;
-        state.directTeach = false;
-        elements.directTeachUser.hidden = true;
-        elements.directTeachLogout.hidden = true;
-      }
       cleanupPeerConnection();
       if (state.presentationMode === 'courseware') {
         closeCourseware('课件已结束');
