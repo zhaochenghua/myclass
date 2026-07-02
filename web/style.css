@@ -457,9 +457,13 @@ video {
   backdrop-filter: blur(12px);
   box-shadow: 0 0.4rem 1.2rem rgba(0, 0, 0, 0.5);
   z-index: 10;
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 0.15rem;
+}
+
+.toolbar-dropdown-menu.is-open {
+  display: flex;
 }
 
 .toolbar-dropdown-item {
