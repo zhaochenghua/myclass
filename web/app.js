@@ -278,7 +278,6 @@ async function bootstrap() {
         elements.loginModal.hidden = true;
         elements.teacherUsername.value = '';
         elements.teacherPassword.value = '';
-        updateSwitchCoursewareVisibility();
         loadTeacherCourseware();
       } catch (err) {
         elements.teacherLoginError.textContent = err.message;
@@ -293,7 +292,6 @@ async function bootstrap() {
       elements.directTeachUser.hidden = true;
       elements.directTeachLogout.hidden = true;
       elements.coursewarePicker.hidden = true;
-      updateSwitchCoursewareVisibility();
     });
     elements.closePickerButton.addEventListener('click', () => {
       elements.coursewarePicker.hidden = true;
@@ -369,22 +367,21 @@ async function bootstrap() {
     // 课件下拉菜单
     elements.coursewareMenuButton.addEventListener('click', (e) => {
       e.stopPropagation();
-      const menu = elements.coursewareDropdownMenu;
-      menu.hidden = !menu.hidden;
+      elements.coursewareDropdownMenu.classList.toggle('is-open');
     });
     elements.downloadOriginalMenuItem.addEventListener('click', (e) => {
       e.stopPropagation();
-      elements.coursewareDropdownMenu.hidden = true;
+      elements.coursewareDropdownMenu.classList.remove('is-open');
       downloadOriginalFile();
     });
     elements.switchCoursewareMenuItem.addEventListener('click', (e) => {
       e.stopPropagation();
-      elements.coursewareDropdownMenu.hidden = true;
+      elements.coursewareDropdownMenu.classList.remove('is-open');
       showTeacherCoursewarePicker();
     });
     // 点击其他区域关闭下拉菜单
     document.addEventListener('click', () => {
-      elements.coursewareDropdownMenu.hidden = true;
+      elements.coursewareDropdownMenu.classList.remove('is-open');
     });
     elements.prevPageButton.addEventListener('click', () => navigatePage(-1));
     elements.nextPageButton.addEventListener('click', () => navigatePage(1));
@@ -491,12 +488,29 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.online':
       state.teacherConnected = true;
-      hideDirectTeachUI();
+      if (message.username) {
+        // 教师手机端已登录，大屏自动同步登录
+        state.teacherToken = 'synced';
+        state.directTeach = true;
+        elements.directTeachButton.hidden = true;
+        elements.directTeachUser.textContent = `已登录：${message.username}`;
+        elements.directTeachUser.hidden = false;
+        elements.directTeachLogout.hidden = false;
+      } else {
+        hideDirectTeachUI();
+      }
       updateCoursewareConnectionIndicator();
       setWaitingStatus('教师已连接，等待直播...');
       break;
     case 'teacher.offline':
       state.teacherConnected = false;
+      // 清除手机同步登录状态
+      if (state.teacherToken === 'synced') {
+        state.teacherToken = null;
+        state.directTeach = false;
+        elements.directTeachUser.hidden = true;
+        elements.directTeachLogout.hidden = true;
+      }
       cleanupPeerConnection();
       showDirectTeachUI();
       if (state.presentationMode === 'courseware') {
@@ -536,6 +550,13 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.stop':
       state.teacherConnected = false;
+      // 清除手机同步登录状态
+      if (state.teacherToken === 'synced') {
+        state.teacherToken = null;
+        state.directTeach = false;
+        elements.directTeachUser.hidden = true;
+        elements.directTeachLogout.hidden = true;
+      }
       cleanupPeerConnection();
       if (state.presentationMode === 'courseware') {
         closeCourseware('课件已结束');
@@ -2014,7 +2035,6 @@ function handleCoursewareOriginal(message) {
   state.downloadOriginalUrl = message.originalUrl;
   if (elements.coursewareDropdown) {
     elements.coursewareDropdown.hidden = false;
-    updateSwitchCoursewareVisibility();
   }
 }
 
@@ -2036,20 +2056,13 @@ function hideDownloadButton() {
   state.downloadOriginalUrl = null;
   if (elements.coursewareDropdown) {
     elements.coursewareDropdown.hidden = true;
-    elements.coursewareDropdownMenu.hidden = true;
+    elements.coursewareDropdownMenu.classList.remove('is-open');
   }
 }
 
 function showDownloadButtonIfAvailable() {
   if (state.downloadOriginalUrl) {
     elements.coursewareDropdown.hidden = false;
-  }
-  updateSwitchCoursewareVisibility();
-}
-
-function updateSwitchCoursewareVisibility() {
-  if (elements.switchCoursewareMenuItem) {
-    elements.switchCoursewareMenuItem.hidden = !state.teacherToken;
   }
 }
 

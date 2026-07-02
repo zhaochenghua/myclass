@@ -78,7 +78,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
       handleViewerJoin(socket, roomManager, options);
       break;
     case 'teacher.join':
-      handleTeacherJoin(socket, message, roomManager);
+      handleTeacherJoin(socket, message, roomManager, options);
       break;
     case 'webrtc.offer':
     case 'webrtc.answer':
@@ -118,7 +118,7 @@ function handleViewerJoin(socket, roomManager, options) {
   });
 }
 
-function handleTeacherJoin(socket, message, roomManager) {
+async function handleTeacherJoin(socket, message, roomManager, options) {
   const code = String(message.code || '').trim();
   if (!/^\d{4}$/.test(code)) {
     sendJson(socket, {
@@ -128,7 +128,13 @@ function handleTeacherJoin(socket, message, roomManager) {
     return;
   }
 
-  const result = roomManager.joinAsTeacher(code, socket);
+  // 如果教师手机端已登录，验证 token 并获取用户信息用于大屏同步登录
+  let teacherInfo = null;
+  if (typeof message.token === 'string' && message.token && typeof options.verifyTeacherToken === 'function') {
+    teacherInfo = await options.verifyTeacherToken(message.token);
+  }
+
+  const result = roomManager.joinAsTeacher(code, socket, teacherInfo);
   if (!result.ok) {
     sendJson(socket, {
       type: 'join.rejected',
