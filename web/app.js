@@ -1151,8 +1151,14 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   try { elements.remoteVideo.hidden = false; } catch {}
 
   // 2. 重置状态
+  const wasDirectTeach = state.directTeach;
   try { state.presentationMode = 'waiting'; } catch {}
   try { state.directTeach = false; } catch {}
+
+  // 通知手机端关闭课件翻页页面（仅大屏直接打开的课件才需要通知）
+  if (wasDirectTeach) {
+    sendMessage({ type: 'viewer.courseware.close' });
+  }
 
   // 3. 安全清理课件资源
   try { destroyCoursewareDocument(state.courseware); } catch {}
@@ -2150,6 +2156,15 @@ function openDirectCourseware(cw) {
     state.downloadOriginalUrl = null;
   }
   openCourseware({ url: cw.url, title: cw.title, page: 1, screen: 1 });
+
+  // 通知手机端同步打开课件翻页页面
+  sendMessage({
+    type: 'viewer.courseware.open',
+    url: cw.url,
+    title: cw.title,
+    page: 1,
+    screen: 1
+  });
 }
 
 function escapeHtml(str) {

@@ -2592,6 +2592,39 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    override fun onViewerCoursewareOpen(url: String, title: String, page: Int, screen: Int) {
+        runOnUiThread {
+            // 大屏端直接打开了课件，手机端同步打开课件翻页页面
+            coursewareUrl = url
+            coursewareTitle = if (title.isNotBlank()) title else "课件"
+            coursewarePage = page
+            coursewarePageCount = 1
+            coursewareScreen = screen
+            coursewareScreenCount = 1
+            coursewareUploadInProgress = false
+            cancelCoursewareFastSeek()
+            showCoursewareScreen(title = coursewareTitle, isUploading = false)
+            toast("大屏已打开课件：$coursewareTitle")
+        }
+    }
+
+    override fun onViewerCoursewareClose() {
+        runOnUiThread {
+            // 大屏端关闭了课件，手机端返回菜单（不回发关闭信号，避免循环）
+            if (currentScreen != Screen.Courseware) return@runOnUiThread
+            cancelCoursewareFastSeek()
+            coursewarePage = 1
+            coursewarePageCount = 1
+            coursewareScreen = 1
+            coursewareScreenCount = 1
+            coursewareTitle = ""
+            coursewareUrl = ""
+            savedCoursewareState = null
+            coursewareSubScreen = CoursewareSubScreen.None
+            showMenuScreen()
+        }
+    }
+
     override fun onSignalError(message: String) {
         runOnUiThread {
             roomJoined = false

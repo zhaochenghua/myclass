@@ -49,6 +49,8 @@ class SignalingClient(
         fun onAnswer(sdp: String)
         fun onRemoteIceCandidate(candidate: IceCandidatePayload)
         fun onCoursewareState(state: CoursewareStatePayload)
+        fun onViewerCoursewareOpen(url: String, title: String, page: Int, screen: Int)
+        fun onViewerCoursewareClose()
         fun onSignalError(message: String)
     }
 
@@ -163,6 +165,13 @@ class SignalingClient(
             "webrtc.answer" -> callback.onAnswer(message.optString("sdp"))
             "webrtc.ice-candidate" -> parseIceCandidate(message)?.let(callback::onRemoteIceCandidate)
             "courseware.state" -> parseCoursewareState(message)?.let(callback::onCoursewareState)
+            "viewer.courseware.open" -> callback.onViewerCoursewareOpen(
+                url = message.optString("url"),
+                title = message.optString("title"),
+                page = message.optInt("page", 1).coerceAtLeast(1),
+                screen = message.optInt("screen", 1).coerceAtLeast(1)
+            )
+            "viewer.courseware.close" -> callback.onViewerCoursewareClose()
             "error" -> callback.onSignalError(message.optString("message", "信令错误"))
         }
     }
