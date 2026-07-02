@@ -87,6 +87,7 @@ const state = {
   teacherToken: null,
   syncedFromTeacher: false,
   directTeach: false,
+  coursewareFromViewer: false,
   teacherCoursewareList: [],
   videoPlayer: {
     active: false,
@@ -1151,12 +1152,13 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   try { elements.remoteVideo.hidden = false; } catch {}
 
   // 2. 重置状态
-  const wasDirectTeach = state.directTeach;
+  const willNotifyViewerClose = state.coursewareFromViewer;
   try { state.presentationMode = 'waiting'; } catch {}
   try { state.directTeach = false; } catch {}
+  try { state.coursewareFromViewer = false; } catch {}
 
   // 通知手机端关闭课件翻页页面（仅大屏直接打开的课件才需要通知）
-  if (wasDirectTeach) {
+  if (willNotifyViewerClose) {
     sendMessage({ type: 'viewer.courseware.close' });
   }
 
@@ -2147,6 +2149,7 @@ function openDirectCourseware(cw) {
   elements.roomCode.textContent = '----';
   setWaitingStatus('');
   state.directTeach = true;
+  state.coursewareFromViewer = true;
 
   // 链接类型课件：弹窗提示用户在大屏端打开
   if (cw.linkUrl) {
