@@ -65,6 +65,7 @@ class RoomManager {
     const onlineMsg = { type: 'teacher.online' };
     if (teacherInfo) {
       onlineMsg.username = teacherInfo.username;
+      onlineMsg.token = teacherInfo.token;
     }
     sendJson(room.viewerSocket, onlineMsg);
 
