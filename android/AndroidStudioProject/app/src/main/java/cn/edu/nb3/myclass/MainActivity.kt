@@ -2440,7 +2440,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         signalingClient = SignalingClient(
             serverBaseUrl = BuildConfig.SERVER_BASE_URL,
             roomCode = code,
-            callback = this
+            callback = this,
+            authToken = authToken
         ).also { it.connect() }
     }
 

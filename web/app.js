@@ -85,6 +85,7 @@ const state = {
   },
   downloadOriginalUrl: null,
   teacherToken: null,
+  syncedFromTeacher: false,
   directTeach: false,
   teacherCoursewareList: [],
   videoPlayer: {
@@ -270,6 +271,7 @@ async function bootstrap() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '登录失败');
         state.teacherToken = data.token;
+        state.syncedFromTeacher = false;
         state.directTeach = true;
         elements.directTeachButton.hidden = true;
         elements.directTeachUser.textContent = `已登录：${data.username}`;
@@ -287,6 +289,7 @@ async function bootstrap() {
     });
     elements.directTeachLogout.addEventListener('click', () => {
       state.teacherToken = null;
+      state.syncedFromTeacher = false;
       state.directTeach = false;
       elements.directTeachButton.hidden = false;
       elements.directTeachUser.hidden = true;
@@ -488,14 +491,16 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.online':
       state.teacherConnected = true;
-      if (message.username) {
-        // 教师手机端已登录，大屏自动同步登录
-        state.teacherToken = 'synced';
+      if (message.username && message.token) {
+        // 教师手机端已登录，大屏自动同步登录（使用真实 token）
+        state.teacherToken = message.token;
+        state.syncedFromTeacher = true;
         state.directTeach = true;
         elements.directTeachButton.hidden = true;
         elements.directTeachUser.textContent = `已登录：${message.username}`;
         elements.directTeachUser.hidden = false;
         elements.directTeachLogout.hidden = false;
+        loadTeacherCourseware();
       } else {
         hideDirectTeachUI();
       }
@@ -505,8 +510,9 @@ async function handleSignalMessage(message) {
     case 'teacher.offline':
       state.teacherConnected = false;
       // 清除手机同步登录状态
-      if (state.teacherToken === 'synced') {
+      if (state.syncedFromTeacher) {
         state.teacherToken = null;
+        state.syncedFromTeacher = false;
         state.directTeach = false;
         elements.directTeachUser.hidden = true;
         elements.directTeachLogout.hidden = true;
@@ -551,8 +557,9 @@ async function handleSignalMessage(message) {
     case 'teacher.stop':
       state.teacherConnected = false;
       // 清除手机同步登录状态
-      if (state.teacherToken === 'synced') {
+      if (state.syncedFromTeacher) {
         state.teacherToken = null;
+        state.syncedFromTeacher = false;
         state.directTeach = false;
         elements.directTeachUser.hidden = true;
         elements.directTeachLogout.hidden = true;

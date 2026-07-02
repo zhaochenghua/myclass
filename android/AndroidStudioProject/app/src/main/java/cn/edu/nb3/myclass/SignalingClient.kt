@@ -37,7 +37,8 @@ data class CoursewareStatePayload(
 class SignalingClient(
     private val serverBaseUrl: String,
     private val roomCode: String,
-    private val callback: Callback
+    private val callback: Callback,
+    private val authToken: String? = null
 ) : WebSocketListener() {
 
     interface Callback {
@@ -143,11 +144,12 @@ class SignalingClient(
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
         // 手机端连接成功后立即提交 4 位连接码。
-        sendJson(
-            JSONObject()
-                .put("type", "teacher.join")
-                .put("code", roomCode)
-        )
+        val joinMsg = JSONObject()
+            .put("type", "teacher.join")
+            .put("code", roomCode)
+        // 携带登录 token，服务端据此识别教师身份并同步登录态到大屏端
+        authToken?.let { joinMsg.put("token", it) }
+        sendJson(joinMsg)
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
