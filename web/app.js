@@ -102,6 +102,7 @@ const elements = {
   joinView: document.getElementById('joinView'),
   videoView: document.getElementById('videoView'),
   roomCode: document.getElementById('roomCode'),
+  clockTime: document.getElementById('clockTime'),
   apkQr: document.getElementById('apkQr'),
   downloadHint: document.querySelector('.download-hint'),
   statusText: document.getElementById('statusText'),
@@ -406,10 +407,27 @@ async function bootstrap() {
     updateAnnotationColorButtons();
     updateAnnotationToolButtons();
     setupStudentRoller();
+    startClock();
     connectSignaling();
   } catch (error) {
     setWaitingStatus('服务配置加载失败，请检查服务端是否启动');
   }
+}
+
+function startClock() {
+  const pad = (n) => String(n).padStart(2, '0');
+  const update = () => {
+    const now = new Date();
+    elements.clockTime.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  };
+  update();
+  // 计算到下一分钟的毫秒数，对齐整分钟更新
+  const now = new Date();
+  const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+  setTimeout(() => {
+    update();
+    setInterval(update, 60000);
+  }, msToNextMinute);
 }
 
 function setupStudentRoller() {
@@ -2111,13 +2129,17 @@ async function loadTeacherCourseware() {
         const fileName = c.fileName || c.url || '';
         const isVideo = /\.(mp4|mov|avi|webm|mkv|3gp)(\?|$)/i.test(fileName);
         const isLink = !!c.linkUrl;
+        const isCourseware = /\.(ppt|pptx)(\?|$)/i.test(fileName);
+        const isDocument = /\.(pdf|doc|docx|xls|xlsx)(\?|$)/i.test(fileName);
         let badge = '';
         if (isLink) badge = '<span class="courseware-link-badge">链接</span>';
         else if (isVideo) badge = '<span class="courseware-video-badge">视频</span>';
+        else if (isCourseware) badge = '<span class="courseware-doc-badge">课件</span>';
+        else if (isDocument) badge = '<span class="courseware-doc-badge">文档</span>';
         return `
         <div class="courseware-item" data-index="${i}">
-          <div class="courseware-item-title">${escapeHtml(c.title)}${badge}</div>
-          <div class="courseware-item-meta">${escapeHtml(fileName)} · ${isLink ? '外部链接' : formatSize(c.size)}</div>
+          <div class="courseware-item-title">${badge}<span class="courseware-item-title-text">${escapeHtml(c.title)}</span></div>
+          <div class="courseware-item-meta"><span class="courseware-item-meta-text">${escapeHtml(fileName)} · ${isLink ? '外部链接' : formatSize(c.size)}</span></div>
         </div>
         `;
       }).join('');

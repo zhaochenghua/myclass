@@ -525,6 +525,36 @@ video {
   text-shadow: 0 0 1rem #000;
 }
 
+/* ---- 左上角时钟 ---- */
+.clock-indicator {
+  position: fixed;
+  z-index: 25;
+  top: 1.2rem;
+  left: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.2rem;
+  background: rgba(10, 14, 23, 0.82);
+  backdrop-filter: blur(0.8rem);
+  -webkit-backdrop-filter: blur(0.8rem);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 0.8rem;
+  box-shadow: 0 0.4rem 1.6rem rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  user-select: none;
+}
+
+.clock-time {
+  font-size: clamp(1.4rem, 2.4vw, 2.4rem);
+  color: #38bdf8;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  text-shadow: 0 0 1.2rem rgba(56, 189, 248, 0.35);
+  line-height: 1;
+}
+
 /* ---- 课件连接码角标 ---- */
 .courseware-conn-indicator {
   position: fixed;
@@ -602,7 +632,7 @@ video {
 }
 
 /* 课件选择弹窗 */
-.courseware-picker-card {
+.modal-card.courseware-picker-card {
   width: min(600px, 90vw);
   max-height: 80vh;
   display: flex;
@@ -625,6 +655,24 @@ video {
   text-align: left;
 }
 
+/* 宽屏 / 横屏：扩大模态框宽度 */
+@media (min-width: 960px), (orientation: landscape) and (min-width: 720px) {
+  .modal-card.courseware-picker-card {
+    width: min(65vw, 54rem);
+    padding: 2rem 2.4rem;
+  }
+
+  .courseware-picker-card h3 {
+    font-size: 1.35rem;
+  }
+
+  .courseware-grid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.65rem;
+    max-height: 55vh;
+  }
+}
+
 .courseware-item {
   padding: 0.65rem 0.8rem;
   border: 1px solid rgba(255,255,255,0.12);
@@ -632,6 +680,8 @@ video {
   background: rgba(255,255,255,0.04);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .courseware-item:hover {
@@ -640,17 +690,39 @@ video {
 }
 
 .courseware-item-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   font-size: 0.9rem;
   color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.courseware-item-title-text {
+  /* 内联文本，随 badge 自然排列 */
+}
+
+.courseware-link-badge,
+.courseware-video-badge {
+  /* badge 保持内联，跟随文字流 */
 }
 
 .courseware-item-meta {
-  margin-top: 0.25rem;
+  margin-top: 0.3rem;
   font-size: 0.75rem;
   color: var(--muted);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-height: 1.4;
+}
+
+.courseware-item-meta-text {
+  word-break: break-all;
 }
 
 .btn-secondary {
@@ -950,7 +1022,7 @@ video {
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 4px;
-  margin-left: 8px;
+  margin-right: 6px;
   vertical-align: middle;
 }
 
@@ -963,7 +1035,20 @@ video {
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 4px;
-  margin-left: 8px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* 文档课件列表标签（PDF/PPT/DOC 等） */
+.courseware-doc-badge {
+  display: inline-block;
+  background: #ffd166;
+  color: #071012;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
   vertical-align: middle;
 }
 
