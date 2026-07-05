@@ -172,7 +172,11 @@
       <span class="courseware-conn-code" id="coursewareConnCode">----</span>
     </div>
 
-    <script src="./vendor/pdfjs/build/pdf.min.js"></script>
-    <script src="./app.js?v=20260702g"></script>
+    <script type="module">
+      import * as pdfjsLib from './vendor/pdfjs/build/pdf.min.mjs?v=5.4.530';
+      window.pdfjsLib = pdfjsLib;
+      pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs?v=5.4.530';
+    </script>
+    <script defer src="./app.js?v=20260702g"></script>
   </body>
 </html>
