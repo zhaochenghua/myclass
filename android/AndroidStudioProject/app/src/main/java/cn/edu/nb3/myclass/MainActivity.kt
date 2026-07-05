@@ -187,6 +187,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         onBackPressedDispatcher.addCallback(this, backCallback)
         loadAuth()
         ExternalFileReceiver.restoreQueue(this)
+        UpdateManager(this).checkForUpdate()
         if (authToken != null) {
             showAuthScreen() // show immediately to avoid black screen
             verifyTokenThenProceed()
