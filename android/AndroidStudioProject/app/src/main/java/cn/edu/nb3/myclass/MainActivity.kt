@@ -882,12 +882,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     setSingleLine(false)
                     ellipsize = TextUtils.TruncateAt.END
                     textSize = 14f
-                    isEnabled = false
                     layoutParams = LinearLayout.LayoutParams(
                         0,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         1f
                     ).apply { marginEnd = dp(4) }
+                    setOnClickListener { openStoredCourseware(item) }
+                    setOnLongClickListener {
+                        showRenameCoursewareDialog(item)
+                        true
+                    }
                 })
                 row.addView(deleteButton("删除").apply {
                     setOnClickListener {
