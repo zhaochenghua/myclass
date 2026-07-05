@@ -1323,7 +1323,7 @@ function loadPdfJs() {
         reject(new Error('PDF组件加载失败，请使用Chrome或Edge浏览器打开此页面'));
         return;
       }
-      lib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.js';
+      lib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs?v=5.4.530';
       resolve(lib);
     });
   }
