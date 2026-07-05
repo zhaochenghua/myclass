@@ -31,6 +31,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -1572,6 +1573,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             1f
                         ).apply { marginEnd = dp(4) }
                         setOnClickListener { openStoredCourseware(item) }
+                        setOnLongClickListener {
+                            showRenameCoursewareDialog(item)
+                            true
+                        }
                     })
                     row.addView(deleteButton("删除").apply {
                         setOnClickListener { confirmDeleteServerCourseware(item) }
@@ -1645,6 +1650,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             1f
                         ).apply { marginEnd = dp(4) }
                         setOnClickListener { openStoredCourseware(item) }
+                        setOnLongClickListener {
+                            showRenameCoursewareDialog(item)
+                            true
+                        }
                     })
                     row.addView(deleteButton("删除").apply {
                         setOnClickListener { confirmDeleteServerCourseware(item) }
@@ -1697,6 +1706,62 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     originalUrl = originalUrl,
                     linkUrl = linkUrl
                 )
+            }
+        }
+    }
+
+    private fun showRenameCoursewareDialog(item: StoredCoursewareItem) {
+        val input = EditText(this).apply {
+            setText(item.title)
+            setSelection(item.title.length)
+            setSingleLine(true)
+            hint = "输入新名称"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("重命名课件")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确定") { _, _ ->
+                val newTitle = input.text.toString().trim()
+                if (newTitle.isEmpty()) {
+                    toast("名称不能为空")
+                } else if (newTitle != item.title) {
+                    input.isEnabled = false
+                    renameServerCourseware(item.id, newTitle)
+                }
+            }
+            .show()
+    }
+
+    private fun renameServerCourseware(id: String, newTitle: String) {
+        Thread {
+            runCatching {
+                renameServerCoursewareBlocking(id, newTitle)
+            }.onSuccess {
+                runOnUiThread {
+                    toast("课件已重命名")
+                    loadServerCoursewareList()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    toast(error.message ?: "重命名失败")
+                }
+            }
+        }.start()
+    }
+
+    private fun renameServerCoursewareBlocking(id: String, newTitle: String) {
+        val json = JSONObject().put("title", newTitle)
+        val request = Request.Builder()
+            .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware/$id/rename")
+            .put(RequestBody.create("application/json; charset=utf-8".toMediaTypeOrNull(), json.toString()))
+            .also { addAuthHeader(it) }
+            .build()
+        coursewareHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errBody = response.body?.string() ?: "{}"
+                val errMsg = try { JSONObject(errBody).optString("error", "重命名失败") } catch (_: Exception) { "重命名失败" }
+                throw IOException(errMsg)
             }
         }
     }
