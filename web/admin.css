@@ -43,6 +43,34 @@
   color: #fff;
 }
 
+#homeButton {
+  border-color: rgba(101, 240, 200, 0.35);
+  color: var(--accent);
+  background: rgba(101, 240, 200, 0.08);
+}
+
+#homeButton:hover {
+  background: rgba(101, 240, 200, 0.18);
+  color: var(--accent);
+}
+
+.form-switch {
+  margin: 1.2rem 0 0;
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.form-switch a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.form-switch a:hover {
+  text-decoration: underline;
+}
+
 .admin-card {
   max-width: 420px;
   margin: 4rem auto;
@@ -355,4 +383,96 @@
   text-align: center;
   color: var(--muted);
   padding: 2rem;
+}
+
+/* ---- 账户设置 ---- */
+.account-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.account-card {
+  padding: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.account-card h2 {
+  margin: 0 0 1.2rem;
+  font-size: 1.15rem;
+}
+
+.account-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.account-card input[type="text"],
+.account-card input[type="password"] {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.account-card .btn-primary {
+  width: 100%;
+}
+
+.badge-user {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+/* ---- Toast 提示 ---- */
+.toast-container {
+  position: fixed;
+  top: 1.5rem;
+  right: 1.5rem;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 0.7rem 1.2rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateX(2rem);
+  transition: opacity 0.3s, transform 0.3s;
+  box-shadow: 0 0.4rem 1.2rem rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+}
+
+.toast-show {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.toast-success {
+  background: rgba(34, 197, 94, 0.9);
+  color: #fff;
+}
+
+.toast-error {
+  background: rgba(255, 107, 107, 0.9);
+  color: #fff;
+}
+
+.toast-info {
+  background: rgba(56, 189, 248, 0.9);
+  color: #fff;
 }

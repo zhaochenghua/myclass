@@ -230,6 +230,26 @@ h1 {
   color: var(--danger, #ff4d6d);
 }
 
+.action-btn-admin {
+  border: 1px solid #a78bfa;
+  background: rgba(167, 139, 250, 0.1);
+  color: #a78bfa;
+}
+
+.action-btn-admin:hover {
+  background: rgba(167, 139, 250, 0.2);
+}
+
+.action-btn-fullscreen {
+  border: 1px solid #94a3b8;
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+}
+
+.action-btn-fullscreen:hover {
+  background: rgba(148, 163, 184, 0.2);
+}
+
 .action-btn-exit:hover {
   background: rgba(255, 77, 109, 0.18);
 }
