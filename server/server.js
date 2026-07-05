@@ -177,12 +177,13 @@ app.post(`${PATH_PREFIX}/api/auth/register`, async (req, res, next) => {
       username: name,
       passwordHash: hashPassword(password),
       token: crypto.randomBytes(32).toString('hex'),
+      role: 'user',
       createdAt: now,
       lastLoginAt: now
     };
     users.push(user);
     await writeUsers(users);
-    res.json({ token: user.token, username: user.username });
+    res.json({ token: user.token, username: user.username, role: user.role });
   } catch (error) {
     next(error);
   }
@@ -204,25 +205,78 @@ app.post(`${PATH_PREFIX}/api/auth/login`, async (req, res, next) => {
     user.token = crypto.randomBytes(32).toString('hex');
     user.lastLoginAt = new Date().toISOString();
     await writeUsers(users);
-    res.json({ token: user.token, username: user.username });
+    const role = user.role || (user.username === 'admin' ? 'admin' : 'user');
+    res.json({ token: user.token, username: user.username, role });
   } catch (error) {
     next(error);
   }
 });
 
 app.get(`${PATH_PREFIX}/api/auth/me`, requireAuth, async (req, res) => {
-  res.json({ username: req.user.username });
+  res.json({ id: req.user.id, username: req.user.username, role: req.user.role });
 });
 
-// -- 管理员接口（需认证） --
-app.get(`${PATH_PREFIX}/api/admin/users`, requireAuth, async (req, res, next) => {
+// 修改自己的密码（需验证旧密码）
+app.put(`${PATH_PREFIX}/api/auth/password`, requireAuth, async (req, res, next) => {
   try {
+    const { oldPassword, newPassword } = req.body || {};
+    if (!oldPassword || !newPassword) {
+      res.status(400).json({ error: '请提供旧密码和新密码' });
+      return;
+    }
+    if (newPassword.length < 4 || newPassword.length > 32) {
+      res.status(400).json({ error: '新密码需4-32位' });
+      return;
+    }
     const users = await readUsers();
-    res.json({ users: users.map((u) => ({ id: u.id, username: u.username, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt })) });
+    const user = users.find((u) => u.id === req.user.id);
+    if (!user) { res.status(404).json({ error: '用户不存在' }); return; }
+    if (user.passwordHash !== hashPassword(oldPassword)) {
+      res.status(400).json({ error: '旧密码不正确' });
+      return;
+    }
+    user.passwordHash = hashPassword(newPassword);
+    user.token = crypto.randomBytes(32).toString('hex');
+    await writeUsers(users);
+    res.json({ ok: true, token: user.token });
   } catch (error) { next(error); }
 });
 
-app.put(`${PATH_PREFIX}/api/admin/users/:id/password`, requireAuth, async (req, res, next) => {
+// 更新个人信息（用户名）
+app.put(`${PATH_PREFIX}/api/auth/profile`, requireAuth, async (req, res, next) => {
+  try {
+    const { username } = req.body || {};
+    if (!username || typeof username !== 'string') {
+      res.status(400).json({ error: '用户名不能为空' });
+      return;
+    }
+    const name = username.trim();
+    if (name.length < 2 || name.length > 20 || !/^[\u4e00-\u9fa5a-zA-Z0-9_]+$/.test(name)) {
+      res.status(400).json({ error: '用户名仅支持中英文数字下划线，2-20位' });
+      return;
+    }
+    const users = await readUsers();
+    if (users.find((u) => u.username === name && u.id !== req.user.id)) {
+      res.status(409).json({ error: '用户名已被占用' });
+      return;
+    }
+    const user = users.find((u) => u.id === req.user.id);
+    if (!user) { res.status(404).json({ error: '用户不存在' }); return; }
+    user.username = name;
+    await writeUsers(users);
+    res.json({ ok: true, username: name });
+  } catch (error) { next(error); }
+});
+
+// -- 管理员接口（需管理员权限） --
+app.get(`${PATH_PREFIX}/api/admin/users`, requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const users = await readUsers();
+    res.json({ users: users.map((u) => ({ id: u.id, username: u.username, role: u.role || (u.username === 'admin' ? 'admin' : 'user'), createdAt: u.createdAt, lastLoginAt: u.lastLoginAt })) });
+  } catch (error) { next(error); }
+});
+
+app.put(`${PATH_PREFIX}/api/admin/users/:id/password`, requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const { password } = req.body || {};
     if (!password || typeof password !== 'string' || password.length < 4 || password.length > 32) {
@@ -240,7 +294,7 @@ app.put(`${PATH_PREFIX}/api/admin/users/:id/password`, requireAuth, async (req, 
   } catch (error) { next(error); }
 });
 
-app.delete(`${PATH_PREFIX}/api/admin/users/:id`, requireAuth, async (req, res, next) => {
+app.delete(`${PATH_PREFIX}/api/admin/users/:id`, requireAuth, requireAdmin, async (req, res, next) => {
   try {
     if (req.params.id === req.user.id) {
       res.status(400).json({ error: '不能删除自己' });
@@ -259,9 +313,11 @@ app.delete(`${PATH_PREFIX}/api/admin/users/:id`, requireAuth, async (req, res, n
 // -- 课件接口（需认证） --
 app.get(`${PATH_PREFIX}/api/courseware`, requireAuth, async (req, res, next) => {
   try {
-    const userId = req.query.all === 'true' ? null : req.user.id;
+    // 普通用户只能查看自己的+共享课件；管理员可查看全部
+    const isAdmin = req.user.role === 'admin';
+    const userId = (req.query.all === 'true' && isAdmin) ? null : req.user.id;
     const items = await listStoredCourseware(userId);
-    if (req.query.all === 'true') {
+    if (req.query.all === 'true' && isAdmin) {
       const users = await readUsers();
       const userMap = Object.fromEntries(users.map(u => [u.id, u.username]));
       items.forEach(item => {
@@ -276,12 +332,39 @@ app.get(`${PATH_PREFIX}/api/courseware`, requireAuth, async (req, res, next) => 
 
 app.delete(`${PATH_PREFIX}/api/courseware/:id`, requireAuth, async (req, res, next) => {
   try {
-    const deleted = await deleteStoredCourseware(req.params.id, req.user.id);
+    // 管理员可删除任意课件，普通用户只能删除自己的
+    const isAdmin = req.user.role === 'admin';
+    const deleted = await deleteStoredCourseware(req.params.id, isAdmin ? null : req.user.id);
     if (!deleted) {
-      res.status(404).json({ error: '课件不存在' });
+      res.status(404).json({ error: '课件不存在或无权删除' });
       return;
     }
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// 课件重命名
+app.put(`${PATH_PREFIX}/api/courseware/:id/rename`, requireAuth, express.json(), async (req, res, next) => {
+  try {
+    const { title } = req.body || {};
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      res.status(400).json({ error: '标题不能为空' });
+      return;
+    }
+    const newTitle = title.trim();
+    if (newTitle.length > 100) {
+      res.status(400).json({ error: '标题不能超过100个字符' });
+      return;
+    }
+    const isAdmin = req.user.role === 'admin';
+    const renamed = await renameStoredCourseware(req.params.id, newTitle, isAdmin ? null : req.user.id);
+    if (!renamed) {
+      res.status(404).json({ error: '课件不存在或无权重命名' });
+      return;
+    }
+    res.json({ ok: true, title: newTitle });
   } catch (error) {
     next(error);
   }
@@ -717,7 +800,8 @@ async function deleteStoredCourseware(id, userId) {
 
   const currentItems = await readCoursewareIndex();
   const targetItem = currentItems.find((item) => item.id === id);
-  if (targetItem && targetItem.userId && userId && targetItem.userId !== userId) {
+  // userId 为 null 时表示管理员，可删除任意课件
+  if (targetItem && targetItem.userId && userId !== null && userId && targetItem.userId !== userId) {
     return false; // 不属于当前用户
   }
   const wasIndexed = currentItems.some((item) => item.id === id);
@@ -753,13 +837,73 @@ async function deleteStoredCourseware(id, userId) {
   return wasIndexed || fileDeleted;
 }
 
+async function renameStoredCourseware(id, newTitle, userId) {
+  if (!isSafeCoursewareId(id)) {
+    const error = new Error('无效课件编号');
+    error.status = 400;
+    throw error;
+  }
+
+  const currentItems = await readCoursewareIndex();
+  const targetItem = currentItems.find((item) => item.id === id);
+
+  // 权限检查：userId 为 null 表示管理员
+  if (targetItem && targetItem.userId && userId !== null && userId && targetItem.userId !== userId) {
+    return false;
+  }
+
+  if (targetItem) {
+    targetItem.title = newTitle;
+  } else {
+    // 课件不在索引中（legacy 课件），添加到索引
+    // 先确认磁盘上存在对应文件
+    const possibleExts = ['.pdf', '.zip', '.pptx', '.ppt', '.docx', '.doc'];
+    let found = false;
+    let fileName = '';
+    let size = 0;
+    for (const ext of possibleExts) {
+      const filePath = path.join(coursewareRoot, `${id}${ext}`);
+      try {
+        const stat = await fs.promises.stat(filePath);
+        found = true;
+        fileName = `${id}${ext}`;
+        size = stat.size;
+        break;
+      } catch {}
+    }
+    if (!found) return false;
+    currentItems.push({
+      id,
+      userId: userId || 'legacy',
+      title: newTitle,
+      fileName,
+      size,
+      createdAt: new Date().toISOString(),
+      url: `${PATH_PREFIX}/public/courseware/${fileName}`
+    });
+  }
+
+  await fs.promises.writeFile(
+    coursewareIndexPath,
+    JSON.stringify(currentItems, null, 2),
+    'utf8'
+  );
+  return true;
+}
+
 async function readCoursewareIndex() {
   try {
     const text = await fs.promises.readFile(coursewareIndexPath, 'utf8');
+    if (!text.trim()) return [];
     const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed : [];
   } catch (error) {
     if (error.code === 'ENOENT') {
+      return [];
+    }
+    // 空文件或 JSON 解析失败时返回空数组，避免阻断上传
+    if (error instanceof SyntaxError) {
+      console.warn('课件索引文件格式异常，已重置为空数组:', error.message);
       return [];
     }
     throw error;
@@ -827,7 +971,18 @@ async function requireAuth(req, res, next) {
   }
   user.lastLoginAt = new Date().toISOString();
   await writeUsers(users);
-  req.user = { id: user.id, username: user.username };
+  // 兼容旧数据：无 role 字段时按用户名判断
+  const role = user.role || (user.username === 'admin' ? 'admin' : 'user');
+  req.user = { id: user.id, username: user.username, role };
+  next();
+}
+
+// -- 管理员权限中间件 --
+async function requireAdmin(req, res, next) {
+  if (req.user.role !== 'admin') {
+    res.status(403).json({ error: '权限不足，仅管理员可操作' });
+    return;
+  }
   next();
 }
 

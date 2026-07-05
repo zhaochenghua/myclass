@@ -12,6 +12,7 @@
     <header class="admin-header">
       <h1>管理后台</h1>
       <div class="admin-user" id="adminUser"></div>
+      <button class="logout-btn" id="homeButton">回到主页</button>
       <button class="logout-btn" id="logoutButton">退出登录</button>
     </header>
 
@@ -30,25 +31,45 @@
         <p class="form-error" id="loginError" hidden></p>
         <button type="submit" class="btn-primary">登录</button>
       </form>
+      <p class="form-switch">没有账号？<a href="#" id="toRegisterLink">立即注册</a></p>
+    </section>
+
+    <!-- 注册面板 -->
+    <section class="admin-card" id="registerPanel" hidden>
+      <h2>用户注册</h2>
+      <form id="registerForm">
+        <label>
+          <span>用户名（2-20位，中英文数字下划线）</span>
+          <input type="text" id="registerUsername" required minlength="2" maxlength="20" autocomplete="username">
+        </label>
+        <label>
+          <span>密码（4-32位）</span>
+          <input type="password" id="registerPassword" required minlength="4" maxlength="32" autocomplete="new-password">
+        </label>
+        <label>
+          <span>确认密码</span>
+          <input type="password" id="registerConfirmPassword" required minlength="4" maxlength="32" autocomplete="new-password">
+        </label>
+        <p class="form-error" id="registerError" hidden></p>
+        <button type="submit" class="btn-primary">注册</button>
+      </form>
+      <p class="form-switch">已有账号？<a href="#" id="toLoginLink">返回登录</a></p>
     </section>
 
     <!-- 主面板（登录后显示） -->
     <section class="admin-main" id="mainPanel" hidden>
-      <!-- 标签切换 -->
-      <nav class="admin-tabs">
-        <button class="tab-btn is-active" data-tab="users">用户管理</button>
-        <button class="tab-btn" data-tab="courseware">课件管理</button>
-      </nav>
+      <!-- 标签切换（根据角色动态渲染） -->
+      <nav class="admin-tabs" id="adminTabs"></nav>
 
-      <!-- 用户管理 -->
-      <div class="tab-panel is-active" id="tab-users">
+      <!-- 用户管理（仅管理员可见） -->
+      <div class="tab-panel" id="tab-users" hidden>
         <div class="panel-header">
           <h2>用户列表</h2>
-          <button class="btn-primary" id="refreshUsersButton">刷新</button>
+          <button class="btn-secondary" id="refreshUsersButton">刷新</button>
         </div>
         <table class="data-table">
           <thead>
-            <tr><th>用户名</th><th>注册时间</th><th>最后登录</th><th>操作</th></tr>
+            <tr><th>用户名</th><th>角色</th><th>注册时间</th><th>最后登录</th><th>操作</th></tr>
           </thead>
           <tbody id="userTableBody"></tbody>
         </table>
@@ -57,9 +78,9 @@
       <!-- 课件管理 -->
       <div class="tab-panel" id="tab-courseware" hidden>
         <div class="panel-header">
-          <h2>课件列表</h2>
+          <h2 id="coursewareTitle">课件列表</h2>
           <div class="panel-actions">
-            <label class="upload-share-label">
+            <label class="upload-share-label" id="shareLabel">
               <input type="checkbox" id="uploadShareCheckbox">
               所有人可见
             </label>
@@ -76,13 +97,53 @@
         </div>
         <table class="data-table">
           <thead>
-            <tr><th>标题</th><th>文件名</th><th>所有者</th><th>大小</th><th>上传时间</th><th>操作</th></tr>
+            <tr><th>标题</th><th>文件名</th><th id="ownerTh">所有者</th><th>大小</th><th>上传时间</th><th>操作</th></tr>
           </thead>
           <tbody id="coursewareTableBody"></tbody>
         </table>
       </div>
+
+      <!-- 账户设置 -->
+      <div class="tab-panel" id="tab-account" hidden>
+        <div class="account-sections">
+          <!-- 修改密码 -->
+          <div class="account-card">
+            <h2>修改密码</h2>
+            <form id="changePasswordForm">
+              <label>
+                <span>旧密码</span>
+                <input type="password" id="oldPassword" required autocomplete="current-password">
+              </label>
+              <label>
+                <span>新密码（4-32位）</span>
+                <input type="password" id="newPassword" required minlength="4" maxlength="32" autocomplete="new-password">
+              </label>
+              <label>
+                <span>确认新密码</span>
+                <input type="password" id="confirmPassword" required minlength="4" maxlength="32" autocomplete="new-password">
+              </label>
+              <p class="form-error" id="changePwError" hidden></p>
+              <button type="submit" class="btn-primary">确认修改</button>
+            </form>
+          </div>
+
+          <!-- 更新个人信息 -->
+          <div class="account-card">
+            <h2>个人信息</h2>
+            <form id="updateProfileForm">
+              <label>
+                <span>用户名</span>
+                <input type="text" id="profileUsername" required minlength="2" maxlength="20" autocomplete="username">
+              </label>
+              <p class="form-error" id="profileError" hidden></p>
+              <button type="submit" class="btn-primary">保存修改</button>
+            </form>
+          </div>
+        </div>
+      </div>
     </section>
-    <!-- 密码重置弹窗 -->
+
+    <!-- 密码重置弹窗（管理员重置他人密码） -->
     <div class="modal-overlay" id="resetModal" hidden>
       <div class="modal-card">
         <h3>重置密码 - <span id="resetUsername"></span></h3>
@@ -99,8 +160,30 @@
         </form>
       </div>
     </div>
+
+    <!-- 课件重命名弹窗 -->
+    <div class="modal-overlay" id="renameModal" hidden>
+      <div class="modal-card">
+        <h3>重命名课件</h3>
+        <form id="renameForm">
+          <input type="hidden" id="renameCoursewareId">
+          <label>
+            <span>新标题</span>
+            <input type="text" id="renameCoursewareTitle" required maxlength="100" autocomplete="off">
+          </label>
+          <p class="form-error" id="renameError" hidden></p>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="renameCancel">取消</button>
+            <button type="submit" class="btn-primary" id="renameSubmit">确定</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 全局提示 Toast -->
+    <div class="toast-container" id="toastContainer"></div>
   </main>
 
-  <script src="./admin.js"></script>
+  <script src="./admin.js?v=20260705c"></script>
 </body>
 </html>

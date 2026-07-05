@@ -140,7 +140,7 @@ const elements = {
   teacherPassword: document.getElementById('teacherPassword'),
   teacherLoginCancel: document.getElementById('teacherLoginCancel'),
   teacherLoginSubmit: document.getElementById('teacherLoginSubmit'),
-  exitPlatformButton: document.getElementById('exitPlatformButton'),
+  homeFullscreenButton: document.getElementById('fullscreenButton'),
   quickBlackboardButton: document.getElementById('quickBlackboardButton'),
   blackboardOverlay: document.getElementById('blackboardOverlay'),
   blackboardCanvas: document.getElementById('blackboardCanvas'),
@@ -257,10 +257,6 @@ async function bootstrap() {
     elements.quickBlackboardButton.addEventListener('click', () => {
       toggleBlackboard(true);
     });
-    // 主页快捷黑板
-    elements.quickBlackboardButton.addEventListener('click', () => {
-      toggleBlackboard(true);
-    });
     elements.teacherLoginCancel.addEventListener('click', () => {
       elements.loginModal.hidden = true;
     });
@@ -309,22 +305,19 @@ async function bootstrap() {
     elements.closePickerButton.addEventListener('click', () => {
       elements.coursewarePicker.hidden = true;
     });
-    elements.exitPlatformButton.addEventListener('click', () => {
-      // 清理连接
-      if (state.socket) { state.socket.close(); state.socket = null; }
-      if (state.peerConnection) { state.peerConnection.close(); state.peerConnection = null; }
-      if (state.reconnectTimer) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
-      // 退出全屏（方便触摸屏手动关闭标签页）
+    elements.homeFullscreenButton.addEventListener('click', () => {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
+        elements.homeFullscreenButton.textContent = '全屏';
+      } else {
+        document.documentElement.requestFullscreen().catch(() => {});
+        elements.homeFullscreenButton.textContent = '退出全屏';
       }
-      // 尝试关闭窗口
-      window.open('', '_self', '');
-      window.close();
-      // 兜底：覆盖全屏退出提示
-      setTimeout(() => {
-        document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:1rem;font-size:1.2rem;color:#8892b0;font-family:sans-serif;background:#0a1628"><div>✅ 已退出上课投屏平台</div><div style="font-size:0.9rem">请手动关闭此标签页</div></div>';
-      }, 300);
+    });
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement && elements.homeFullscreenButton) {
+        elements.homeFullscreenButton.textContent = '全屏';
+      }
     });
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
@@ -333,6 +326,9 @@ async function bootstrap() {
     const autoFullscreen = (e) => {
       if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, .action-btn-exam, .action-btn-exit')) return;
       document.documentElement.requestFullscreen().catch(() => {});
+      // 用户首次交互后取消静音（绕过浏览器自动播放策略）
+      elements.remoteVideo.muted = false;
+      elements.remoteVideo.play().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
     document.addEventListener('click', autoFullscreen);
@@ -646,6 +642,7 @@ function createPeerConnection() {
 
     // Unmute video element when audio track arrives
     if (event.track.kind === 'audio') {
+      // 浏览器自动播放策略：用户未交互前无法取消静音，静默处理
       elements.remoteVideo.muted = false;
       event.track.addEventListener('unmute', () => {
         elements.remoteVideo.muted = false;
