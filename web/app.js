@@ -326,12 +326,18 @@ async function bootstrap() {
     const autoFullscreen = (e) => {
       if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, .action-btn-exam, .action-btn-exit')) return;
       document.documentElement.requestFullscreen().catch(() => {});
-      // 用户首次交互后取消静音（绕过浏览器自动播放策略）
-      elements.remoteVideo.muted = false;
-      elements.remoteVideo.play().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
     document.addEventListener('click', autoFullscreen);
+    // 用户首次交互后取消静音（绕过浏览器自动播放策略，独立于全屏逻辑）
+    const unmuteOnFirstInteraction = () => {
+      if (!elements.remoteVideo.muted) return;
+      elements.remoteVideo.muted = false;
+      elements.remoteVideo.play().catch(() => {});
+    };
+    document.addEventListener('click', unmuteOnFirstInteraction, { once: true });
+    document.addEventListener('touchstart', unmuteOnFirstInteraction, { once: true });
+    document.addEventListener('keydown', unmuteOnFirstInteraction, { once: true });
     elements.annotationCanvas.addEventListener('pointerdown', beginAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointermove', continueAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointerup', finishAnnotationStroke);
@@ -640,15 +646,6 @@ function createPeerConnection() {
   peerConnection.addEventListener('track', (event) => {
     configureLowLatencyReceiver(event.receiver);
 
-    // Unmute video element when audio track arrives
-    if (event.track.kind === 'audio') {
-      // 浏览器自动播放策略：用户未交互前无法取消静音，静默处理
-      elements.remoteVideo.muted = false;
-      event.track.addEventListener('unmute', () => {
-        elements.remoteVideo.muted = false;
-      });
-    }
-
     // 处理 stream：某些浏览器 event.streams 可能为空
     let stream = null;
     if (event.streams && event.streams.length > 0) {
@@ -662,19 +659,20 @@ function createPeerConnection() {
       showVideoView();
       updateVideoPresentation();
       elements.videoStatus.textContent = '';
-      // 带用户手势恢复的自动播放
+      // 视频元素初始为 muted，muted autoplay 不受浏览器策略限制，可直接播放
       const playPromise = elements.remoteVideo.play();
       if (playPromise) {
         playPromise.catch(() => {
+          // 极少数情况 muted autoplay 也被阻止，等待用户点击恢复
           elements.videoStatus.textContent = '点击画面开始播放';
-          // 全局点击恢复播放
           const resumeOnClick = () => {
+            elements.remoteVideo.muted = false;
             elements.remoteVideo.play().then(() => {
               elements.videoStatus.textContent = '';
             }).catch(() => {});
             document.removeEventListener('click', resumeOnClick);
           };
-          document.addEventListener('click', resumeOnClick, { once: false });
+          document.addEventListener('click', resumeOnClick);
         });
       }
     } else {
