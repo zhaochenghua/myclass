@@ -18,7 +18,8 @@ const DEFAULT_SERVER_URL = 'http://10.30.13.1/myclass';
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
-let selectedDisplayId = null;
+let selectedSourceId = null;
+let selectedSourceType = null;
 let signaling = null;
 let localAudioMutedByApp = false;
 let localAudioPreviousMute = null;
@@ -391,31 +392,61 @@ async function connectSignaling({ baseUrl, code }) {
   return server;
 }
 
-async function listDisplays() {
+function getCaptureSourceType(source) {
+  return String(source.id || '').startsWith('window:') ? 'window' : 'screen';
+}
+
+async function listCaptureSources() {
   const sources = await desktopCapturer.getSources({
-    types: ['screen'],
-    thumbnailSize: { width: 320, height: 180 },
+    types: ['screen', 'window'],
+    thumbnailSize: { width: 240, height: 135 },
+    fetchWindowIcons: true
+  });
+  const mappedSources = sources
+    .filter((source) => source.name?.trim())
+    .map((source) => ({
+      id: source.id,
+      type: getCaptureSourceType(source),
+      name: source.name.trim(),
+      displayId: source.display_id || null,
+      thumbnail: source.thumbnail.toDataURL()
+    }));
+  if (!selectedSourceId || !mappedSources.some((source) => source.id === selectedSourceId)) {
+    const defaultSource = mappedSources.find((source) => source.type === 'screen') || mappedSources[0];
+    selectedSourceId = defaultSource?.id || null;
+    selectedSourceType = defaultSource?.type || null;
+  } else {
+    selectedSourceType = mappedSources.find((source) => source.id === selectedSourceId)?.type || null;
+  }
+  return {
+    sources: mappedSources,
+    selectedId: selectedSourceId,
+    selectedType: selectedSourceType
+  };
+}
+
+async function isCaptureSourceAvailable(sourceId) {
+  if (!sourceId) {
+    return false;
+  }
+  const sources = await desktopCapturer.getSources({
+    types: ['screen', 'window'],
+    thumbnailSize: { width: 1, height: 1 },
     fetchWindowIcons: false
   });
-  if (!selectedDisplayId || !sources.some((source) => source.id === selectedDisplayId)) {
-    selectedDisplayId = sources[0]?.id || null;
-  }
-  return sources.map((source) => ({
-    id: source.id,
-    name: source.name,
-    displayId: source.display_id,
-    thumbnail: source.thumbnail.toDataURL()
-  }));
+  return sources.some((source) => source.id === sourceId);
 }
 
 function installDisplayMediaHandler() {
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({
-      types: ['screen'],
+      types: ['screen', 'window'],
       thumbnailSize: { width: 160, height: 90 },
-      fetchWindowIcons: false
+      fetchWindowIcons: true
     }).then((sources) => {
-      const source = sources.find((item) => item.id === selectedDisplayId) || sources[0];
+      const source = sources.find((item) => item.id === selectedSourceId)
+        || sources.find((item) => getCaptureSourceType(item) === 'screen')
+        || sources[0];
       if (!source) {
         callback({});
         return;
@@ -495,11 +526,13 @@ function createWindow() {
 
 function registerIpc() {
   ipcMain.handle('server-config', (_event, baseUrl) => fetchServerConfig(baseUrl));
-  ipcMain.handle('list-displays', () => listDisplays());
-  ipcMain.handle('select-display', (_event, displayId) => {
-    selectedDisplayId = String(displayId || '') || null;
-    return selectedDisplayId;
+  ipcMain.handle('list-sources', () => listCaptureSources());
+  ipcMain.handle('select-source', (_event, source) => {
+    selectedSourceId = String(source?.id || '') || null;
+    selectedSourceType = source?.type === 'window' ? 'window' : 'screen';
+    return { id: selectedSourceId, type: selectedSourceType };
   });
+  ipcMain.handle('source-available', (_event, sourceId) => isCaptureSourceAvailable(String(sourceId || '')));
   ipcMain.handle('set-local-audio-output', (_event, enabled) => setLocalAudioOutput(Boolean(enabled)));
   ipcMain.handle('signaling-connect', (_event, options) => connectSignaling(options));
   ipcMain.on('signaling-send', (_event, payload) => sendSignalingMessage(payload));

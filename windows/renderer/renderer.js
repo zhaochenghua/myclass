@@ -5,7 +5,8 @@ const elements = {
   liveCard: document.getElementById('liveCard'),
   serverUrl: document.getElementById('serverUrl'),
   roomCode: document.getElementById('roomCode'),
-  displaySelect: document.getElementById('displaySelect'),
+  sourceSelect: document.getElementById('sourceSelect'),
+  refreshSourcesButton: document.getElementById('refreshSourcesButton'),
   localAudioOutput: document.getElementById('localAudioOutput'),
   startButton: document.getElementById('startButton'),
   stopButton: document.getElementById('stopButton'),
@@ -33,6 +34,9 @@ const state = {
   audioEnabled: true,
   localAudioOutput: localStorage.getItem('myclass.localAudioOutput') !== 'false',
   localAudioMuted: false,
+  captureSourceId: '',
+  captureSourceType: 'screen',
+  sourceMonitorTimer: null,
   stopping: false
 };
 
@@ -56,28 +60,51 @@ function setLiveStatus(message) {
   elements.videoStatus.textContent = message;
 }
 
-function setDisplayOptions(displays) {
-  elements.displaySelect.replaceChildren();
-  if (!displays || displays.length === 0) {
+function setSourceOptions(sourceResult) {
+  const sources = sourceResult?.sources || [];
+  elements.sourceSelect.replaceChildren();
+  if (sources.length === 0) {
     const option = document.createElement('option');
-    option.textContent = '没有检测到显示器';
+    option.textContent = '没有检测到显示器或应用窗口';
     option.value = '';
-    elements.displaySelect.append(option);
+    elements.sourceSelect.append(option);
     return;
   }
-  for (const display of displays) {
-    const option = document.createElement('option');
-    option.value = display.id;
-    option.textContent = display.displayId ? `${display.name}（显示器 ${display.displayId}）` : display.name;
-    elements.displaySelect.append(option);
+  const groups = [
+    { type: 'screen', label: '显示器' },
+    { type: 'window', label: '应用窗口' }
+  ];
+  for (const group of groups) {
+    const groupSources = sources.filter((source) => source.type === group.type);
+    if (groupSources.length === 0) continue;
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = group.label;
+    for (const source of groupSources) {
+      const option = document.createElement('option');
+      option.value = source.id;
+      option.textContent = source.type === 'screen' && source.displayId
+        ? `${source.name}（显示器 ${source.displayId}）`
+        : source.name;
+      option.dataset.sourceType = source.type;
+      optgroup.append(option);
+    }
+    elements.sourceSelect.append(optgroup);
   }
+  const selectedId = sourceResult.selectedId || sources[0].id;
+  elements.sourceSelect.value = selectedId;
+  const selected = sources.find((source) => source.id === selectedId) || sources[0];
+  state.captureSourceId = selected.id;
+  state.captureSourceType = selected.type;
 }
 
-async function refreshDisplays() {
+async function refreshSources() {
+  elements.refreshSourcesButton.disabled = true;
   try {
-    setDisplayOptions(await api.listDisplays());
+    setSourceOptions(await api.listSources());
   } catch (error) {
-    setStatus(`读取显示器失败：${error.message}`, true);
+    setStatus(`读取投屏来源失败：${error.message}`, true);
+  } finally {
+    elements.refreshSourcesButton.disabled = false;
   }
 }
 
@@ -102,10 +129,35 @@ async function requestScreenStream() {
   videoTrack.contentHint = 'detail';
   videoTrack.addEventListener('ended', () => {
     if (!state.stopping) {
-      stopProjection(false, '屏幕采集已停止');
+      stopProjection(false, state.captureSourceType === 'window'
+        ? '应用窗口已关闭，投屏已停止'
+        : '屏幕采集已停止');
     }
   });
   return stream;
+}
+
+function startSourceMonitor() {
+  if (state.captureSourceType !== 'window' || state.sourceMonitorTimer) {
+    return;
+  }
+  state.sourceMonitorTimer = setInterval(async () => {
+    if (!state.mediaStream || state.stopping) return;
+    try {
+      if (!await api.sourceAvailable(state.captureSourceId)) {
+        await stopProjection(false, '应用窗口已关闭，投屏已停止');
+      }
+    } catch {
+      // The media track's ended event remains the fallback when source probing fails.
+    }
+  }, 2000);
+}
+
+function stopSourceMonitor() {
+  if (state.sourceMonitorTimer) {
+    clearInterval(state.sourceMonitorTimer);
+    state.sourceMonitorTimer = null;
+  }
 }
 
 function configureSender(sender, kind) {
@@ -258,8 +310,8 @@ async function startProjection() {
     elements.serverUrl.focus();
     return;
   }
-  if (!elements.displaySelect.value) {
-    setStatus('没有可用的显示器', true);
+  if (!elements.sourceSelect.value) {
+    setStatus('没有可用的显示器或应用窗口', true);
     return;
   }
 
@@ -268,16 +320,21 @@ async function startProjection() {
   state.stopping = false;
   state.roomCode = code;
   state.serverUrl = serverUrl.replace(/\/+$/, '');
+  const selectedOption = elements.sourceSelect.selectedOptions[0];
+  state.captureSourceId = elements.sourceSelect.value;
+  state.captureSourceType = selectedOption?.dataset.sourceType === 'window' ? 'window' : 'screen';
   state.localAudioOutput = elements.localAudioOutput.checked;
   localStorage.setItem('myclass.serverUrl', state.serverUrl);
   localStorage.setItem('myclass.localAudioOutput', String(state.localAudioOutput));
   try {
-    await api.selectDisplay(elements.displaySelect.value);
+    await api.selectSource({ id: state.captureSourceId, type: state.captureSourceType });
     if (!state.localAudioOutput) {
       await api.setLocalAudioOutput(false);
       state.localAudioMuted = true;
     }
+    elements.localAudioButton.textContent = state.localAudioOutput ? '关闭电脑声音' : '开启电脑声音';
     state.mediaStream = await requestScreenStream();
+    startSourceMonitor();
     elements.localPreview.srcObject = state.mediaStream;
     await elements.localPreview.play().catch(() => {});
     const audioTrack = state.mediaStream.getAudioTracks()[0];
@@ -302,6 +359,7 @@ async function startProjection() {
 
 async function stopProjection(disconnect = true, message = '') {
   state.stopping = true;
+  stopSourceMonitor();
   if (state.peerConnection) {
     state.peerConnection.close();
     state.peerConnection = null;
@@ -330,6 +388,7 @@ async function stopProjection(disconnect = true, message = '') {
   elements.statusDot.classList.remove('is-live');
   elements.audioButton.disabled = false;
   elements.localAudioButton.disabled = false;
+  elements.localAudioButton.textContent = '关闭电脑声音';
   elements.audioStatus.textContent = '准备中';
   setStatus(message || '投屏已停止');
   state.stopping = false;
@@ -370,7 +429,13 @@ elements.localAudioButton.addEventListener('click', async () => {
 elements.roomCode.addEventListener('input', () => {
   elements.roomCode.value = elements.roomCode.value.replace(/\D/g, '').slice(0, 4);
 });
-elements.displaySelect.addEventListener('change', () => api.selectDisplay(elements.displaySelect.value));
+elements.sourceSelect.addEventListener('change', async () => {
+  const option = elements.sourceSelect.selectedOptions[0];
+  state.captureSourceId = elements.sourceSelect.value;
+  state.captureSourceType = option?.dataset.sourceType === 'window' ? 'window' : 'screen';
+  await api.selectSource({ id: state.captureSourceId, type: state.captureSourceType });
+});
+elements.refreshSourcesButton.addEventListener('click', refreshSources);
 
 api.onSignalingMessage((message) => handleSignal(message).catch((error) => setStatus(error.message, true)));
 api.onSignalingState(({ state: signalingState }) => {
@@ -383,5 +448,5 @@ api.onSignalingState(({ state: signalingState }) => {
 api.onSignalingError(({ message }) => setStatus(message, true));
 api.onTrayStop(() => stopProjection(true));
 
-refreshDisplays();
+refreshSources();
 setStatus('请输入连接码后开始投屏');
