@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MyClass 投屏</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">MYCLASS WINDOWS</p>
+          <h1>电脑屏幕投屏</h1>
+        </div>
+        <button class="icon-button" id="hideButton" type="button" title="隐藏到系统托盘">—</button>
+      </header>
+
+      <section class="card" id="setupCard">
+        <div class="section-heading">
+          <h2>连接教室</h2>
+          <span class="status-dot" id="statusDot"></span>
+        </div>
+        <label class="field">
+          <span>服务器地址</span>
+          <input id="serverUrl" type="url" value="http://10.30.13.1/myclass" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>课堂连接码</span>
+          <input id="roomCode" class="room-code" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="输入大屏上的 4 位数字" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>投屏显示器</span>
+          <select id="displaySelect">
+            <option value="">正在读取显示器...</option>
+          </select>
+        </label>
+        <label class="check-row">
+          <input id="localAudioOutput" type="checkbox" checked>
+          <span>投屏时在笔记本电脑上同时播放声音</span>
+        </label>
+        <p class="hint">将共享所选显示器的全部画面，并尝试采集 Windows 系统输出声音。取消勾选后，投屏时会暂时静音笔记本默认播放设备；停止投屏时自动恢复。</p>
+        <button class="primary-button" id="startButton" type="button">开始投屏</button>
+      </section>
+
+      <section class="card live-card" id="liveCard" hidden>
+        <div class="live-header">
+          <div>
+            <p class="eyebrow">LIVE</p>
+            <h2>正在投屏</h2>
+          </div>
+          <span class="live-badge" id="liveBadge">连接中</span>
+        </div>
+        <video id="localPreview" class="local-preview" autoplay muted playsinline></video>
+        <dl class="stats">
+          <div><dt>连接码</dt><dd id="liveCode">----</dd></div>
+          <div><dt>视频</dt><dd id="videoStatus">准备中</dd></div>
+          <div><dt>声音</dt><dd id="audioStatus">准备中</dd></div>
+        </dl>
+        <div class="live-actions">
+          <button class="secondary-button" id="audioButton" type="button">关闭声音</button>
+          <button class="secondary-button" id="localAudioButton" type="button">关闭电脑声音</button>
+          <button class="secondary-button" id="showButton" type="button">显示窗口</button>
+          <button class="danger-button" id="stopButton" type="button">停止投屏</button>
+        </div>
+      </section>
+
+      <p class="status-message" id="statusMessage" role="status">正在初始化...</p>
+      <p class="footer-note">关闭窗口会继续在系统托盘运行。右键托盘图标可停止投屏或退出程序。</p>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
