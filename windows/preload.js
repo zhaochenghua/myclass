@@ -2,8 +2,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('myclass', {
   getServerConfig: (baseUrl) => ipcRenderer.invoke('server-config', baseUrl),
-  listDisplays: () => ipcRenderer.invoke('list-displays'),
-  selectDisplay: (displayId) => ipcRenderer.invoke('select-display', displayId),
+  listSources: () => ipcRenderer.invoke('list-sources'),
+  selectSource: (source) => ipcRenderer.invoke('select-source', source),
+  sourceAvailable: (sourceId) => ipcRenderer.invoke('source-available', sourceId),
   setLocalAudioOutput: (enabled) => ipcRenderer.invoke('set-local-audio-output', enabled),
   connectSignaling: (options) => ipcRenderer.invoke('signaling-connect', options),
   sendSignaling: (payload) => ipcRenderer.send('signaling-send', payload),

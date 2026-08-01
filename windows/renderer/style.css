@@ -76,7 +76,12 @@ input, select {
   background: #071b24;
   color: #e6f5fb;
 }
+select { text-overflow: ellipsis; }
 input:focus, select:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14); }
+.source-row { display: flex; gap: 8px; }
+.source-row select { min-width: 0; flex: 1; }
+.refresh-button { height: 44px; padding: 0 12px; border: 1px solid #245063; border-radius: 10px; background: #0d2631; color: #cce8f1; }
+.refresh-button:hover { border-color: #38bdf8; color: #ffffff; }
 .room-code { font-size: 20px; letter-spacing: 0.22em; }
 .check-row { display: flex; align-items: center; gap: 9px; margin-top: 18px; color: #cce8f1; font-size: 13px; cursor: pointer; }
 .check-row input { width: 17px; height: 17px; margin: 0; accent-color: #0ea5e9; }

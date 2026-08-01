@@ -30,16 +30,19 @@
           <input id="roomCode" class="room-code" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="输入大屏上的 4 位数字" autocomplete="off">
         </label>
         <label class="field">
-          <span>投屏显示器</span>
-          <select id="displaySelect">
-            <option value="">正在读取显示器...</option>
-          </select>
+          <span>投屏来源</span>
+          <div class="source-row">
+            <select id="sourceSelect">
+              <option value="">正在读取显示器和应用...</option>
+            </select>
+            <button class="refresh-button" id="refreshSourcesButton" type="button" title="刷新显示器和应用窗口">刷新</button>
+          </div>
         </label>
         <label class="check-row">
           <input id="localAudioOutput" type="checkbox" checked>
           <span>投屏时在笔记本电脑上同时播放声音</span>
         </label>
-        <p class="hint">将共享所选显示器的全部画面，并尝试采集 Windows 系统输出声音。取消勾选后，投屏时会暂时静音笔记本默认播放设备；停止投屏时自动恢复。</p>
+        <p class="hint">可选择整个显示器或单个应用窗口。窗口关闭后会自动停止投屏。取消勾选本机声音后，投屏时会暂时静音笔记本默认播放设备；停止投屏时自动恢复。</p>
         <button class="primary-button" id="startButton" type="button">开始投屏</button>
       </section>
 

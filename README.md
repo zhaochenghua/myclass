@@ -52,7 +52,7 @@ myclass/
 
 ## Windows 电脑投屏客户端
 
-Windows 端客户端位于 `windows/`，使用 Electron 将指定显示器的画面和 Windows 系统输出声音通过现有 WebRTC 链路投到教室大屏。它复用当前连接码和 `/myclass/ws` 信令，不需要新增媒体中转服务；关闭窗口后程序继续驻留系统托盘。客户端设置中可以选择投屏时是否同时在笔记本上播放声音。
+Windows 端客户端位于 `windows/`，使用 Electron 将指定显示器或单个应用窗口的画面和 Windows 系统输出声音通过现有 WebRTC 链路投到教室大屏。它复用当前连接码和 `/myclass/ws` 信令，不需要新增媒体中转服务；关闭窗口后程序继续驻留系统托盘。客户端设置中可以选择投屏时是否同时在笔记本上播放声音。
 
 开发、打包和系统声音兼容性说明见 [`windows/README.md`](windows/README.md)。快速启动：
 
