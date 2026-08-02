@@ -150,7 +150,8 @@ h1 {
   text-align: center;
 }
 
-.download-apk-btn {
+.download-apk-btn,
+.download-windows-btn {
   display: inline-block;
   margin-top: 0.5rem;
   padding: 0.35rem 1rem;
@@ -162,7 +163,8 @@ h1 {
   transition: background 0.2s;
 }
 
-.download-apk-btn:hover {
+.download-apk-btn:hover,
+.download-windows-btn:hover {
   background: rgba(101, 240, 200, 0.12);
 }
 

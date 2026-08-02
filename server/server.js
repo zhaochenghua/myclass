@@ -18,6 +18,8 @@ const PUBLIC_BASE_URL = removeTrailingSlash(
 );
 const APP_VERSION = process.env.APP_VERSION || '1.4.4-20260705';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
+const WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.5';
+const WINDOWS_URL = `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(WINDOWS_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
   (process.env.ALLOWED_HOSTS || `${SERVER_IP},localhost,127.0.0.1`)
@@ -46,6 +48,7 @@ const server = http.createServer(app);
 const webRoot = path.resolve(__dirname, '..', 'web');
 const publicRoot = path.join(webRoot, 'public');
 const apkPath = path.join(publicRoot, 'myclass.apk');
+const windowsInstallerPath = path.join(publicRoot, 'myclass-windows.exe');
 const coursewareRoot = path.join(publicRoot, 'courseware');
 const coursewareIndexPath = path.join(coursewareRoot, 'index.json');
 const tempRoot = path.join(__dirname, 'tmp', 'courseware');
@@ -110,6 +113,8 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
     title: '上课投屏平台',
     apkVersion: APP_VERSION,
     apkUrl: APK_URL,
+    windowsVersion: WINDOWS_VERSION,
+    windowsUrl: WINDOWS_URL,
     wsPath: `${PATH_PREFIX}/ws`,
     roomTtlSeconds: Math.floor(ROOM_TTL_MS / 1000),
     video: {
@@ -434,6 +439,17 @@ app.get(`${PATH_PREFIX}/myclass.apk`, (req, res) => {
     return;
   }
   res.download(apkPath, `myclass-${safeDownloadVersion(APP_VERSION)}.apk`);
+});
+
+app.get(`${PATH_PREFIX}/myclass-windows.exe`, (req, res) => {
+  if (!fs.existsSync(windowsInstallerPath)) {
+    res
+      .status(404)
+      .type('text/plain')
+      .send('Windows 投屏程序尚未生成，请先完成 Windows 构建。');
+    return;
+  }
+  res.download(windowsInstallerPath, `myclass-windows-${safeDownloadVersion(WINDOWS_VERSION)}.exe`);
 });
 
 app.use(
