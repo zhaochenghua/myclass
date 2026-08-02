@@ -62,7 +62,7 @@ npm install
 npm start
 ```
 
-`web/public/myclass.apk` 是 Android 构建后的分发产物，默认不提交到 Git。GitHub Actions 和本地复制脚本会生成这个文件。
+`web/public/myclass.apk` 是 Android 构建后的分发产物，默认不提交到 Git。Windows 安装包发布为 `web/public/myclass-windows.exe`，服务端页面会显示对应的下载链接。
 
 ## 服务端部署
 
@@ -168,6 +168,14 @@ http://10.30.13.1/myclass/myclass.apk
 ```
 
 网页二维码指向该 APK 地址，并通过版本号参数避免安装包缓存混淆。
+
+Windows 安装包下载地址：
+
+```text
+http://10.30.13.1/myclass/myclass-windows.exe
+```
+
+更新 Windows 客户端时，将新的安装包复制为 `web/public/myclass-windows.exe`，并通过 `WINDOWS_VERSION` 环境变量更新页面显示的版本号。
 
 ## GitHub Actions
 

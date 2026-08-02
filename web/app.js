@@ -127,6 +127,7 @@ const elements = {
   nextPageButton: document.getElementById('nextPageButton'),
   selectCoursewareButton: document.getElementById('selectCoursewareButton'),
   downloadApkButton: document.getElementById('downloadApkButton'),
+  downloadWindowsButton: document.getElementById('downloadWindowsButton'),
   directTeachButton: document.getElementById('directTeachButton'),
   directTeachUser: document.getElementById('directTeachUser'),
   directTeachLogout: document.getElementById('directTeachLogout'),
@@ -244,6 +245,12 @@ async function bootstrap() {
           elements.downloadApkButton.style.pointerEvents = 'auto';
         }
       });
+    }
+    if (state.config?.windowsUrl && elements.downloadWindowsButton) {
+      elements.downloadWindowsButton.href = state.config.windowsUrl;
+      elements.downloadWindowsButton.download = '';
+      elements.downloadWindowsButton.hidden = false;
+      elements.downloadWindowsButton.textContent = `下载 Windows 投屏程序 v${state.config.windowsVersion || ''}`.trim();
     }
     // 直接上课
     elements.directTeachButton.addEventListener('click', () => {
