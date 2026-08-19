@@ -10,10 +10,15 @@ const elements = {
   localAudioOutput: document.getElementById('localAudioOutput'),
   startButton: document.getElementById('startButton'),
   stopButton: document.getElementById('stopButton'),
-  audioButton: document.getElementById('audioButton'),
   localAudioButton: document.getElementById('localAudioButton'),
-  showButton: document.getElementById('showButton'),
   hideButton: document.getElementById('hideButton'),
+  sourceSwitchDialog: document.getElementById('sourceSwitchDialog'),
+  switchSourceSelect: document.getElementById('switchSourceSelect'),
+  refreshSwitchSourcesButton: document.getElementById('refreshSwitchSourcesButton'),
+  cancelSourceSwitchButton: document.getElementById('cancelSourceSwitchButton'),
+  cancelSourceSwitchAction: document.getElementById('cancelSourceSwitchAction'),
+  confirmSourceSwitchButton: document.getElementById('confirmSourceSwitchButton'),
+  sourceSwitchMessage: document.getElementById('sourceSwitchMessage'),
   localPreview: document.getElementById('localPreview'),
   liveCode: document.getElementById('liveCode'),
   videoStatus: document.getElementById('videoStatus'),
@@ -31,12 +36,13 @@ const state = {
   peerConnection: null,
   pendingCandidates: [],
   joined: false,
-  audioEnabled: true,
   localAudioOutput: localStorage.getItem('myclass.localAudioOutput') !== 'false',
   localAudioMuted: false,
   captureSourceId: '',
   captureSourceType: 'screen',
   sourceMonitorTimer: null,
+  switchingSource: false,
+  sourceSwitchGeneration: 0,
   stopping: false
 };
 
@@ -60,14 +66,14 @@ function setLiveStatus(message) {
   elements.videoStatus.textContent = message;
 }
 
-function setSourceOptions(sourceResult) {
+function populateSourceOptions(select, sourceResult, selectedId) {
   const sources = sourceResult?.sources || [];
-  elements.sourceSelect.replaceChildren();
+  select.replaceChildren();
   if (sources.length === 0) {
     const option = document.createElement('option');
     option.textContent = '没有检测到显示器或应用窗口';
     option.value = '';
-    elements.sourceSelect.append(option);
+    select.append(option);
     return;
   }
   const groups = [
@@ -88,11 +94,22 @@ function setSourceOptions(sourceResult) {
       option.dataset.sourceType = source.type;
       optgroup.append(option);
     }
-    elements.sourceSelect.append(optgroup);
+    select.append(optgroup);
   }
-  const selectedId = sourceResult.selectedId || sources[0].id;
-  elements.sourceSelect.value = selectedId;
-  const selected = sources.find((source) => source.id === selectedId) || sources[0];
+  const requestedId = selectedId || sourceResult.selectedId;
+  const nextSelectedId = sources.some((source) => source.id === requestedId)
+    ? requestedId
+    : sources[0].id;
+  select.value = nextSelectedId;
+  const selected = sources.find((source) => source.id === nextSelectedId) || sources[0];
+  return selected;
+}
+
+function setSourceOptions(sourceResult) {
+  const selected = populateSourceOptions(elements.sourceSelect, sourceResult);
+  if (!selected) {
+    return;
+  }
   state.captureSourceId = selected.id;
   state.captureSourceType = selected.type;
 }
@@ -106,6 +123,41 @@ async function refreshSources() {
   } finally {
     elements.refreshSourcesButton.disabled = false;
   }
+}
+
+async function refreshSwitchSources() {
+  elements.refreshSwitchSourcesButton.disabled = true;
+  try {
+    const sourceResult = await api.listSources();
+    const selected = populateSourceOptions(
+      elements.switchSourceSelect,
+      sourceResult,
+      state.captureSourceId
+    );
+    elements.confirmSourceSwitchButton.disabled = !selected;
+    elements.sourceSwitchMessage.textContent = selected
+      ? '切换时连接码和教室连接保持不变。'
+      : '没有检测到可投屏的显示器或应用窗口。';
+  } catch (error) {
+    elements.confirmSourceSwitchButton.disabled = true;
+    elements.sourceSwitchMessage.textContent = `读取投屏来源失败：${error.message}`;
+  } finally {
+    elements.refreshSwitchSourcesButton.disabled = false;
+  }
+}
+
+function closeSourceSwitcher() {
+  elements.sourceSwitchDialog.hidden = true;
+}
+
+async function openSourceSwitcher() {
+  if (!state.mediaStream) {
+    setStatus('当前未投屏，请在主界面选择来源后开始投屏');
+    elements.sourceSelect.focus();
+    return;
+  }
+  elements.sourceSwitchDialog.hidden = false;
+  await refreshSwitchSources();
 }
 
 async function requestScreenStream() {
@@ -127,9 +179,10 @@ async function requestScreenStream() {
     throw new Error('没有获取到屏幕画面');
   }
   videoTrack.contentHint = 'detail';
+  const sourceType = state.captureSourceType;
   videoTrack.addEventListener('ended', () => {
-    if (!state.stopping) {
-      stopProjection(false, state.captureSourceType === 'window'
+    if (!state.stopping && !state.switchingSource && stream === state.mediaStream) {
+      stopProjection(false, sourceType === 'window'
         ? '应用窗口已关闭，投屏已停止'
         : '屏幕采集已停止');
     }
@@ -142,7 +195,7 @@ function startSourceMonitor() {
     return;
   }
   state.sourceMonitorTimer = setInterval(async () => {
-    if (!state.mediaStream || state.stopping) return;
+    if (!state.mediaStream || state.stopping || state.switchingSource) return;
     try {
       if (!await api.sourceAvailable(state.captureSourceId)) {
         await stopProjection(false, '应用窗口已关闭，投屏已停止');
@@ -338,9 +391,6 @@ async function startProjection() {
     elements.localPreview.srcObject = state.mediaStream;
     await elements.localPreview.play().catch(() => {});
     const audioTrack = state.mediaStream.getAudioTracks()[0];
-    state.audioEnabled = Boolean(audioTrack);
-    elements.audioButton.disabled = !audioTrack;
-    elements.audioButton.textContent = audioTrack ? '关闭声音' : '没有系统声音';
     elements.audioStatus.textContent = audioTrack ? '系统声音已启用' : '未获取到系统声音';
     state.config = await api.connectSignaling({ baseUrl: state.serverUrl, code });
     elements.setupCard.hidden = true;
@@ -357,8 +407,86 @@ async function startProjection() {
   }
 }
 
+async function switchProjectionSource() {
+  const selectedOption = elements.switchSourceSelect.selectedOptions[0];
+  const nextSourceId = elements.switchSourceSelect.value;
+  const nextSourceType = selectedOption?.dataset.sourceType === 'window' ? 'window' : 'screen';
+  if (!nextSourceId || !state.mediaStream || state.switchingSource) {
+    return;
+  }
+  if (nextSourceId === state.captureSourceId) {
+    closeSourceSwitcher();
+    return;
+  }
+
+  const previousStream = state.mediaStream;
+  const previousSource = {
+    id: state.captureSourceId,
+    type: state.captureSourceType
+  };
+  const generation = ++state.sourceSwitchGeneration;
+  let nextStream = null;
+  state.switchingSource = true;
+  elements.confirmSourceSwitchButton.disabled = true;
+  elements.refreshSwitchSourcesButton.disabled = true;
+  elements.sourceSwitchMessage.textContent = '正在切换投屏窗口，请稍候...';
+  setLiveStatus('正在切换窗口');
+
+  try {
+    await api.selectSource({ id: nextSourceId, type: nextSourceType });
+    state.captureSourceId = nextSourceId;
+    state.captureSourceType = nextSourceType;
+    nextStream = await requestScreenStream();
+    if (generation !== state.sourceSwitchGeneration || state.stopping) {
+      nextStream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    stopSourceMonitor();
+    state.mediaStream = nextStream;
+    elements.localPreview.srcObject = nextStream;
+    await elements.localPreview.play().catch(() => {});
+    const audioTrack = nextStream.getAudioTracks()[0];
+    elements.audioStatus.textContent = audioTrack ? '系统声音已启用' : '未获取到系统声音';
+    startSourceMonitor();
+    await negotiate();
+    if (generation !== state.sourceSwitchGeneration || state.stopping) {
+      return;
+    }
+
+    previousStream.getTracks().forEach((track) => track.stop());
+    closeSourceSwitcher();
+    setStatus(nextSourceType === 'window' ? '已切换到应用窗口' : '已切换到显示器');
+  } catch (error) {
+    if (nextStream) {
+      nextStream.getTracks().forEach((track) => track.stop());
+    }
+    if (generation !== state.sourceSwitchGeneration || state.stopping) {
+      return;
+    }
+    stopSourceMonitor();
+    state.mediaStream = previousStream;
+    elements.localPreview.srcObject = previousStream;
+    await elements.localPreview.play().catch(() => {});
+    state.captureSourceId = previousSource.id;
+    state.captureSourceType = previousSource.type;
+    await api.selectSource(previousSource).catch(() => {});
+    startSourceMonitor();
+    elements.sourceSwitchMessage.textContent = error.message || '切换投屏窗口失败';
+    setStatus(error.message || '切换投屏窗口失败', true);
+    setLiveStatus('已连接');
+  } finally {
+    state.switchingSource = false;
+    elements.confirmSourceSwitchButton.disabled = false;
+    elements.refreshSwitchSourcesButton.disabled = false;
+  }
+}
+
 async function stopProjection(disconnect = true, message = '') {
   state.stopping = true;
+  state.sourceSwitchGeneration += 1;
+  state.switchingSource = false;
+  closeSourceSwitcher();
   stopSourceMonitor();
   if (state.peerConnection) {
     state.peerConnection.close();
@@ -386,7 +514,6 @@ async function stopProjection(disconnect = true, message = '') {
   elements.liveCard.hidden = true;
   elements.setupCard.hidden = false;
   elements.statusDot.classList.remove('is-live');
-  elements.audioButton.disabled = false;
   elements.localAudioButton.disabled = false;
   elements.localAudioButton.textContent = '关闭电脑声音';
   elements.audioStatus.textContent = '准备中';
@@ -397,17 +524,6 @@ async function stopProjection(disconnect = true, message = '') {
 elements.startButton.addEventListener('click', startProjection);
 elements.stopButton.addEventListener('click', () => stopProjection(true));
 elements.hideButton.addEventListener('click', () => api.hideWindow());
-elements.showButton.addEventListener('click', () => api.showWindow());
-elements.audioButton.addEventListener('click', () => {
-  const track = state.mediaStream?.getAudioTracks()[0];
-  if (!track) {
-    return;
-  }
-  track.enabled = !track.enabled;
-  state.audioEnabled = track.enabled;
-  elements.audioButton.textContent = track.enabled ? '关闭声音' : '开启声音';
-  elements.audioStatus.textContent = track.enabled ? '系统声音已启用' : '系统声音已静音';
-});
 elements.localAudioOutput.addEventListener('change', async () => {
   state.localAudioOutput = elements.localAudioOutput.checked;
   localStorage.setItem('myclass.localAudioOutput', String(state.localAudioOutput));
@@ -436,6 +552,16 @@ elements.sourceSelect.addEventListener('change', async () => {
   await api.selectSource({ id: state.captureSourceId, type: state.captureSourceType });
 });
 elements.refreshSourcesButton.addEventListener('click', refreshSources);
+elements.switchSourceSelect.addEventListener('change', () => {
+  const option = elements.switchSourceSelect.selectedOptions[0];
+  elements.sourceSwitchMessage.textContent = option?.value
+    ? '切换时连接码和教室连接保持不变。'
+    : '没有检测到可投屏的显示器或应用窗口。';
+});
+elements.refreshSwitchSourcesButton.addEventListener('click', refreshSwitchSources);
+elements.cancelSourceSwitchButton.addEventListener('click', closeSourceSwitcher);
+elements.cancelSourceSwitchAction.addEventListener('click', closeSourceSwitcher);
+elements.confirmSourceSwitchButton.addEventListener('click', switchProjectionSource);
 
 api.onSignalingMessage((message) => handleSignal(message).catch((error) => setStatus(error.message, true)));
 api.onSignalingState(({ state: signalingState }) => {
@@ -447,6 +573,13 @@ api.onSignalingState(({ state: signalingState }) => {
 });
 api.onSignalingError(({ message }) => setStatus(message, true));
 api.onTrayStop(() => stopProjection(true));
+api.onTraySwitchSource(() => openSourceSwitcher().catch((error) => setStatus(error.message, true)));
+
+api.getAppVersion()
+  .then((version) => {
+    document.title = `MyClass 投屏 v${version}`;
+  })
+  .catch(() => {});
 
 refreshSources();
 setStatus('请输入连接码后开始投屏');

@@ -9,8 +9,8 @@ contextBridge.exposeInMainWorld('myclass', {
   connectSignaling: (options) => ipcRenderer.invoke('signaling-connect', options),
   sendSignaling: (payload) => ipcRenderer.send('signaling-send', payload),
   disconnectSignaling: () => ipcRenderer.send('signaling-disconnect'),
+  getAppVersion: () => ipcRenderer.invoke('app-version'),
   hideWindow: () => ipcRenderer.send('window-hide'),
-  showWindow: () => ipcRenderer.send('window-show'),
   quit: () => ipcRenderer.send('app-quit'),
   onSignalingMessage: (callback) => {
     const listener = (_event, message) => callback(message);
@@ -31,5 +31,10 @@ contextBridge.exposeInMainWorld('myclass', {
     const listener = () => callback();
     ipcRenderer.on('tray-stop', listener);
     return () => ipcRenderer.removeListener('tray-stop', listener);
+  },
+  onTraySwitchSource: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('tray-switch-source', listener);
+    return () => ipcRenderer.removeListener('tray-switch-source', listener);
   }
 });

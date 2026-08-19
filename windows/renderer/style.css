@@ -109,9 +109,31 @@ input:focus, select:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56
 .stats dd { overflow: hidden; margin: 6px 0 0; color: #e6f5fb; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .live-actions { align-items: stretch; flex-wrap: wrap; }
 .live-actions button { flex: 1 1 30%; }
+.source-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(2, 8, 11, 0.72);
+}
+.source-dialog[hidden] { display: none; }
+.source-dialog-card {
+  width: min(100%, 470px);
+  padding: 23px;
+  border: 1px solid #2a687d;
+  border-radius: 18px;
+  background: #09232e;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+.source-dialog-card .section-heading { margin-bottom: 0; }
+.source-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.source-dialog-actions .primary-button { width: auto; }
 .status-message { min-height: 22px; margin: 18px 2px 0; color: #b7dcea; font-size: 13px; line-height: 1.6; }
 .status-message.is-error { color: #fda4af; }
 .footer-note { margin: 20px 2px 0; }
+.footer-note.credit { margin-top: 10px; text-align: center; color: #7fa8b8; }
 
 @media (max-width: 480px) {
   body { min-width: 0; }

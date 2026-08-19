@@ -61,15 +61,40 @@
           <div><dt>声音</dt><dd id="audioStatus">准备中</dd></div>
         </dl>
         <div class="live-actions">
-          <button class="secondary-button" id="audioButton" type="button">关闭声音</button>
           <button class="secondary-button" id="localAudioButton" type="button">关闭电脑声音</button>
-          <button class="secondary-button" id="showButton" type="button">显示窗口</button>
           <button class="danger-button" id="stopButton" type="button">停止投屏</button>
         </div>
       </section>
 
+      <section class="source-dialog" id="sourceSwitchDialog" hidden>
+        <div class="source-dialog-card" role="dialog" aria-modal="true" aria-labelledby="sourceDialogTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">SOURCE</p>
+              <h2 id="sourceDialogTitle">切换投屏窗口</h2>
+            </div>
+            <button class="icon-button" id="cancelSourceSwitchButton" type="button" title="取消">×</button>
+          </div>
+          <label class="field">
+            <span>选择显示器或应用窗口</span>
+            <div class="source-row">
+              <select id="switchSourceSelect">
+                <option value="">正在读取显示器和应用...</option>
+              </select>
+              <button class="refresh-button" id="refreshSwitchSourcesButton" type="button" title="刷新显示器和应用窗口">刷新</button>
+            </div>
+          </label>
+          <p class="hint" id="sourceSwitchMessage">切换时连接码和教室连接保持不变。</p>
+          <div class="source-dialog-actions">
+            <button class="secondary-button" id="cancelSourceSwitchAction" type="button">取消</button>
+            <button class="primary-button" id="confirmSourceSwitchButton" type="button">切换窗口</button>
+          </div>
+        </div>
+      </section>
+
       <p class="status-message" id="statusMessage" role="status">正在初始化...</p>
-      <p class="footer-note">关闭窗口会继续在系统托盘运行。右键托盘图标可停止投屏或退出程序。</p>
+      <p class="footer-note">关闭窗口会继续在系统托盘运行。点击或右键托盘图标可切换投屏窗口、停止投屏或退出程序。</p>
+      <p class="footer-note credit">本软件由宁波三中机器人AI实验室开发维护</p>
     </main>
     <script src="./renderer.js"></script>
   </body>

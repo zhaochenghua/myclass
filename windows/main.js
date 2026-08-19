@@ -14,6 +14,7 @@ const path = require('node:path');
 const { WebSocket } = require('ws');
 
 const DEFAULT_SERVER_URL = 'http://10.30.13.1/myclass';
+const APP_ICON_PATH = path.join(__dirname, 'assets', 'icon.ico');
 
 let mainWindow = null;
 let tray = null;
@@ -462,14 +463,7 @@ function installDisplayMediaHandler() {
 }
 
 function createTrayIcon() {
-  const svg = [
-    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">',
-    '<rect x="2" y="4" width="28" height="20" rx="3" fill="#0ea5e9"/>',
-    '<path d="M8 28h16M12 24v4m8-4v4" stroke="#e0f2fe" stroke-width="2" stroke-linecap="round"/>',
-    '<path d="M9 9h14v10H9z" fill="#082f49"/>',
-    '</svg>'
-  ].join('');
-  return nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+  return nativeImage.createFromPath(APP_ICON_PATH);
 }
 
 function showMainWindow() {
@@ -480,11 +474,16 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+function openSourceSwitcher() {
+  showMainWindow();
+  sendRenderer('tray-switch-source');
+}
+
 function createTray() {
   tray = new Tray(createTrayIcon());
   tray.setToolTip('MyClass 投屏');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '显示控制面板', click: showMainWindow },
+    { label: '切换投屏窗口', click: openSourceSwitcher },
     { type: 'separator' },
     {
       label: '断开投屏',
@@ -492,7 +491,7 @@ function createTray() {
     },
     { label: '退出', click: () => { isQuitting = true; app.quit(); } }
   ]));
-  tray.on('click', showMainWindow);
+  tray.on('click', openSourceSwitcher);
 }
 
 function createWindow() {
@@ -504,6 +503,7 @@ function createWindow() {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#07131a',
+    icon: APP_ICON_PATH,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -537,8 +537,8 @@ function registerIpc() {
   ipcMain.handle('signaling-connect', (_event, options) => connectSignaling(options));
   ipcMain.on('signaling-send', (_event, payload) => sendSignalingMessage(payload));
   ipcMain.on('signaling-disconnect', () => closeSignaling());
+  ipcMain.handle('app-version', () => app.getVersion());
   ipcMain.on('window-hide', () => mainWindow?.hide());
-  ipcMain.on('window-show', showMainWindow);
   ipcMain.on('app-quit', () => {
     isQuitting = true;
     closeSignaling({ notify: false });

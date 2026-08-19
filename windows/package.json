@@ -1,6 +1,6 @@
 {
   "name": "myclass-windows",
-  "version": "0.1.2",
+  "version": "0.1.7",
   "description": "MyClass Windows screen sharing client",
   "main": "main.js",
   "private": true,
@@ -28,9 +28,11 @@
       "main.js",
       "preload.js",
       "renderer/**/*",
+      "assets/**/*",
       "package.json"
     ],
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         {
           "target": "nsis",
