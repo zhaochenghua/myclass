@@ -8,23 +8,14 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="app-header">
-        <div>
-          <p class="eyebrow">MYCLASS WINDOWS</p>
-          <h1>电脑屏幕投屏</h1>
-        </div>
-        <button class="icon-button" id="hideButton" type="button" title="隐藏到系统托盘">—</button>
-      </header>
-
       <section class="card" id="setupCard">
         <div class="section-heading">
           <h2>连接教室</h2>
-          <span class="status-dot" id="statusDot"></span>
+          <div class="heading-actions">
+            <button class="icon-button" id="settingsButton" type="button" title="设置服务器地址">⚙</button>
+            <span class="status-dot" id="statusDot"></span>
+          </div>
         </div>
-        <label class="field">
-          <span>服务器地址</span>
-          <input id="serverUrl" type="url" value="http://10.30.13.1/myclass" spellcheck="false">
-        </label>
         <label class="field">
           <span>课堂连接码</span>
           <input id="roomCode" class="room-code" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="输入大屏上的 4 位数字" autocomplete="off">
@@ -63,6 +54,27 @@
         <div class="live-actions">
           <button class="secondary-button" id="localAudioButton" type="button">关闭电脑声音</button>
           <button class="danger-button" id="stopButton" type="button">停止投屏</button>
+        </div>
+      </section>
+
+      <section class="source-dialog" id="settingsDialog" hidden>
+        <div class="source-dialog-card" role="dialog" aria-modal="true" aria-labelledby="settingsDialogTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">SETTINGS</p>
+              <h2 id="settingsDialogTitle">设置</h2>
+            </div>
+            <button class="icon-button" id="closeSettingsButton" type="button" title="关闭">×</button>
+          </div>
+          <label class="field">
+            <span>服务器地址</span>
+            <input id="settingsServerUrl" type="url" value="http://10.30.13.1/myclass" spellcheck="false">
+          </label>
+          <p class="hint">保存后下次开始投屏时生效。</p>
+          <div class="source-dialog-actions">
+            <button class="secondary-button" id="cancelSettingsAction" type="button">取消</button>
+            <button class="primary-button" id="saveSettingsButton" type="button">保存</button>
+          </div>
         </div>
       </section>
 

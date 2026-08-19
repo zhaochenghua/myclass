@@ -3,7 +3,6 @@ const api = window.myclass;
 const elements = {
   setupCard: document.getElementById('setupCard'),
   liveCard: document.getElementById('liveCard'),
-  serverUrl: document.getElementById('serverUrl'),
   roomCode: document.getElementById('roomCode'),
   sourceSelect: document.getElementById('sourceSelect'),
   refreshSourcesButton: document.getElementById('refreshSourcesButton'),
@@ -11,7 +10,12 @@ const elements = {
   startButton: document.getElementById('startButton'),
   stopButton: document.getElementById('stopButton'),
   localAudioButton: document.getElementById('localAudioButton'),
-  hideButton: document.getElementById('hideButton'),
+  settingsButton: document.getElementById('settingsButton'),
+  settingsDialog: document.getElementById('settingsDialog'),
+  settingsServerUrl: document.getElementById('settingsServerUrl'),
+  closeSettingsButton: document.getElementById('closeSettingsButton'),
+  cancelSettingsAction: document.getElementById('cancelSettingsAction'),
+  saveSettingsButton: document.getElementById('saveSettingsButton'),
   sourceSwitchDialog: document.getElementById('sourceSwitchDialog'),
   switchSourceSelect: document.getElementById('switchSourceSelect'),
   refreshSwitchSourcesButton: document.getElementById('refreshSwitchSourcesButton'),
@@ -46,7 +50,7 @@ const state = {
   stopping: false
 };
 
-elements.serverUrl.value = state.serverUrl;
+elements.settingsServerUrl.value = state.serverUrl;
 elements.localAudioOutput.checked = state.localAudioOutput;
 
 function setStatus(message, isError = false) {
@@ -350,17 +354,39 @@ async function handleSignal(message) {
   }
 }
 
+function closeSettingsDialog() {
+  elements.settingsDialog.hidden = true;
+}
+
+function openSettingsDialog() {
+  elements.settingsServerUrl.value = state.serverUrl;
+  elements.settingsDialog.hidden = false;
+  elements.settingsServerUrl.focus();
+}
+
+function saveSettings() {
+  const serverUrl = elements.settingsServerUrl.value.trim().replace(/\/+$/, '');
+  if (!serverUrl) {
+    setStatus('服务器地址不能为空', true);
+    elements.settingsServerUrl.focus();
+    return;
+  }
+  state.serverUrl = serverUrl;
+  localStorage.setItem('myclass.serverUrl', state.serverUrl);
+  closeSettingsDialog();
+  setStatus('服务器地址已保存');
+}
+
 async function startProjection() {
   const code = elements.roomCode.value.trim();
-  const serverUrl = elements.serverUrl.value.trim();
   if (!/^\d{4}$/.test(code)) {
     setStatus('请输入大屏上显示的 4 位连接码', true);
     elements.roomCode.focus();
     return;
   }
-  if (!serverUrl) {
-    setStatus('请输入服务器地址', true);
-    elements.serverUrl.focus();
+  if (!state.serverUrl) {
+    setStatus('请先在设置中配置服务器地址', true);
+    openSettingsDialog();
     return;
   }
   if (!elements.sourceSelect.value) {
@@ -372,7 +398,6 @@ async function startProjection() {
   elements.startButton.textContent = '正在准备屏幕...';
   state.stopping = false;
   state.roomCode = code;
-  state.serverUrl = serverUrl.replace(/\/+$/, '');
   const selectedOption = elements.sourceSelect.selectedOptions[0];
   state.captureSourceId = elements.sourceSelect.value;
   state.captureSourceType = selectedOption?.dataset.sourceType === 'window' ? 'window' : 'screen';
@@ -523,7 +548,10 @@ async function stopProjection(disconnect = true, message = '') {
 
 elements.startButton.addEventListener('click', startProjection);
 elements.stopButton.addEventListener('click', () => stopProjection(true));
-elements.hideButton.addEventListener('click', () => api.hideWindow());
+elements.settingsButton.addEventListener('click', openSettingsDialog);
+elements.closeSettingsButton.addEventListener('click', closeSettingsDialog);
+elements.cancelSettingsAction.addEventListener('click', closeSettingsDialog);
+elements.saveSettingsButton.addEventListener('click', saveSettings);
 elements.localAudioOutput.addEventListener('change', async () => {
   state.localAudioOutput = elements.localAudioOutput.checked;
   localStorage.setItem('myclass.localAudioOutput', String(state.localAudioOutput));
