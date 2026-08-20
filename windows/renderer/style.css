@@ -24,7 +24,7 @@ button { cursor: pointer; }
   width: min(100%, 314px);
   min-height: 100vh;
   margin: 0 auto;
-  padding: 30px 0 24px;
+  padding: 0 0 12px;
 }
 
 .section-heading, .live-header, .live-actions {
@@ -82,7 +82,7 @@ input:focus, select:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56
 .source-row select { min-width: 0; flex: 1; }
 .refresh-button { height: 44px; padding: 0 12px; border: 1px solid #245063; border-radius: 10px; background: #0d2631; color: #cce8f1; }
 .refresh-button:hover { border-color: #38bdf8; color: #ffffff; }
-.room-code { font-size: 20px; letter-spacing: 0.22em; }
+.room-code { font-size: 18px; letter-spacing: 0.22em; }
 .check-row { display: flex; align-items: center; gap: 9px; margin-top: 18px; color: #cce8f1; font-size: 13px; cursor: pointer; }
 .check-row input { width: 17px; height: 17px; margin: 0; accent-color: #0ea5e9; }
 .hint, .footer-note { color: #82a5b2; font-size: 12px; line-height: 1.6; }
@@ -137,7 +137,7 @@ input:focus, select:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56
 
 @media (max-width: 480px) {
   body { min-width: 0; }
-  .app-shell { padding: 24px 0; }
+  .app-shell { padding: 0 0 12px; }
   .card { padding: 18px; }
   .live-actions button { flex-basis: 45%; }
 }
