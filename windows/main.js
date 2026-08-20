@@ -496,9 +496,9 @@ function createTray() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 350,
+    width: 314,
     height: 680,
-    minWidth: 460,
+    minWidth: 314,
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
