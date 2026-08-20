@@ -1,6 +1,6 @@
 {
   "name": "myclass-windows",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "MyClass Windows screen sharing client",
   "main": "main.js",
   "private": true,

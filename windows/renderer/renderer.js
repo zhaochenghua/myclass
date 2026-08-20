@@ -172,8 +172,10 @@ async function requestScreenStream() {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: {
       frameRate: { ideal: 30, max: 30 },
-      width: { ideal: 2560, max: 3840 },
-      height: { ideal: 1440, max: 2160 }
+      // Cap at 1080p: 2K/4K laptops are downsampled (sharper text on 1080p displays),
+      // saving ~75% of bandwidth and encoding load versus native 2K/4K capture.
+      width: { ideal: 1920, max: 1920 },
+      height: { ideal: 1080, max: 1080 }
     },
     audio: true
   });

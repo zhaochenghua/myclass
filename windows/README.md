@@ -8,6 +8,7 @@
 - Electron 主进程使用 `ws` 连接现有 `/myclass/ws`，作为 `teacher` 角色发送 `teacher.join`、`webrtc.offer` 和 ICE candidate。这样不受 `file://` Origin 校验影响。
 - 渲染进程使用 `getDisplayMedia` 采集选定显示器或应用窗口；主进程通过 `desktopCapturer` 枚举来源，并在 Windows 上将 Electron 的 `loopback` 音频源绑定到同一个共享流。
 - 视频默认按 30 FPS、最高 12 Mbps 发送，并设置 `contentHint=detail`，兼顾文字清晰度和局域网流畅度。
+- 采集分辨率统一封顶 1920×1080：2K/4K 笔记本屏幕会先降采样再传输，1080p 大屏上文字反而更锐利，同时节省约 75% 的带宽和编码负载；90Hz 等高刷新率屏幕不受影响（采集帧率固定 30 FPS）。
 - 主进程创建系统托盘。关闭窗口只隐藏到托盘，点击托盘图标或使用“切换投屏窗口”菜单可直接选择新的显示器/应用窗口；右键菜单还可以停止投屏或退出程序。
 
 ## 开发运行
