@@ -486,13 +486,11 @@ function moveCursorHighlightWindow() {
     return;
   }
   // getCursorScreenPoint() and setPosition() both use DIP coordinates.
+  // No work-area clamping: the ring may extend past the screen edge so the
+  // cursor can still reach the very edge of the display.
   const cursor = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(cursor);
-  const workArea = display.workArea;
   const size = CURSOR_RING_SIZE;
-  const clampedX = Math.min(Math.max(cursor.x - size / 2, workArea.x), workArea.x + workArea.width - size);
-  const clampedY = Math.min(Math.max(cursor.y - size / 2, workArea.y), workArea.y + workArea.height - size);
-  cursorHighlightWindow.setPosition(Math.round(clampedX), Math.round(clampedY));
+  cursorHighlightWindow.setPosition(Math.round(cursor.x - size / 2), Math.round(cursor.y - size / 2));
 }
 
 function setCursorHighlight(enabled) {
@@ -528,7 +526,7 @@ function setCursorHighlight(enabled) {
             '.ring{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}' +
             /* The dot marks the cursor hotspot (pointer tip), which sits at the window center. */
             '.dot{width:10px;height:10px;border-radius:50%;background:rgba(255,59,48,.75);box-shadow:0 0 4px rgba(255,59,48,.45)}' +
-            '.circle{width:56px;height:56px;border-radius:50%;border:4px solid rgba(255,59,48,.55);box-shadow:0 0 10px rgba(255,59,48,.3)}' +
+            '.circle{width:56px;height:56px;border-radius:50%;border:4px solid rgba(255,59,48,.55);box-shadow:0 0 10px rgba(255,59,48,.3);display:flex;align-items:center;justify-content:center}' +
             '</style></head><body><div class="ring"><div class="circle"><div class="dot"></div></div></div></body></html>'
           )
       );
