@@ -4,7 +4,14 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# 软件安装包（体积大，不纳入 git，单独部署）
 web/public/myclass.apk
+web/public/myclass-windows.exe
+web/public/*.exe
+web/public/*.apk
+web/public/*.msi
+web/public/*.dmg
+web/public/*.ipa
 web/public/courseware/
 
 android/AndroidStudioProject/.gradle/
