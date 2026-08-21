@@ -485,15 +485,13 @@ function moveCursorHighlightWindow() {
   if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
     return;
   }
-  // getCursorScreenPoint() returns physical pixels; setPosition() expects DIP.
+  // getCursorScreenPoint() and setPosition() both use DIP coordinates.
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
   const workArea = display.workArea;
   const size = CURSOR_RING_SIZE;
-  const x = cursor.x / display.scaleFactor;
-  const y = cursor.y / display.scaleFactor;
-  const clampedX = Math.min(Math.max(x - size / 2, workArea.x), workArea.x + workArea.width - size);
-  const clampedY = Math.min(Math.max(y - size / 2, workArea.y), workArea.y + workArea.height - size);
+  const clampedX = Math.min(Math.max(cursor.x - size / 2, workArea.x), workArea.x + workArea.width - size);
+  const clampedY = Math.min(Math.max(cursor.y - size / 2, workArea.y), workArea.y + workArea.height - size);
   cursorHighlightWindow.setPosition(Math.round(clampedX), Math.round(clampedY));
 }
 
