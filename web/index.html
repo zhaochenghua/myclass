@@ -19,7 +19,7 @@
             <div class="code-right">
               <img class="qr-code" id="apkQr" alt="APP 下载二维码">
               <div class="download-hint">请扫描二维码安装APP</div>
-              <a class="download-apk-btn" id="downloadApkButton" hidden>无法扫码？点击下载APP</a>
+              <a class="download-apk-btn" id="downloadApkButton" hidden>无法扫码？点击下载安卓apk文件</a>
               <a class="download-windows-btn" id="downloadWindowsButton" hidden>下载 Windows 投屏程序</a>
               <div class="platform-note">支持安卓/鸿蒙和 Windows 平台</div>
             </div>
@@ -81,8 +81,8 @@
         <div class="annotation-toolbar" id="annotationToolbar" aria-label="画笔工具">
           <button class="annotation-mode" id="panToolButton" type="button" hidden>手型</button>
           <div class="annotation-colors" id="annotationColors" aria-label="画笔颜色">
-            <button class="annotation-color is-active" type="button" data-color="#ffd166" aria-label="黄色"></button>
-            <button class="annotation-color" type="button" data-color="#ff4d6d" aria-label="红色"></button>
+            <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
+            <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
             <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
             <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
             <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
@@ -108,6 +108,7 @@
           <button class="annotation-button blackboard-toggle-btn" id="blackboardToggleButton" type="button">黑板</button>
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
+        <div class="roll-student-big" id="rollStudentBig" aria-hidden="true">??</div>
       </section>
 
       <!-- 视频播放器覆盖层 -->
@@ -131,6 +132,29 @@
         </div>
       </div>
 
+      <!-- 设置人数模态框 -->
+      <div class="modal-overlay" id="studentCountModal" hidden>
+        <div class="modal-card student-count-card">
+          <h3>设置班级人数</h3>
+          <div class="student-count-display" id="studentCountDisplay">50</div>
+          <div class="student-count-steppers">
+            <button type="button" class="student-count-step" id="studentCountMinus10" aria-label="减少10">−10</button>
+            <button type="button" class="student-count-step" id="studentCountMinus1" aria-label="减少1">−</button>
+            <button type="button" class="student-count-step student-count-step-plus" id="studentCountPlus1" aria-label="增加1">＋</button>
+            <button type="button" class="student-count-step student-count-step-plus" id="studentCountPlus10" aria-label="增加10">＋10</button>
+          </div>
+          <div class="student-count-slider" id="studentCountSlider">
+            <div class="student-count-fill" id="studentCountFill"></div>
+            <div class="student-count-thumb" id="studentCountThumb"></div>
+          </div>
+          <p class="student-count-hint">拖动滑块或点按 ± 按钮调整人数</p>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="studentCountCancel">取消</button>
+            <button type="button" class="btn-primary" id="studentCountConfirm">确定</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 黑板全屏覆盖层 -->
       <div class="blackboard-overlay" id="blackboardOverlay" hidden>
         <canvas class="blackboard-canvas" id="blackboardCanvas"></canvas>
@@ -148,8 +172,8 @@
           <button class="annotation-button blackboard-delete-sel-btn" id="blackboardDeleteSelButton" type="button" style="display:none">删除</button>
           <div class="toolbar-divider"></div>
           <div class="annotation-colors" id="blackboardColors" aria-label="黑板颜色">
-            <button class="annotation-color is-active" type="button" data-color="#ffd166" aria-label="黄色"></button>
-            <button class="annotation-color" type="button" data-color="#ff4d6d" aria-label="红色"></button>
+            <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
+            <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
             <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
             <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
             <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>

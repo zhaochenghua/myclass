@@ -24,7 +24,7 @@ const state = {
   annotations: {
     strokes: [],
     activeStrokes: new Map(),  // key: pointerId → stroke，支持多笔同时绘制
-    currentColor: '#ffd166',
+    currentColor: '#ff4d6d',
     tool: 'pen'
   },
   blackboard: {
@@ -34,7 +34,7 @@ const state = {
     activeStrokes: new Map(),  // 黑板当前页活跃笔画，支持多点
     tool: 'pen',               // 'pen' | 'eraser' | 'hand' | 'select'
     eraserWidth: 40,           // 板擦半径(px)
-    currentColor: '#ffd166',   // 黑板专用颜色
+    currentColor: '#ff4d6d',   // 黑板专用颜色（默认红色）
     // 圈选系统
     selection: {
       lassoPoints: [],          // 正在绘制的套索多边形点
@@ -375,7 +375,7 @@ async function bootstrap() {
       if (!state.blackboard.active || state.blackboard.tool !== 'eraser') return;
       elements.blackboardEraserCursor.style.left = event.clientX + 'px';
       elements.blackboardEraserCursor.style.top = event.clientY + 'px';
-      const size = state.blackboard.eraserWidth * 2;
+      const size = state.blackboard.eraserWidth;
       elements.blackboardEraserCursor.style.width = size + 'px';
       elements.blackboardEraserCursor.style.height = size + 'px';
     });
@@ -440,38 +440,189 @@ function startClock() {
 }
 
 function setupStudentRoller() {
-  const MAX_NO = 50;
   const DURATION = 1800;
+  const MIN_NO = 1;
+  const MAX_NO = 80;
   const btn = document.getElementById('rollStudentButton');
   const result = document.getElementById('rollStudentResult');
+  const big = document.getElementById('rollStudentBig');
   let rolling = false;
   let timer = null;
+  // 班级人数，首次使用抽学号时设置，默认 50
+  let studentCount = 50;
+  let countConfigured = false;
 
-  btn.addEventListener('click', () => {
+  // ---- 设置人数模态框 ----
+  const modal = document.getElementById('studentCountModal');
+  const slider = document.getElementById('studentCountSlider');
+  const thumb = document.getElementById('studentCountThumb');
+  const fill = document.getElementById('studentCountFill');
+  const display = document.getElementById('studentCountDisplay');
+  const confirmBtn = document.getElementById('studentCountConfirm');
+  const cancelBtn = document.getElementById('studentCountCancel');
+  const minus1 = document.getElementById('studentCountMinus1');
+  const minus10 = document.getElementById('studentCountMinus10');
+  const plus1 = document.getElementById('studentCountPlus1');
+  const plus10 = document.getElementById('studentCountPlus10');
+  // 待执行的抽学号回调（确定后触发）；为 null 时仅修改人数
+  let pendingRoll = null;
+  // 打开模态框时的人数快照，用于取消时还原
+  let openedCount = studentCount;
+
+  function renderCount(value) {
+    value = Math.max(MIN_NO, Math.min(MAX_NO, value));
+    const ratio = (value - MIN_NO) / (MAX_NO - MIN_NO);
+    // 横向滑块：左为最小，右为最大
+    thumb.style.left = (ratio * 100) + '%';
+    fill.style.width = (ratio * 100) + '%';
+    display.textContent = String(value);
+    return value;
+  }
+
+  function pointToValue(clientX) {
+    const rect = slider.getBoundingClientRect();
+    let ratio = (clientX - rect.left) / rect.width;
+    ratio = Math.max(0, Math.min(1, ratio));
+    return Math.round(MIN_NO + ratio * (MAX_NO - MIN_NO));
+  }
+
+  // onConfirm: 传入函数则在确定后执行（如首次抽号）；传 null 则仅保存人数
+  function openCountModal(onConfirm) {
+    pendingRoll = onConfirm;
+    openedCount = studentCount;
+    renderCount(studentCount);
+    modal.hidden = false;
+  }
+
+  function closeCountModal() {
+    modal.hidden = true;
+    pendingRoll = null;
+  }
+
+  // 拖动交互（指针事件，支持触摸/鼠标）
+  let dragging = false;
+  const startDrag = (e) => {
+    dragging = true;
+    slider.setPointerCapture?.(e.pointerId);
+    studentCount = renderCount(pointToValue(e.clientX));
+    e.preventDefault();
+  };
+  const moveDrag = (e) => {
+    if (!dragging) return;
+    studentCount = renderCount(pointToValue(e.clientX));
+  };
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    slider.releasePointerCapture?.(e.pointerId);
+  };
+  slider.addEventListener('pointerdown', startDrag);
+  slider.addEventListener('pointermove', moveDrag);
+  slider.addEventListener('pointerup', endDrag);
+  slider.addEventListener('pointercancel', endDrag);
+
+  // 大号 ± 按钮（支持长按连按，触屏友好）
+  function bindStepper(el, delta) {
+    let holdTimer = null;
+    let repeatTimer = null;
+    const activate = () => {
+      studentCount = renderCount(studentCount + delta);
+    };
+    const startHold = (e) => {
+      e.preventDefault();
+      // 捕获指针，确保 pointerup 一定回到本按钮，避免移出后计时器泄漏
+      el.setPointerCapture?.(e.pointerId);
+      activate();
+      holdTimer = setTimeout(() => {
+        repeatTimer = setInterval(activate, 120);
+      }, 400);
+    };
+    const stopHold = () => {
+      clearTimeout(holdTimer);
+      clearInterval(repeatTimer);
+      holdTimer = repeatTimer = null;
+    };
+    el.addEventListener('pointerdown', startHold);
+    el.addEventListener('pointerup', stopHold);
+    el.addEventListener('pointercancel', stopHold);
+  }
+  bindStepper(minus1, -1);
+  bindStepper(minus10, -10);
+  bindStepper(plus1, 1);
+  bindStepper(plus10, 10);
+
+  confirmBtn.addEventListener('click', () => {
+    const cb = pendingRoll;
+    // 确定即采纳当前 studentCount（已通过滑块/按钮实时更新）
+    closeCountModal();
+    countConfigured = true;
+    if (cb) cb();
+  });
+  cancelBtn.addEventListener('click', () => {
+    // 取消：还原为打开前的人数
+    studentCount = openedCount;
+    closeCountModal();
+  });
+
+  function startRoll() {
     if (rolling) return;
     rolling = true;
     const startTime = Date.now();
 
     result.classList.remove('done');
     result.classList.add('rolling');
+    // 居中超大显示开始滚动
+    big.textContent = '??';
+    big.classList.remove('done');
+    big.classList.add('rolling', 'show');
 
     const tick = () => {
       const elapsed = Date.now() - startTime;
       if (elapsed >= DURATION) {
         result.classList.remove('rolling');
-        const final = Math.floor(Math.random() * MAX_NO) + 1;
-        result.textContent = String(final).padStart(2, '0');
+        big.classList.remove('rolling');
+        const final = Math.floor(Math.random() * studentCount) + 1;
+        const text = String(final).padStart(2, '0');
+        result.textContent = text;
+        big.textContent = text;
         result.classList.add('done');
+        big.classList.add('done');
+        // 抽完后缩回右下角（保留短暂展示再隐藏）
+        setTimeout(() => {
+          big.classList.remove('show');
+        }, 1400);
         rolling = false;
         return;
       }
-      const n = Math.floor(Math.random() * MAX_NO) + 1;
-      result.textContent = String(n).padStart(2, '0');
+      const n = Math.floor(Math.random() * studentCount) + 1;
+      const text = String(n).padStart(2, '0');
+      result.textContent = text;
+      big.textContent = text;
       const interval = elapsed < 200 ? 50 : elapsed < 800 ? 100 : elapsed < 1400 ? 180 : 280;
       timer = setTimeout(tick, interval);
     };
 
     tick();
+  }
+
+  btn.addEventListener('click', () => {
+    if (rolling) return;
+    if (!countConfigured) {
+      // 首次使用：弹出设置人数模态框，确定后仅保存人数（不自动抽号）
+      openCountModal(null);
+    } else {
+      startRoll();
+    }
+  });
+
+  // 圆圈始终可点击修改人数（?? 状态与已设置状态均可）
+  result.classList.add('configured');
+  result.title = '点击设置/修改班级人数';
+
+  // 点击抽学号右侧圆圈：仅设置/修改班级人数，确定后不自动抽号
+  result.addEventListener('click', () => {
+    if (rolling) return;
+    openCountModal(null);
   });
 }
 

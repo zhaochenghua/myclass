@@ -612,34 +612,84 @@ video {
   text-shadow: 0 0 0.6rem rgba(255, 209, 102, 0.35);
 }
 
-/* ---- 抽学号（工具栏内） ---- */
+/* ---- 抽学号（工具栏内，童趣糖果配色） ---- */
 .roll-student-result {
+  position: relative;
   display: inline-block;
   width: 2.4rem;
   height: 2.4rem;
   line-height: 2.4rem;
   text-align: center;
-  border: 2px solid var(--warm);
   border-radius: 50%;
-  color: var(--warm);
+  background: transparent;
+  /* 彩虹渐变文字 */
+  color: transparent;
+  background-image: linear-gradient(135deg, #ff5d8f 0%, #ffd166 28%, #4ade80 52%, #38bdf8 76%, #c084fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
   font-size: 1.1rem;
   font-weight: 700;
   font-family: inherit;
   vertical-align: middle;
   user-select: none;
-  transition: transform 0.1s, color 0.2s, border-color 0.2s;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.2s;
+}
+
+/* 圆底 + 彩虹描边（保持圆角，用 ::before 承载） */
+.roll-student-result::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    rgba(20, 22, 28, 0.82) padding-box,
+    linear-gradient(135deg, #ff5d8f, #ffd166, #4ade80, #38bdf8, #c084fc) border-box;
+  border: 2px solid transparent;
+  z-index: -1;
+}
+
+/* 已设置过人数：圆圈可点击修改人数，hover/active 给出反馈 */
+.roll-student-result.configured {
+  box-shadow: 0 0 0 0.18rem rgba(192, 132, 252, 0.2);
+}
+
+.roll-student-result.configured:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 0.25rem rgba(192, 132, 252, 0.32);
+}
+
+.roll-student-result.configured:active {
+  transform: scale(0.94);
 }
 
 .roll-student-result.rolling {
   animation: rollBounce 0.08s infinite alternate;
-  border-color: var(--accent);
-  color: var(--accent);
+  background-image: linear-gradient(135deg, #ff8fb1 0%, #ffd166 30%, #5eead4 60%, #7dd3fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.roll-student-result.rolling::before {
+  background:
+    rgba(20, 22, 28, 0.82) padding-box,
+    linear-gradient(135deg, #ff8fb1, #ffd166, #5eead4, #7dd3fc) border-box;
 }
 
 .roll-student-result.done {
   animation: popIn 0.5s ease-out;
-  border-color: #22c55e;
-  color: #22c55e;
+  background-image: linear-gradient(135deg, #ff5d8f 0%, #ffb020 50%, #ffd166 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.roll-student-result.done::before {
+  background:
+    rgba(20, 22, 28, 0.82) padding-box,
+    linear-gradient(135deg, #ff5d8f, #ffb020, #ffd166) border-box;
 }
 
 @keyframes rollBounce {
@@ -651,6 +701,93 @@ video {
   0% { transform: scale(0.3); opacity: 0; }
   50% { transform: scale(1.3); opacity: 1; }
   100% { transform: scale(1); opacity: 1; }
+}
+
+/* ---- 抽学号居中超大显示层（童趣糖果配色） ---- */
+.roll-student-big {
+  position: fixed;
+  z-index: 30;
+  /* 默认缩回右下角（与工具栏对齐） */
+  left: calc(100vw - 3rem);
+  top: calc(100vh - 3rem);
+  transform: translate(-50%, -50%) scale(0.35);
+  opacity: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(60vmin, 60vh);
+  height: min(60vmin, 60vh);
+  border-radius: 50%;
+  /* 圆形背景+彩色描边由 ::before 承载，避免与文字渐变冲突 */
+  background: transparent;
+  /* 彩虹渐变文字 */
+  color: transparent;
+  background-image: linear-gradient(135deg, #ff5d8f 0%, #ffd166 28%, #4ade80 52%, #38bdf8 76%, #c084fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: min(34vmin, 34vh);
+  font-weight: 900;
+  font-family: inherit;
+  line-height: 1;
+  filter: drop-shadow(0 0 2rem rgba(192, 132, 252, 0.45));
+  transition: left 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              top 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              opacity 0.35s ease;
+}
+
+/* 圆形深色底 + 彩虹描边 */
+.roll-student-big::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    rgba(20, 22, 28, 0.82) padding-box,
+    linear-gradient(135deg, #ff5d8f, #ffd166, #4ade80, #38bdf8, #c084fc) border-box;
+  border: 0.6vmin solid transparent;
+  box-shadow: 0 0 4rem rgba(0, 0, 0, 0.55);
+  z-index: -1;
+}
+
+.roll-student-big.show {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+}
+
+/* 滚动中：粉蓝活泼色 */
+.roll-student-big.rolling {
+  background-image: linear-gradient(135deg, #ff8fb1 0%, #ffd166 30%, #5eead4 60%, #7dd3fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 2rem rgba(56, 189, 248, 0.5));
+  animation: bigRollBounce 0.08s infinite alternate;
+}
+
+/* 抽中：金红喜庆糖果色 */
+.roll-student-big.done {
+  background-image: linear-gradient(135deg, #ff5d8f 0%, #ffb020 50%, #ffd166 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 2.2rem rgba(255, 176, 32, 0.6));
+  animation: bigPopIn 0.5s ease-out;
+}
+
+@keyframes bigRollBounce {
+  from { transform: translate(-50%, -50%) scale(0.97); }
+  to { transform: translate(-50%, -50%) scale(1.06); }
+}
+
+@keyframes bigPopIn {
+  0% { transform: translate(-50%, -50%) scale(0.4); opacity: 0; }
+  55% { transform: translate(-50%, -50%) scale(1.12); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
 }
 
 /* 课件选择弹窗 */
@@ -834,6 +971,103 @@ video {
 
 .modal-actions .btn-secondary {
   padding: 0.5rem 1.5rem;
+}
+
+/* ---- 设置人数模态框（触屏大屏优化） ---- */
+.student-count-card {
+  width: min(520px, 92vw);
+  padding: 2rem 2.2rem 1.6rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.student-count-display {
+  font-size: 6rem;
+  font-weight: 900;
+  line-height: 1;
+  color: var(--warm);
+  margin: 0.3rem 0 1.6rem;
+  text-shadow: 0 0 1.6rem rgba(255, 209, 102, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 大号 ± 步进按钮 */
+.student-count-steppers {
+  display: flex;
+  gap: 1rem;
+  width: 100%;
+  margin-bottom: 1.8rem;
+}
+
+.student-count-step {
+  flex: 1;
+  height: 4.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 2rem;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: background 0.12s, transform 0.08s;
+}
+
+.student-count-step:active {
+  background: rgba(255, 255, 255, 0.18);
+  transform: scale(0.96);
+}
+
+.student-count-step-plus {
+  color: var(--warm);
+  border-color: rgba(255, 209, 102, 0.45);
+}
+
+/* 横向大滑块 */
+.student-count-slider {
+  position: relative;
+  width: 100%;
+  height: 2.4rem;
+  border-radius: 1.2rem;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.student-count-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: linear-gradient(to right, var(--accent), var(--warm));
+  border-radius: 1.2rem;
+}
+
+.student-count-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 3.2rem;
+  height: 3.2rem;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #fff;
+  border: 0.3rem solid var(--warm);
+  box-shadow: 0 0.2rem 0.8rem rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.student-count-hint {
+  margin: 1.4rem 0 0;
+  color: var(--muted);
+  font-size: 1rem;
 }
 
 .form-error {
