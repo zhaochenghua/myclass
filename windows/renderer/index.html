@@ -33,6 +33,10 @@
           <input id="localAudioOutput" type="checkbox" checked>
           <span>投屏时在笔记本电脑上同时播放声音</span>
         </label>
+        <label class="check-row">
+          <input id="cursorHighlight" type="checkbox" checked>
+          <span>强调鼠标位置（大屏上显示红色光标圈）</span>
+        </label>
         <p class="hint">可选择整个显示器或单个应用窗口。窗口关闭后会自动停止投屏。取消勾选本机声音后，投屏时会暂时静音笔记本默认播放设备；停止投屏时自动恢复。</p>
         <button class="primary-button" id="startButton" type="button">开始投屏</button>
       </section>
@@ -53,6 +57,7 @@
         </dl>
         <div class="live-actions">
           <button class="secondary-button" id="localAudioButton" type="button">关闭电脑声音</button>
+          <button class="secondary-button" id="cursorHighlightButton" type="button">关闭鼠标强调</button>
           <button class="danger-button" id="stopButton" type="button">停止投屏</button>
         </div>
       </section>

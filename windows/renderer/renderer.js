@@ -7,6 +7,8 @@ const elements = {
   sourceSelect: document.getElementById('sourceSelect'),
   refreshSourcesButton: document.getElementById('refreshSourcesButton'),
   localAudioOutput: document.getElementById('localAudioOutput'),
+  cursorHighlight: document.getElementById('cursorHighlight'),
+  cursorHighlightButton: document.getElementById('cursorHighlightButton'),
   startButton: document.getElementById('startButton'),
   stopButton: document.getElementById('stopButton'),
   localAudioButton: document.getElementById('localAudioButton'),
@@ -42,6 +44,7 @@ const state = {
   joined: false,
   localAudioOutput: localStorage.getItem('myclass.localAudioOutput') !== 'false',
   localAudioMuted: false,
+  cursorHighlight: localStorage.getItem('myclass.cursorHighlight') !== 'false',
   captureSourceId: '',
   captureSourceType: 'screen',
   sourceMonitorTimer: null,
@@ -52,6 +55,7 @@ const state = {
 
 elements.settingsServerUrl.value = state.serverUrl;
 elements.localAudioOutput.checked = state.localAudioOutput;
+elements.cursorHighlight.checked = state.cursorHighlight;
 
 function setStatus(message, isError = false) {
   elements.statusMessage.textContent = message;
@@ -68,6 +72,22 @@ function setStatus(message, isError = false) {
 function setLiveStatus(message) {
   elements.liveBadge.textContent = message;
   elements.videoStatus.textContent = message;
+}
+
+function updateCursorHighlightUi() {
+  elements.cursorHighlight.checked = state.cursorHighlight;
+  elements.cursorHighlightButton.textContent = state.cursorHighlight ? '关闭鼠标强调' : '开启鼠标强调';
+}
+
+async function setCursorHighlight(enabled) {
+  state.cursorHighlight = Boolean(enabled);
+  localStorage.setItem('myclass.cursorHighlight', String(state.cursorHighlight));
+  updateCursorHighlightUi();
+  try {
+    await api.setCursorHighlight(state.cursorHighlight);
+  } catch (error) {
+    setStatus(`鼠标强调切换失败：${error.message}`, true);
+  }
 }
 
 function populateSourceOptions(select, sourceResult, selectedId) {
@@ -404,10 +424,16 @@ async function startProjection() {
   state.captureSourceId = elements.sourceSelect.value;
   state.captureSourceType = selectedOption?.dataset.sourceType === 'window' ? 'window' : 'screen';
   state.localAudioOutput = elements.localAudioOutput.checked;
+  state.cursorHighlight = elements.cursorHighlight.checked;
   localStorage.setItem('myclass.serverUrl', state.serverUrl);
   localStorage.setItem('myclass.localAudioOutput', String(state.localAudioOutput));
+  localStorage.setItem('myclass.cursorHighlight', String(state.cursorHighlight));
+  updateCursorHighlightUi();
   try {
     await api.selectSource({ id: state.captureSourceId, type: state.captureSourceType });
+    if (state.cursorHighlight) {
+      await api.setCursorHighlight(true);
+    }
     if (!state.localAudioOutput) {
       await api.setLocalAudioOutput(false);
       state.localAudioMuted = true;
@@ -524,6 +550,9 @@ async function stopProjection(disconnect = true, message = '') {
     state.mediaStream = null;
   }
   elements.localPreview.srcObject = null;
+  if (state.cursorHighlight) {
+    await api.setCursorHighlight(false).catch(() => {});
+  }
   if (state.localAudioMuted) {
     try {
       await api.setLocalAudioOutput(true);
@@ -558,6 +587,16 @@ elements.localAudioOutput.addEventListener('change', async () => {
   state.localAudioOutput = elements.localAudioOutput.checked;
   localStorage.setItem('myclass.localAudioOutput', String(state.localAudioOutput));
 });
+elements.cursorHighlight.addEventListener('change', () => {
+  if (state.mediaStream) {
+    setCursorHighlight(elements.cursorHighlight.checked);
+  } else {
+    state.cursorHighlight = elements.cursorHighlight.checked;
+    localStorage.setItem('myclass.cursorHighlight', String(state.cursorHighlight));
+    updateCursorHighlightUi();
+  }
+});
+elements.cursorHighlightButton.addEventListener('click', () => setCursorHighlight(!state.cursorHighlight));
 elements.localAudioButton.addEventListener('click', async () => {
   const enabled = !state.localAudioMuted;
   try {
@@ -604,6 +643,15 @@ api.onSignalingState(({ state: signalingState }) => {
 api.onSignalingError(({ message }) => setStatus(message, true));
 api.onTrayStop(() => stopProjection(true));
 api.onTraySwitchSource(() => openSourceSwitcher().catch((error) => setStatus(error.message, true)));
+api.onToggleCursorHighlight(() => {
+  if (state.mediaStream) {
+    setCursorHighlight(!state.cursorHighlight);
+  } else {
+    state.cursorHighlight = !state.cursorHighlight;
+    localStorage.setItem('myclass.cursorHighlight', String(state.cursorHighlight));
+    updateCursorHighlightUi();
+  }
+});
 
 api.getAppVersion()
   .then((version) => {

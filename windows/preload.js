@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('myclass', {
   sendSignaling: (payload) => ipcRenderer.send('signaling-send', payload),
   disconnectSignaling: () => ipcRenderer.send('signaling-disconnect'),
   getAppVersion: () => ipcRenderer.invoke('app-version'),
+  setCursorHighlight: (enabled) => ipcRenderer.invoke('cursor-highlight', enabled),
   hideWindow: () => ipcRenderer.send('window-hide'),
   quit: () => ipcRenderer.send('app-quit'),
   onSignalingMessage: (callback) => {
@@ -36,5 +37,10 @@ contextBridge.exposeInMainWorld('myclass', {
     const listener = () => callback();
     ipcRenderer.on('tray-switch-source', listener);
     return () => ipcRenderer.removeListener('tray-switch-source', listener);
+  },
+  onToggleCursorHighlight: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('toggle-cursor-highlight', listener);
+    return () => ipcRenderer.removeListener('toggle-cursor-highlight', listener);
   }
 });

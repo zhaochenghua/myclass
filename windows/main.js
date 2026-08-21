@@ -6,6 +6,7 @@ const {
   desktopCapturer,
   ipcMain,
   nativeImage,
+  screen,
   session
 } = require('electron');
 const { execFile } = require('node:child_process');
@@ -26,6 +27,8 @@ let localAudioMutedByApp = false;
 let localAudioPreviousMute = null;
 let audioStateFilePath = null;
 let restoringAudioForQuit = false;
+let cursorHighlightWindow = null;
+let cursorHighlightTimer = null;
 
 const AUDIO_ENDPOINT_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -462,6 +465,95 @@ function installDisplayMediaHandler() {
   });
 }
 
+// --- Cursor highlight: a transparent, always-on-top, click-through window that
+// draws a colored ring around the cursor. Because it lives on the shared screen,
+// getDisplayMedia captures it, so students see the cursor emphasized on the big display.
+const CURSOR_RING_SIZE = 128;
+
+function destroyCursorHighlightWindow() {
+  if (cursorHighlightTimer) {
+    clearInterval(cursorHighlightTimer);
+    cursorHighlightTimer = null;
+  }
+  if (cursorHighlightWindow && !cursorHighlightWindow.isDestroyed()) {
+    cursorHighlightWindow.destroy();
+  }
+  cursorHighlightWindow = null;
+}
+
+function moveCursorHighlightWindow() {
+  if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
+    return;
+  }
+  // getCursorScreenPoint() returns physical pixels; setPosition() expects DIP.
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const workArea = display.workArea;
+  const size = CURSOR_RING_SIZE;
+  const x = cursor.x / display.scaleFactor;
+  const y = cursor.y / display.scaleFactor;
+  const clampedX = Math.min(Math.max(x - size / 2, workArea.x), workArea.x + workArea.width - size);
+  const clampedY = Math.min(Math.max(y - size / 2, workArea.y), workArea.y + workArea.height - size);
+  cursorHighlightWindow.setPosition(Math.round(clampedX), Math.round(clampedY));
+}
+
+function setCursorHighlight(enabled) {
+  if (enabled) {
+    if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
+      cursorHighlightWindow = new BrowserWindow({
+        width: CURSOR_RING_SIZE,
+        height: CURSOR_RING_SIZE,
+        show: false,
+        frame: false,
+        transparent: true,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        hasShadow: false,
+        focusable: false,
+        fullscreenable: false,
+        webPreferences: {
+          offscreen: false,
+          backgroundThrottling: false
+        }
+      });
+      cursorHighlightWindow.setIgnoreMouseEvents(true, { forward: true });
+      cursorHighlightWindow.setVisibleOnAllWorkspaces(true);
+      cursorHighlightWindow.loadURL(
+        'data:text/html;charset=utf-8,' +
+          encodeURIComponent(
+            '<!doctype html><html><head><meta charset="utf-8"><style>' +
+            'html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}' +
+            '.ring{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}' +
+            '.dot{width:14px;height:14px;border-radius:50%;background:#ff3b30;box-shadow:0 0 6px rgba(255,59,48,.9)}' +
+            '.circle{width:86px;height:86px;border-radius:50%;border:6px solid #ff3b30;box-shadow:0 0 12px rgba(255,59,48,.85),inset 0 0 8px rgba(255,59,48,.4)}' +
+            '</style></head><body><div class="ring"><div class="circle"><div class="dot"></div></div></div></body></html>'
+          )
+      );
+      cursorHighlightWindow.once('ready-to-show', () => {
+        if (cursorHighlightWindow && !cursorHighlightWindow.isDestroyed()) {
+          moveCursorHighlightWindow();
+          cursorHighlightWindow.show();
+        }
+      });
+      cursorHighlightWindow.on('closed', () => {
+        cursorHighlightWindow = null;
+      });
+    } else {
+      moveCursorHighlightWindow();
+      cursorHighlightWindow.show();
+    }
+    if (!cursorHighlightTimer) {
+      cursorHighlightTimer = setInterval(moveCursorHighlightWindow, 33);
+    }
+  } else {
+    destroyCursorHighlightWindow();
+  }
+}
+
 function createTrayIcon() {
   return nativeImage.createFromPath(APP_ICON_PATH);
 }
@@ -484,6 +576,7 @@ function createTray() {
   tray.setToolTip('MyClass 投屏');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '切换投屏窗口', click: openSourceSwitcher },
+    { label: '强调鼠标位置', click: () => sendRenderer('toggle-cursor-highlight') },
     { type: 'separator' },
     {
       label: '断开投屏',
@@ -538,6 +631,10 @@ function registerIpc() {
   ipcMain.on('signaling-send', (_event, payload) => sendSignalingMessage(payload));
   ipcMain.on('signaling-disconnect', () => closeSignaling());
   ipcMain.handle('app-version', () => app.getVersion());
+  ipcMain.handle('cursor-highlight', (_event, enabled) => {
+    setCursorHighlight(Boolean(enabled));
+    return { enabled: Boolean(enabled) };
+  });
   ipcMain.on('window-hide', () => mainWindow?.hide());
   ipcMain.on('app-quit', () => {
     isQuitting = true;
@@ -570,6 +667,7 @@ app.on('before-quit', (event) => {
   }
   isQuitting = true;
   closeSignaling({ notify: false });
+  destroyCursorHighlightWindow();
 });
 
 app.on('window-all-closed', (event) => {
