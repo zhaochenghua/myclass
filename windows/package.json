@@ -1,13 +1,13 @@
 {
   "name": "myclass-windows",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "MyClass Windows screen sharing client",
   "main": "main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "check": "node --check main.js && node --check preload.js && node --check renderer/renderer.js",
+    "check": "node --check main.js && node --check preload.js && node --check overlay-preload.js && node --check renderer/renderer.js",
     "dist": "electron-builder --win nsis"
   },
   "dependencies": {
@@ -27,6 +27,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "overlay-preload.js",
       "renderer/**/*",
       "assets/**/*",
       "package.json"

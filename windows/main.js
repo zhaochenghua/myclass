@@ -465,40 +465,108 @@ function installDisplayMediaHandler() {
   });
 }
 
-// --- Cursor highlight: a transparent, always-on-top, click-through window that
-// draws a colored ring around the cursor. Because it lives on the shared screen,
-// getDisplayMedia captures it, so students see the cursor emphasized on the big display.
+// --- Cursor highlight: a transparent, always-on-top, click-through overlay that
+// draws a colored ring around the cursor. The overlay window is created ONCE and
+// covers the whole virtual screen; the ring is drawn INSIDE it (CSS transform)
+// at the cursor position reported over IPC. We deliberately never move the window:
+// on Windows with fractional DPI scaling (125%/150%) or mixed-DPI monitors,
+// repeatedly calling setPosition() makes Chromium round the DIP->physical pixel
+// conversion (electron#10862), and while getDisplayMedia is capturing, DWM can
+// present the moving transparent window at stale positions - the ring then slowly
+// drifts toward the bottom-right and away from the real cursor. A static overlay
+// cannot drift: the ring always sits exactly on the latest cursor coordinate.
+// Because the overlay lives on the shared screen, getDisplayMedia captures it,
+// so students still see the cursor emphasized on the big display.
 const CURSOR_RING_SIZE = 96;
+const CURSOR_POLL_INTERVAL_MS = 16;
+const CURSOR_OVERLAY_PRELOAD = path.join(__dirname, 'overlay-preload.js');
+
+function getVirtualScreenBounds() {
+  const displays = screen.getAllDisplays();
+  if (displays.length === 0) {
+    return { x: 0, y: 0, width: 1, height: 1 };
+  }
+  const left = Math.min(...displays.map((display) => display.bounds.x));
+  const top = Math.min(...displays.map((display) => display.bounds.y));
+  const right = Math.max(...displays.map((display) => display.bounds.x + display.bounds.width));
+  const bottom = Math.max(...displays.map((display) => display.bounds.y + display.bounds.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
 
 function destroyCursorHighlightWindow() {
   if (cursorHighlightTimer) {
     clearInterval(cursorHighlightTimer);
     cursorHighlightTimer = null;
   }
+  screen.removeListener('display-metrics-changed', onCursorDisplayChanged);
+  screen.removeListener('display-added', onCursorDisplayChanged);
+  screen.removeListener('display-removed', onCursorDisplayChanged);
   if (cursorHighlightWindow && !cursorHighlightWindow.isDestroyed()) {
     cursorHighlightWindow.destroy();
   }
   cursorHighlightWindow = null;
 }
 
-function moveCursorHighlightWindow() {
+function sendCursorPosition() {
   if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
     return;
   }
-  // getCursorScreenPoint() and setPosition() both use DIP coordinates.
-  // No work-area clamping: the ring may extend past the screen edge so the
-  // cursor can still reach the very edge of the display.
+  // getCursorScreenPoint() uses DIP coordinates, same space as the overlay bounds.
+  // The overlay origin (top-left of the virtual screen, possibly negative on
+  // multi-monitor setups) is sent with every update so the renderer can map the
+  // absolute cursor point onto its own page coordinates.
   const cursor = screen.getCursorScreenPoint();
-  const size = CURSOR_RING_SIZE;
-  cursorHighlightWindow.setPosition(Math.round(cursor.x - size / 2), Math.round(cursor.y - size / 2));
+  const bounds = getVirtualScreenBounds();
+  cursorHighlightWindow.webContents.send('cursor-update', {
+    x: cursor.x,
+    y: cursor.y,
+    ox: bounds.x,
+    oy: bounds.y
+  });
+}
+
+function onCursorDisplayChanged() {
+  if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
+    return;
+  }
+  // Re-cover the (possibly changed) virtual screen; the renderer keeps following
+  // the latest origin it receives with every cursor update.
+  cursorHighlightWindow.setBounds(getVirtualScreenBounds());
+  sendCursorPosition();
+}
+
+function createCursorOverlayHtml() {
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"><style>' +
+    'html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}' +
+    '#ring{position:absolute;left:0;top:0;width:' + CURSOR_RING_SIZE + 'px;height:' + CURSOR_RING_SIZE + 'px;' +
+    'transform:translate(-50%,-50%);will-change:transform;opacity:0;pointer-events:none;' +
+    'display:flex;align-items:center;justify-content:center}' +
+    /* The dot marks the cursor hotspot (pointer tip), which sits at the ring center. */
+    '.dot{width:10px;height:10px;border-radius:50%;background:rgba(255,59,48,.75);box-shadow:0 0 4px rgba(255,59,48,.45)}' +
+    '.circle{width:56px;height:56px;border-radius:50%;border:4px solid rgba(255,59,48,.55);box-shadow:0 0 10px rgba(255,59,48,.3);display:flex;align-items:center;justify-content:center}' +
+    '</style></head><body><div id="ring"><div class="circle"><div class="dot"></div></div></div>' +
+    '<script>' +
+    'var ring = document.getElementById("ring");' +
+    'var latest = null;' +
+    'window.cursorOverlay.onUpdate(function (point) { latest = point; });' +
+    'function tick() {' +
+    '  if (latest) {' +
+    '    ring.style.opacity = "1";' +
+    '    ring.style.transform = "translate(" + (latest.x - latest.ox) + "px," + (latest.y - latest.oy) + "px) translate(-50%,-50%)";' +
+    '  }' +
+    '  requestAnimationFrame(tick);' +
+    '}' +
+    'requestAnimationFrame(tick);' +
+    '</script></body></html>'
+  );
 }
 
 function setCursorHighlight(enabled) {
   if (enabled) {
     if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
       cursorHighlightWindow = new BrowserWindow({
-        width: CURSOR_RING_SIZE,
-        height: CURSOR_RING_SIZE,
+        ...getVirtualScreenBounds(),
         show: false,
         frame: false,
         transparent: true,
@@ -506,45 +574,46 @@ function setCursorHighlight(enabled) {
         movable: false,
         minimizable: false,
         maximizable: false,
+        fullscreenable: false,
         alwaysOnTop: true,
         skipTaskbar: true,
         hasShadow: false,
+        roundedCorners: false,
+        enableLargerThanScreen: true,
         focusable: false,
-        fullscreenable: false,
         webPreferences: {
+          preload: CURSOR_OVERLAY_PRELOAD,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
           offscreen: false,
           backgroundThrottling: false
         }
       });
       cursorHighlightWindow.setIgnoreMouseEvents(true, { forward: true });
+      cursorHighlightWindow.setAlwaysOnTop(true, 'screen-saver');
       cursorHighlightWindow.setVisibleOnAllWorkspaces(true);
       cursorHighlightWindow.loadURL(
-        'data:text/html;charset=utf-8,' +
-          encodeURIComponent(
-            '<!doctype html><html><head><meta charset="utf-8"><style>' +
-            'html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}' +
-            '.ring{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}' +
-            /* The dot marks the cursor hotspot (pointer tip), which sits at the window center. */
-            '.dot{width:10px;height:10px;border-radius:50%;background:rgba(255,59,48,.75);box-shadow:0 0 4px rgba(255,59,48,.45)}' +
-            '.circle{width:56px;height:56px;border-radius:50%;border:4px solid rgba(255,59,48,.55);box-shadow:0 0 10px rgba(255,59,48,.3);display:flex;align-items:center;justify-content:center}' +
-            '</style></head><body><div class="ring"><div class="circle"><div class="dot"></div></div></div></body></html>'
-          )
+        'data:text/html;charset=utf-8,' + encodeURIComponent(createCursorOverlayHtml())
       );
       cursorHighlightWindow.once('ready-to-show', () => {
         if (cursorHighlightWindow && !cursorHighlightWindow.isDestroyed()) {
-          moveCursorHighlightWindow();
+          sendCursorPosition();
           cursorHighlightWindow.show();
         }
       });
       cursorHighlightWindow.on('closed', () => {
         cursorHighlightWindow = null;
       });
+      screen.on('display-metrics-changed', onCursorDisplayChanged);
+      screen.on('display-added', onCursorDisplayChanged);
+      screen.on('display-removed', onCursorDisplayChanged);
     } else {
-      moveCursorHighlightWindow();
+      sendCursorPosition();
       cursorHighlightWindow.show();
     }
     if (!cursorHighlightTimer) {
-      cursorHighlightTimer = setInterval(moveCursorHighlightWindow, 33);
+      cursorHighlightTimer = setInterval(sendCursorPosition, CURSOR_POLL_INTERVAL_MS);
     }
   } else {
     destroyCursorHighlightWindow();

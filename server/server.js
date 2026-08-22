@@ -18,7 +18,7 @@ const PUBLIC_BASE_URL = removeTrailingSlash(
 );
 const APP_VERSION = process.env.APP_VERSION || '1.4.4-20260705';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
-const WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.18';
+const WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.19';
 const WINDOWS_URL = `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(WINDOWS_VERSION)}`;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
