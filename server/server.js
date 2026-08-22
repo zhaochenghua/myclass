@@ -16,7 +16,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.4.4-20260705';
+const APP_VERSION = process.env.APP_VERSION || '1.4.5-20260822';
 const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
 const WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.19';
 const WINDOWS_URL = `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(WINDOWS_VERSION)}`;
