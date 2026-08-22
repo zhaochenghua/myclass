@@ -77,6 +77,7 @@ class ControlledCamera2Capturer(
     private var imagePanY = 0f
     private var imageFrameGeneration = 0
     private var deviceRotationDegrees = 0
+    private var lastLandscapeOrientation: Boolean? = null
     private var torchEnabled = false
     private var focusRegion: MeteringRectangle? = null
     @Volatile
@@ -435,9 +436,16 @@ class ControlledCamera2Capturer(
     fun setDeviceRotation(rotationDegrees: Int) {
         var repeatLockedFrame = false
         var repeatImageFrame = false
+        var orientationChanged = false
         runOnCameraThreadBlocking {
             val changed = deviceRotationDegrees != rotationDegrees
             deviceRotationDegrees = rotationDegrees
+            val newIsLandscape = rotationDegrees.isLandscapeRotation()
+            val prevIsLandscape = lastLandscapeOrientation
+            if (prevIsLandscape != null && prevIsLandscape != newIsLandscape) {
+                orientationChanged = true
+            }
+            lastLandscapeOrientation = newIsLandscape
             if (changed && frameLocked) {
                 repeatLockedFrame = true
             }
@@ -455,6 +463,12 @@ class ControlledCamera2Capturer(
             runOnCameraThread {
                 repeatImageFrameIfNeeded()
             }
+        }
+        // 横竖屏切换时，帧的 rotation 会改变硬件编码器的输出方向/尺寸。
+        // 很多 Android 硬件 H.264 编码器不支持动态切换方向，会导致远端黑屏。
+        // 通过重建编码会话（changeCaptureFormat）强制编码器以新方向重新初始化，消除黑屏。
+        if (orientationChanged && !frameLocked && imageBitmap == null && isCapturing) {
+            changeCaptureFormat(captureWidth, captureHeight, captureFps)
         }
     }
 
