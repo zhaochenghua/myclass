@@ -302,7 +302,8 @@ class ControlledCamera2Capturer(
         if (!frameLocked && !frameLockRequested) {
             return FULL_FRAME_PRESENTATION
         }
-        val rotation = currentCameraOrNull()?.let { frameOrientation(it) } ?: lockedFrame?.rotation ?: 0
+        // 锁定帧已在 deliverCameraFrame 中烘焙旋转，方向正确，直接使用其自身 rotation(恒为0)
+        val rotation = lockedFrame?.rotation ?: 0
         val crop = rotateCropForDisplay(lockedFrameCropInBuffer(), rotation)
         return LockedFramePresentation(
             zoomRatio = lockedFrameZoomRatio,
@@ -390,7 +391,8 @@ class ControlledCamera2Capturer(
             return false
         }
 
-        val rotation = currentCameraOrNull()?.let { frameOrientation(it) } ?: lockedFrame?.rotation ?: 0
+        // 锁定帧旋转已烘焙进纹理，使用其自身 rotation(恒为0)
+        val rotation = lockedFrame?.rotation ?: 0
         val (sourceDx, sourceDy) = displayDeltaToBufferDelta(
             deltaXNormalized,
             deltaYNormalized,
@@ -700,12 +702,20 @@ class ControlledCamera2Capturer(
             return
         }
 
+        val deviceOrientation = if (camera.isFrontCamera) {
+            deviceRotationDegrees
+        } else {
+            (360 - deviceRotationDegrees) % 360
+        }
+        // 将传感器方向与设备旋转全部烘焙进纹理变换，输出的 VideoFrame.rotation 恒为 0。
+        // 这样硬件编码器始终编码标准方向帧，避免部分机型编码器首次处理带 rotation 帧时
+        // 初始化异常导致远端持续黑屏（本地预览不经过编码器，故本地正常、仅远端黑屏）。
         val transform = Matrix().apply {
             preTranslate(0.5f, 0.5f)
             if (camera.isFrontCamera) {
                 preScale(-1f, 1f)
             }
-            preRotate(-camera.sensorOrientation.toFloat())
+            preRotate(-(camera.sensorOrientation + deviceOrientation).toFloat())
             preTranslate(-0.5f, -0.5f)
         }
         val transformedBuffer = textureBuffer.applyTransformMatrix(
@@ -715,7 +725,7 @@ class ControlledCamera2Capturer(
         )
         val cameraFrame = VideoFrame(
             transformedBuffer,
-            frameOrientation(camera),
+            0,
             frame.timestampNs
         )
         lockFrameIfRequested(cameraFrame)
@@ -741,11 +751,11 @@ class ControlledCamera2Capturer(
             return
         }
         val frame = lockedFrame ?: return
-        val rotation = currentCameraOrNull()?.let { frameOrientation(it) } ?: frame.rotation
+        // 锁定帧旋转已烘焙进纹理，直接复用其自身 rotation(恒为0)
         val buffer = lockedFrameBuffer(frame)
         val repeatedFrame = VideoFrame(
             buffer,
-            rotation,
+            frame.rotation,
             System.nanoTime()
         )
         capturerObserver?.onFrameCaptured(repeatedFrame)
@@ -1055,15 +1065,6 @@ class ControlledCamera2Capturer(
     private fun clearLockedFrame() {
         lockedFrame?.release()
         lockedFrame = null
-    }
-
-    private fun frameOrientation(camera: CameraInfo): Int {
-        val deviceOrientation = if (camera.isFrontCamera) {
-            deviceRotationDegrees
-        } else {
-            (360 - deviceRotationDegrees) % 360
-        }
-        return (camera.sensorOrientation + deviceOrientation) % 360
     }
 
     private fun runOnCameraThread(block: () -> Unit) {
