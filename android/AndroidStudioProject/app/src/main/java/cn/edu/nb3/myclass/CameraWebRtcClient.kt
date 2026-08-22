@@ -202,10 +202,24 @@ class CameraWebRtcClient(
         }
 
         Log.i(TAG, "startLive: creating RTCConfiguration")
-        val config = PeerConnection.RTCConfiguration(emptyList())
+        // 与服务端 /api/config 的 rtc.iceServers 保持一致：
+        // - STUN：跨网段但 NAT 支持端口映射时，两端可经 srflx 候选直连（直连模式）
+        // - TURN：P2P 直连失败时经服务器中继兜底，保证任何网络都能投屏
+        // 同时保留 TCP 候选（与 Windows/浏览器端默认行为一致），UDP 被阻断时走 TCP/TURN。
+        val iceServers = listOf(
+            PeerConnection.IceServer.builder("stun:10.30.13.1:3478").createIceServer(),
+            PeerConnection.IceServer.builder("turn:10.30.13.1:3478?transport=udp")
+                .setUsername("myclass")
+                .setPassword("myclass2026turn")
+                .createIceServer(),
+            PeerConnection.IceServer.builder("turn:10.30.13.1:3478?transport=tcp")
+                .setUsername("myclass")
+                .setPassword("myclass2026turn")
+                .createIceServer()
+        )
+        val config = PeerConnection.RTCConfiguration(iceServers)
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         config.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-        config.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
 
         Log.i(TAG, "startLive: creating PeerConnection")
         val connection = factory.createPeerConnection(config, peerObserver())

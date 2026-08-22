@@ -125,6 +125,10 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
     rtc: {
       iceServers: [
         {
+          // coturn 同端口同时提供 STUN，让跨网段但 NAT 支持端口映射时能 srflx 直连，减少走中继
+          urls: ['stun:10.30.13.1:3478']
+        },
+        {
           urls: [
             'turn:10.30.13.1:3478?transport=udp',
             'turn:10.30.13.1:3478?transport=tcp'

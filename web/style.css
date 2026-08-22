@@ -547,6 +547,23 @@ video {
   text-shadow: 0 0 1rem #000;
 }
 
+/* 中继模式小字提示（右下角） */
+.relay-badge {
+  position: absolute;
+  z-index: 5;
+  right: 1.2rem;
+  bottom: 5.2rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 0.8rem;
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: clamp(0.55rem, 0.7vw, 0.75rem);
+  line-height: 1.4;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* ---- 左上角时钟 ---- */
 .clock-indicator {
   position: fixed;

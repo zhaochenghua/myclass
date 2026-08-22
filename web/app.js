@@ -3,6 +3,8 @@ const state = {
   peerConnection: null,
   config: null,
   reconnectTimer: null,
+  relayCheckTimer: null,
+  lastRelayMode: null,
   teacherConnected: false,
   roomCode: null,
 
@@ -107,6 +109,7 @@ const elements = {
   downloadHint: document.querySelector('.download-hint'),
   statusText: document.getElementById('statusText'),
   videoStatus: document.getElementById('videoStatus'),
+  relayBadge: document.getElementById('relayBadge'),
   remoteVideo: document.getElementById('remoteVideo'),
   coursewareCanvas: document.getElementById('coursewareCanvas'),
   annotationCanvas: document.getElementById('annotationCanvas'),
@@ -870,9 +873,13 @@ function createPeerConnection() {
       updateCoursewareConnectionIndicator();
       showVideoView();
       elements.videoStatus.textContent = '';
+      console.log('[WebRTC] 连接已建立，正在检测直连/中继模式...');
+      startRelayBadgeCheck();
     } else if (status === 'failed') {
+      stopRelayBadgeCheck();
       elements.videoStatus.textContent = '视频连接失败，请在手机上重新开启直播';
     } else if (status === 'disconnected') {
+      stopRelayBadgeCheck();
       elements.videoStatus.textContent = '视频连接已断开，等待教师重新开始...';
     }
   });
@@ -904,7 +911,72 @@ async function addRemoteCandidate(candidate) {
   }
 }
 
+// ---- 中继模式提示 ----
+// 通过 getStats 检测当前选中的 ICE 候选对是否经过 TURN 中继（relay）
+async function updateRelayBadge() {
+  const pc = state.peerConnection;
+  if (!pc) {
+    return;
+  }
+  if (pc.connectionState !== 'connected') {
+    if (elements.relayBadge) {
+      elements.relayBadge.hidden = true;
+    }
+    return;
+  }
+  try {
+    const stats = await pc.getStats();
+    let relay = false;
+    stats.forEach((report) => {
+      if (report.type !== 'candidate-pair') {
+        return;
+      }
+      // 只统计已成功的候选对（部分实现可能没有 state 字段，兜底处理）
+      if (report.state && report.state !== 'succeeded') {
+        return;
+      }
+      const local = report.localCandidateId ? stats.get(report.localCandidateId) : null;
+      const remote = report.remoteCandidateId ? stats.get(report.remoteCandidateId) : null;
+      if (
+        (local && local.candidateType === 'relay') ||
+        (remote && remote.candidateType === 'relay')
+      ) {
+        relay = true;
+      }
+    });
+    if (elements.relayBadge) {
+      elements.relayBadge.hidden = !relay;
+    }
+
+    // 控制台输出：直连 / 中继，仅在模式变化时打印一次，避免刷屏
+    const mode = relay ? '中继模式' : '直连模式';
+    if (state.lastRelayMode !== mode) {
+      state.lastRelayMode = mode;
+      console.log(`[WebRTC] 连接模式：${mode}`);
+    }
+  } catch (error) {
+    // 连接关闭瞬间 getStats 可能抛错，忽略即可
+  }
+}
+
+function startRelayBadgeCheck() {
+  stopRelayBadgeCheck();
+  updateRelayBadge();
+  state.relayCheckTimer = setInterval(updateRelayBadge, 3000);
+}
+
+function stopRelayBadgeCheck() {
+  if (state.relayCheckTimer) {
+    clearInterval(state.relayCheckTimer);
+    state.relayCheckTimer = null;
+  }
+  if (elements.relayBadge) {
+    elements.relayBadge.hidden = true;
+  }
+}
+
 function cleanupPeerConnection() {
+  stopRelayBadgeCheck();
   if (state.peerConnection) {
     state.peerConnection.close();
     state.peerConnection = null;
