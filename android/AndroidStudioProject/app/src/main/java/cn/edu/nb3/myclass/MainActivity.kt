@@ -1269,7 +1269,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 sendIceCandidate = { signalingClient?.sendIceCandidate(it) },
                 updateStatus = { updateStatus(it) },
                 captureMode = WebRtcCaptureMode.Screen,
-                screenCaptureData = permissionData
+                screenCaptureData = permissionData,
+                onIceConnectionFailed = { handleIceConnectionFailed() }
             )
             webRtcClient?.startPreview()
             sendCurrentDeviceOrientation(force = true)
@@ -2475,7 +2476,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     sendCurrentDeviceOrientation(force = true)
                     updateTorchButton(supportsTorch, torchEnabled)
                     updateStatus("已切换到$label")
-                }
+                },
+                onIceConnectionFailed = { handleIceConnectionFailed() }
             )
             webRtcClient?.startPreview()
             webRtcClient?.setDeviceRotation(rawDeviceRotationDegrees)
@@ -2761,6 +2763,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
 
+        iceRetryCount = 0
         updateLiveControlButtons(isLive = true)
         runCatching {
             sendCurrentDeviceOrientation(force = true)
@@ -2778,6 +2781,38 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         startLiveButton?.isEnabled = roomJoined && !isLive
         stopLiveButton?.isEnabled = true
         setCameraButtonText(stopLiveButton, if (isLive) "停止直播" else "返回菜单")
+    }
+
+    /**
+     * WebRTC ICE 连接失败（常见于跨网段/路由器下直连与中继均未建立）时自动重连。
+     * 由 CameraWebRtcClient 回调触发，先确保信令仍在线，再重建 WebRTC 通道。
+     * 为防止网络长期不可达时无限重试，最多重连 ICE_RETRY_LIMIT 次。
+     */
+    private var iceRetryCount = 0
+    private val iceRetryLimit = 3
+
+    private fun handleIceConnectionFailed() {
+        runOnUiThread {
+            if (webRtcClient?.isLive() != true) {
+                return@runOnUiThread
+            }
+            if (!roomJoined || activeRoomCode == null) {
+                // 信令已断开，先重建信令再恢复直播
+                resumeLiveAfterJoin = true
+                if (!signalReconnectInProgress) {
+                    reconnectSignalingForCurrentRoom()
+                }
+                return@runOnUiThread
+            }
+            if (iceRetryCount >= iceRetryLimit) {
+                toast("视频连接失败，请检查网络后重新开始直播")
+                updateStatus("视频连接失败，请检查网络后重新开始直播")
+                return@runOnUiThread
+            }
+            iceRetryCount += 1
+            updateStatus("视频连接失败，正在自动重连...")
+            webRtcClient?.restartLiveAfterIceFailure()
+        }
     }
 
     private fun updateTorchButton(supportsTorch: Boolean, torchEnabled: Boolean) {

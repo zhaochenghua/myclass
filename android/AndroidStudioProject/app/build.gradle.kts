@@ -21,7 +21,7 @@ val myClassServerUrl = providers
 
 val disableWebRtcNetworkMonitor = providers
     .gradleProperty("MYCLASS_WEBRTC_DISABLE_NETWORK_MONITOR")
-    .orElse("true")
+    .orElse("false")
     .get()
     .asBuildConfigBoolean("MYCLASS_WEBRTC_DISABLE_NETWORK_MONITOR")
 
@@ -37,7 +37,7 @@ android {
         applicationId = "cn.edu.nb3.myclass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2026082201
+        versionCode = 2026082203
         versionName = "1.4.5-20260822"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())

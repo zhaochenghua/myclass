@@ -54,7 +54,8 @@ class CameraWebRtcClient(
     private val initialUseFrontCamera: Boolean = false,
     private val captureMode: WebRtcCaptureMode = WebRtcCaptureMode.Camera,
     private val screenCaptureData: Intent? = null,
-    private val onCameraFacingChanged: (Boolean, String, Boolean, Boolean) -> Unit = { _, _, _, _ -> }
+    private val onCameraFacingChanged: (Boolean, String, Boolean, Boolean) -> Unit = { _, _, _, _ -> },
+    private val onIceConnectionFailed: () -> Unit = {}
 ) {
     private val appContext = context.applicationContext
     private val eglBase = EglBase.create()
@@ -69,6 +70,9 @@ class CameraWebRtcClient(
     private var localVideoSender: RtpSender? = null
     private var localAudioSender: RtpSender? = null
     private var peerConnection: PeerConnection? = null
+    private var remoteDescriptionSet = false
+    private val pendingRemoteCandidates = mutableListOf<IceCandidatePayload>()
+    private var iceReconnectInProgress = false
     private var useFrontCamera = initialUseFrontCamera
     private var previewStarted = false
     private var audioEnabled = false
@@ -220,6 +224,13 @@ class CameraWebRtcClient(
         val config = PeerConnection.RTCConfiguration(iceServers)
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         config.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+        // 同时发起 STUN srflx 与 TURN relay 候选，跨网段时优先尝试直连，
+        // 直连失败则回落到中继，保证不同路由器下也能建立媒体连接。
+        config.iceCandidatePoolSize = 0
+
+        // 新建连接前重置候选状态，避免上一次连接残留污染新连接。
+        remoteDescriptionSet = false
+        pendingRemoteCandidates.clear()
 
         Log.i(TAG, "startLive: creating PeerConnection")
         val connection = factory.createPeerConnection(config, peerObserver())
@@ -427,6 +438,10 @@ class CameraWebRtcClient(
         val answer = SessionDescription(SessionDescription.Type.ANSWER, sdp)
         connection.setRemoteDescription(object : SimpleSdpObserver() {
             override fun onSetSuccess() {
+                remoteDescriptionSet = true
+                // answer 就绪后，补发此前因远端描述未就绪而缓存下来的 ICE 候选，
+                // 避免大屏返回 answer 前到达的候选被丢弃导致连接建立失败。
+                flushPendingRemoteCandidates()
                 updateStatus("教室端已接收视频")
                 resendStaticPresentationBurst()
             }
@@ -438,18 +453,59 @@ class CameraWebRtcClient(
     }
 
     fun addRemoteIceCandidate(candidate: IceCandidatePayload) {
-        peerConnection?.addIceCandidate(
+        val connection = peerConnection ?: return
+        // 远端描述（answer）尚未就绪时先缓存，等 setRemoteDescription 成功后统一补发，
+        // 解决跨网络场景下候选与 answer 乱序到达导致丢候选、连接失败的问题。
+        if (!remoteDescriptionSet) {
+            pendingRemoteCandidates.add(candidate)
+            return
+        }
+        connection.addIceCandidate(
             IceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate)
         )
+    }
+
+    private fun flushPendingRemoteCandidates() {
+        val connection = peerConnection ?: return
+        if (pendingRemoteCandidates.isEmpty()) {
+            return
+        }
+        val buffered = pendingRemoteCandidates.toList()
+        pendingRemoteCandidates.clear()
+        buffered.forEach { candidate ->
+            connection.addIceCandidate(
+                IceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate)
+            )
+        }
     }
 
     fun stopLive() {
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
+        remoteDescriptionSet = false
+        pendingRemoteCandidates.clear()
+        iceReconnectInProgress = false
         localVideoSender = null
         localAudioSender = null
         updateStatus("直播已停止，摄像头预览保留")
+    }
+
+    /**
+     * ICE 连接失败（如跨网段中继未建立）时，由 MainActivity 调用以自动重建连接。
+     * 仅重建 WebRTC 通道，复用已有的预览/采集，不影响摄像头画面。
+     */
+    fun restartLiveAfterIceFailure() {
+        if (peerConnection == null || iceReconnectInProgress) {
+            return
+        }
+        iceReconnectInProgress = true
+        peerConnection?.close()
+        peerConnection?.dispose()
+        peerConnection = null
+        remoteDescriptionSet = false
+        pendingRemoteCandidates.clear()
+        startLive()
     }
 
     fun switchCamera() {
@@ -520,7 +576,26 @@ class CameraWebRtcClient(
         override fun onRenegotiationNeeded() = Unit
 
         override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
-            updateStatus("WebRTC 状态：${newState.name}")
+            when (newState) {
+                PeerConnection.IceConnectionState.CONNECTED,
+                PeerConnection.IceConnectionState.COMPLETED -> {
+                    iceReconnectInProgress = false
+                    updateStatus("直播已连接")
+                }
+                PeerConnection.IceConnectionState.FAILED -> {
+                    // 跨网段/路由器下候选建立失败，交给 MainActivity 自动重建连接。
+                    // 每次 FAILED 都重置重连锁，允许在重试上限内反复尝试。
+                    iceReconnectInProgress = false
+                    updateStatus("视频连接失败，正在自动重连...")
+                    onIceConnectionFailed()
+                }
+                PeerConnection.IceConnectionState.DISCONNECTED -> {
+                    updateStatus("视频连接中断，等待恢复...")
+                }
+                else -> {
+                    updateStatus("WebRTC 状态：${newState.name}")
+                }
+            }
         }
 
         override fun onIceCandidate(candidate: IceCandidate) {
@@ -542,6 +617,7 @@ class CameraWebRtcClient(
         override fun onTrack(transceiver: RtpTransceiver) = Unit
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
             if (newState == PeerConnection.PeerConnectionState.CONNECTED) {
+                iceReconnectInProgress = false
                 resendStaticPresentationBurst()
             }
         }
