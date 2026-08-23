@@ -31,6 +31,12 @@ let cursorHighlightWindow = null;
 let cursorHighlightTimer = null;
 let knownNonPresentationSourceId = null;
 let lastAutoSwitchFromId = null;
+// DIP bounds of the currently captured window, refreshed at most once per
+// second (the PowerShell query is the only way to get an arbitrary HWND's
+// on-screen rect; windows move rarely, so a stale rect for <1s is fine).
+let selectedWindowRectCache = null;
+let lastWindowRectQueryAt = 0;
+let windowRectQueryInFlight = false;
 
 const AUDIO_ENDPOINT_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -227,6 +233,57 @@ public static class MyClassWindowEnumerator {
 '@
 `;
 
+
+// Returns the on-screen bounds of one window in PHYSICAL pixels together with
+// the window's DPI. The query process explicitly opts into per-monitor v2 DPI
+// awareness so GetWindowRect/DwmGetWindowAttribute return true physical pixels
+// (no DPI virtualization); the main process divides by dpi/96 to get DIP,
+// matching screen.getCursorScreenPoint()/display.bounds which are DIP.
+const WINDOW_RECT_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class MyClassWindowRect {
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hWnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+    private const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+    private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
+
+    public static string GetRectJson(IntPtr hWnd) {
+        if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) {
+            return "{\"ok\":false}";
+        }
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        RECT rect;
+        if (DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, out rect, Marshal.SizeOf(typeof(RECT))) != 0) {
+            if (!GetWindowRect(hWnd, out rect)) {
+                return "{\"ok\":false}";
+            }
+        }
+        uint dpi = GetDpiForWindow(hWnd);
+        if (dpi == 0) { dpi = 96; }
+        return "{\"ok\":true,\"x\":" + rect.Left + ",\"y\":" + rect.Top +
+               ",\"width\":" + Math.Max(0, rect.Right - rect.Left) +
+               ",\"height\":" + Math.Max(0, rect.Bottom - rect.Top) +
+               ",\"dpi\":" + dpi + "}";
+    }
+}
+'@
+`;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -649,6 +706,79 @@ function runWindowEnumerator() {
   });
 }
 
+function getWindowRectAssemblyPath() {
+  const assemblyPath = path.join(app.getPath('userData'), 'myclass-window-rect-v1.dll');
+  fs.mkdirSync(path.dirname(assemblyPath), { recursive: true });
+  return assemblyPath;
+}
+
+function extractWindowRectCSharp() {
+  // Same PowerShell-wrapper stripping as the window enumerator above.
+  return WINDOW_RECT_SCRIPT
+    .replace(/^\s*\$ErrorActionPreference\s*=\s*'Stop'\s*\r?\n/, '')
+    .replace(/^\s*Add-Type -TypeDefinition @'\s*\r?\n/, '')
+    .replace(/\r?\n'@\s*$/, '');
+}
+
+function buildWindowRectCommand(hwnd) {
+  const assemblyPath = getWindowRectAssemblyPath();
+  const escapedAssemblyPath = assemblyPath.replace(/'/g, "''");
+  const csharpSource = extractWindowRectCSharp();
+  return `$ErrorActionPreference = 'Stop'
+$assemblyPath = '${escapedAssemblyPath}'
+
+$compiled = $false
+if (-not (Test-Path $assemblyPath)) {
+
+$source = @'
+${csharpSource}
+'@
+  Add-Type -TypeDefinition $source -OutputAssembly $assemblyPath
+
+  $compiled = $true
+}
+if (-not $compiled) {
+  Add-Type -Path $assemblyPath
+}
+[Console]::Out.Write([MyClassWindowRect]::GetRectJson([IntPtr]${hwnd}))`;
+}
+
+function runWindowRectQuery(hwnd) {
+  if (process.platform !== 'win32' || !hwnd) {
+    return Promise.resolve(null);
+  }
+  const encodedCommand = Buffer.from(
+    buildWindowRectCommand(hwnd),
+    'utf16le'
+  ).toString('base64');
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-EncodedCommand',
+        encodedCommand
+      ],
+      { windowsHide: true, timeout: 5000, maxBuffer: 1024 * 1024 },
+      (error, stdout) => {
+        if (error) {
+          resolve(null);
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout.trim()));
+        } catch {
+          resolve(null);
+        }
+      }
+    );
+  });
+}
+
 async function findFollowWindowSource() {
   if (process.platform !== 'win32' || selectedSourceType !== 'window' || !selectedSourceId) {
     return null;
@@ -854,6 +984,90 @@ function onCursorDisplayChanged() {
   sendCursorPosition();
 }
 
+function parseDisplayIdFromSourceId(sourceId) {
+  const match = /^screen:(\d+):/.exec(String(sourceId || ''));
+  return match ? match[1] : null;
+}
+
+// Returns the capture source's on-screen region in DIP, the same coordinate
+// space as screen.getCursorScreenPoint(). Screen sources map to the selected
+// display's bounds; window sources map to the window's DIP bounds (physical
+// rect from a DPI-aware Win32 query divided by dpi/96, exact on single-monitor
+// and uniform-DPI setups, best-effort on mixed-DPI multi-monitor).
+async function getCaptureRegionDIP() {
+  if (selectedSourceType === 'window') {
+    const hwnd = parseWindowHandle(selectedSourceId);
+    if (!hwnd) {
+      selectedWindowRectCache = null;
+      return null;
+    }
+    const now = Date.now();
+    if (!selectedWindowRectCache || (now - lastWindowRectQueryAt > 1000 && !windowRectQueryInFlight)) {
+      windowRectQueryInFlight = true;
+      lastWindowRectQueryAt = now;
+      try {
+        const rect = await runWindowRectQuery(hwnd);
+        if (rect && rect.ok && rect.width > 0 && rect.height > 0) {
+          const scale = (rect.dpi && rect.dpi > 0 ? rect.dpi : 96) / 96;
+          selectedWindowRectCache = {
+            x: rect.x / scale,
+            y: rect.y / scale,
+            width: rect.width / scale,
+            height: rect.height / scale
+          };
+        }
+      } catch {
+        // Keep the previous cache; the next tick retries after the throttle.
+      } finally {
+        windowRectQueryInFlight = false;
+      }
+    }
+    return selectedWindowRectCache;
+  }
+  const displays = screen.getAllDisplays();
+  if (displays.length === 0) {
+    return null;
+  }
+  const displayId = parseDisplayIdFromSourceId(selectedSourceId);
+  const cursor = screen.getCursorScreenPoint();
+  const display = displays.find((item) => String(item.id) === displayId)
+    // Fallback: the display the cursor is on (the screen source is usually the
+    // one being used), then the primary display.
+    || displays.find((item) => cursor.x >= item.bounds.x && cursor.x < item.bounds.x + item.bounds.width
+      && cursor.y >= item.bounds.y && cursor.y < item.bounds.y + item.bounds.height)
+    || displays[0];
+  return {
+    x: display.bounds.x,
+    y: display.bounds.y,
+    width: display.bounds.width,
+    height: display.bounds.height
+  };
+}
+
+// Pushes the cursor point plus the capture region to the main window so the
+// renderer can composite the emphasis ring into the video frames (window
+// capture does not include the desktop overlay the ring is drawn in).
+function sendCursorScene() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  getCaptureRegionDIP()
+    .then((region) => {
+      if (!region || !mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      const cursor = screen.getCursorScreenPoint();
+      const inside = cursor.x >= region.x && cursor.x <= region.x + region.width
+        && cursor.y >= region.y && cursor.y <= region.y + region.height;
+      mainWindow.webContents.send('cursor-scene', {
+        cursor: { x: cursor.x, y: cursor.y },
+        region: { x: region.x, y: region.y, width: region.width, height: region.height },
+        inside
+      });
+    })
+    .catch(() => {});
+}
+
 function createCursorOverlayHtml() {
   return (
     '<!doctype html><html><head><meta charset="utf-8"><style>' +
@@ -932,7 +1146,10 @@ function setCursorHighlight(enabled) {
       cursorHighlightWindow.show();
     }
     if (!cursorHighlightTimer) {
-      cursorHighlightTimer = setInterval(sendCursorPosition, CURSOR_POLL_INTERVAL_MS);
+      cursorHighlightTimer = setInterval(() => {
+        sendCursorPosition();
+        sendCursorScene();
+      }, CURSOR_POLL_INTERVAL_MS);
     }
   } else {
     destroyCursorHighlightWindow();
@@ -987,7 +1204,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      // The window hides to the tray while projecting; keep requestAnimationFrame
+      // (cursor-ring compositor) and the signaling timers running in background.
+      backgroundThrottling: false
     }
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));

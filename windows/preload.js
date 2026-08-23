@@ -43,5 +43,10 @@ contextBridge.exposeInMainWorld('myclass', {
     const listener = () => callback();
     ipcRenderer.on('toggle-cursor-highlight', listener);
     return () => ipcRenderer.removeListener('toggle-cursor-highlight', listener);
+  },
+  onCursorScene: (callback) => {
+    const listener = (_event, scene) => callback(scene);
+    ipcRenderer.on('cursor-scene', listener);
+    return () => ipcRenderer.removeListener('cursor-scene', listener);
   }
 });

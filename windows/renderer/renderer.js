@@ -46,6 +46,7 @@ const state = {
   roomCode: '',
   config: null,
   mediaStream: null,
+  rawStream: null,
   peerConnection: null,
   pendingCandidates: [],
   joined: false,
@@ -96,6 +97,12 @@ async function setCursorHighlight(enabled) {
   updateCursorHighlightUi();
   try {
     await api.setCursorHighlight(state.cursorHighlight);
+    // 窗口模式：强调圈需合成进采集帧，切换开关后重建发送流并重新协商；
+    // 屏幕模式由 overlay 承担（overlay 本身在采集画面内），无需重建。
+    if (state.mediaStream && state.captureSourceType === 'window') {
+      await applyCompositor();
+      await negotiate();
+    }
   } catch (error) {
     setStatus(`鼠标强调切换失败：${error.message}`, true);
   }
@@ -311,6 +318,162 @@ async function requestScreenStream() {
     }
   });
   return stream;
+}
+
+// --- 发送端鼠标强调圈合成 ---
+// 单应用窗口投屏时，Chromium 只采集目标窗口的内容，桌面上的 overlay 强调圈
+// 属于独立窗口、不会进入采集帧，因此大屏上看不到强调圈。这里把采集到的视频
+// 逐帧画到 canvas，按主进程推送的光标场景（屏幕 DIP 坐标 + 采集区域）把强调
+// 圈合成进画面：归一化坐标 = (光标 - 区域原点) / 区域尺寸，再乘以帧分辨率
+// （采集帧被压到 ≤1920×1080，这就是帧缩放系数）。合成流替换发送给 WebRTC 的
+// 视频轨，本地预览也显示合成流，与屏幕模式的 overlay 圈效果一致。
+let cursorScene = null;
+let compositor = null;
+
+function drawCursorRing(ctx, cx, cy) {
+  // 与 overlay 强调圈视觉一致：56px 红圈 + 4px 半透明边框 + 光晕 + 中心红点。
+  ctx.save();
+  ctx.shadowColor = 'rgba(255,59,48,.3)';
+  ctx.shadowBlur = 10;
+  ctx.strokeStyle = 'rgba(255,59,48,.55)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 28, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.shadowColor = 'rgba(255,59,48,.45)';
+  ctx.shadowBlur = 4;
+  ctx.fillStyle = 'rgba(255,59,48,.75)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function createCompositor(rawStream) {
+  const videoTrack = rawStream.getVideoTracks()[0];
+  const video = document.createElement('video');
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const handle = {
+    outputTrack: null,
+    rafId: 0,
+    stopped: false,
+    ready: null,
+    stop: null
+  };
+  let resolveReady = null;
+  let rejectReady = null;
+  handle.ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const failTimer = setTimeout(() => {
+    if (!handle.outputTrack) {
+      rejectReady(new Error('强调圈合成初始化超时'));
+    }
+  }, 3000);
+
+  function draw() {
+    if (handle.stopped) {
+      return;
+    }
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && canvas.width > 0) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      if (cursorScene && cursorScene.inside) {
+        const region = cursorScene.region;
+        if (region && region.width > 0 && region.height > 0) {
+          const nx = (cursorScene.cursor.x - region.x) / region.width;
+          const ny = (cursorScene.cursor.y - region.y) / region.height;
+          if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
+            drawCursorRing(ctx, nx * canvas.width, ny * canvas.height);
+          }
+        }
+      }
+    }
+    handle.rafId = requestAnimationFrame(draw);
+  }
+
+  video.muted = true;
+  video.playsInline = true;
+  video.srcObject = new MediaStream([videoTrack]);
+  video.addEventListener('loadedmetadata', () => {
+    if (handle.stopped) {
+      return;
+    }
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    if (canvas.width === 0 || canvas.height === 0) {
+      clearTimeout(failTimer);
+      rejectReady(new Error('强调圈合成：采集画面尺寸无效'));
+      return;
+    }
+    const outputStream = canvas.captureStream(30);
+    handle.outputTrack = outputStream.getVideoTracks()[0];
+    handle.outputTrack.contentHint = 'detail';
+    handle.rafId = requestAnimationFrame(draw);
+    clearTimeout(failTimer);
+    resolveReady();
+  });
+  video.addEventListener('error', () => {
+    clearTimeout(failTimer);
+    rejectReady(new Error('强调圈合成：采集画面播放失败'));
+  });
+  video.play().catch((error) => {
+    clearTimeout(failTimer);
+    rejectReady(error);
+  });
+
+  handle.stop = () => {
+    handle.stopped = true;
+    clearTimeout(failTimer);
+    if (handle.rafId) {
+      cancelAnimationFrame(handle.rafId);
+    }
+    video.pause();
+    video.srcObject = null;
+    if (handle.outputTrack) {
+      handle.outputTrack.stop();
+      handle.outputTrack = null;
+    }
+  };
+  return handle;
+}
+
+function stopCompositor() {
+  if (compositor) {
+    compositor.stop();
+    compositor = null;
+  }
+}
+
+// 按当前来源类型与强调开关，把 state.rawStream 包装为实际发送的 mediaStream：
+// 窗口模式 + 强调开启 → canvas 合成流（圈画进画面）；其余情况直接使用原始流
+// （屏幕模式由 overlay 承担，无需合成，零额外开销）。
+async function applyCompositor() {
+  stopCompositor();
+  const raw = state.rawStream;
+  if (!raw) {
+    return;
+  }
+  let nextStream = raw;
+  if (state.captureSourceType === 'window' && state.cursorHighlight && raw.getVideoTracks()[0]) {
+    const handle = createCompositor(raw);
+    compositor = handle;
+    try {
+      await handle.ready;
+    } catch (error) {
+      stopCompositor();
+      setStatus(`开启鼠标强调合成失败：${error.message}`, true);
+    }
+    if (handle.outputTrack) {
+      nextStream = new MediaStream([handle.outputTrack, ...raw.getAudioTracks()]);
+    }
+  }
+  state.mediaStream = nextStream;
+  elements.localPreview.srcObject = nextStream;
+  await elements.localPreview.play().catch(() => {});
 }
 
 async function startMicCapture() {
@@ -608,10 +771,10 @@ async function startProjection() {
       state.localAudioMuted = true;
     }
     elements.localAudioButton.textContent = state.localAudioOutput ? '关闭电脑声音' : '开启电脑声音';
-    state.mediaStream = await requestScreenStream();
+    state.rawStream = await requestScreenStream();
+    state.mediaStream = state.rawStream;
     startSourceMonitor();
-    elements.localPreview.srcObject = state.mediaStream;
-    await elements.localPreview.play().catch(() => {});
+    await applyCompositor();
     const audioTrack = state.mediaStream.getAudioTracks()[0];
     elements.audioStatus.textContent = audioTrack
       ? (state.micAmplify ? '系统声音 + 麦克风已启用' : '系统声音已启用')
@@ -643,6 +806,7 @@ async function switchProjectionSource() {
   }
 
   const previousStream = state.mediaStream;
+  const previousRawStream = state.rawStream;
   const previousSource = {
     id: state.captureSourceId,
     type: state.captureSourceType
@@ -666,10 +830,10 @@ async function switchProjectionSource() {
     }
 
     stopSourceMonitor();
-    state.mediaStream = nextStream;
-    elements.localPreview.srcObject = nextStream;
-    await elements.localPreview.play().catch(() => {});
-    const audioTrack = nextStream.getAudioTracks()[0];
+    stopCompositor();
+    state.rawStream = nextStream;
+    await applyCompositor();
+    const audioTrack = state.mediaStream.getAudioTracks()[0];
     elements.audioStatus.textContent = audioTrack
       ? (state.micAmplify ? '系统声音 + 麦克风已启用' : '系统声音已启用')
       : '未获取到系统声音';
@@ -680,6 +844,9 @@ async function switchProjectionSource() {
     }
 
     previousStream.getTracks().forEach((track) => track.stop());
+    if (previousRawStream && previousRawStream !== previousStream) {
+      previousRawStream.getTracks().forEach((track) => track.stop());
+    }
     closeSourceSwitcher();
     setStatus(nextSourceType === 'window' ? '已切换到应用窗口' : '已切换到显示器');
   } catch (error) {
@@ -690,12 +857,11 @@ async function switchProjectionSource() {
       return;
     }
     stopSourceMonitor();
-    state.mediaStream = previousStream;
-    elements.localPreview.srcObject = previousStream;
-    await elements.localPreview.play().catch(() => {});
     state.captureSourceId = previousSource.id;
     state.captureSourceType = previousSource.type;
     await api.selectSource(previousSource).catch(() => {});
+    state.rawStream = previousRawStream;
+    await applyCompositor();
     startSourceMonitor();
     elements.sourceSwitchMessage.textContent = error.message || '切换投屏窗口失败';
     setStatus(error.message || '切换投屏窗口失败', true);
@@ -718,6 +884,7 @@ async function switchProjectionSourceTo(nextSource) {
   }
 
   const previousStream = state.mediaStream;
+  const previousRawStream = state.rawStream;
   const previousSource = {
     id: state.captureSourceId,
     type: state.captureSourceType
@@ -742,10 +909,10 @@ async function switchProjectionSourceTo(nextSource) {
     }
 
     stopSourceMonitor();
-    state.mediaStream = nextStream;
-    elements.localPreview.srcObject = nextStream;
-    await elements.localPreview.play().catch(() => {});
-    const audioTrack = nextStream.getAudioTracks()[0];
+    stopCompositor();
+    state.rawStream = nextStream;
+    await applyCompositor();
+    const audioTrack = state.mediaStream.getAudioTracks()[0];
     elements.audioStatus.textContent = audioTrack
       ? (state.micAmplify ? '系统声音 + 麦克风已启用' : '系统声音已启用')
       : '未获取到系统声音';
@@ -756,6 +923,9 @@ async function switchProjectionSourceTo(nextSource) {
     }
 
     previousStream.getTracks().forEach((track) => track.stop());
+    if (previousRawStream && previousRawStream !== previousStream) {
+      previousRawStream.getTracks().forEach((track) => track.stop());
+    }
     setStatus(nextSourceType === 'window' ? '已自动切换到演示文稿放映窗口' : '已切换到显示器');
       refreshSources().catch(() => {});
   } catch (error) {
@@ -766,12 +936,11 @@ async function switchProjectionSourceTo(nextSource) {
       return;
     }
     stopSourceMonitor();
-    state.mediaStream = previousStream;
-    elements.localPreview.srcObject = previousStream;
-    await elements.localPreview.play().catch(() => {});
     state.captureSourceId = previousSource.id;
     state.captureSourceType = previousSource.type;
     await api.selectSource(previousSource).catch(() => {});
+    state.rawStream = previousRawStream;
+    await applyCompositor();
     startSourceMonitor();
     setStatus(`自动切换演示文稿放映窗口失败：${error.message || '未知错误'}`, true);
     setLiveStatus('已连接');
@@ -792,6 +961,11 @@ async function stopProjection(disconnect = true, message = '') {
   if (state.peerConnection) {
     state.peerConnection.close();
     state.peerConnection = null;
+  }
+  stopCompositor();
+  if (state.rawStream) {
+    state.rawStream.getTracks().forEach((track) => track.stop());
+    state.rawStream = null;
   }
   if (state.mediaStream) {
     state.mediaStream.getTracks().forEach((track) => track.stop());
@@ -911,6 +1085,9 @@ api.onToggleCursorHighlight(() => {
     localStorage.setItem('myclass.cursorHighlight', String(state.cursorHighlight));
     updateCursorHighlightUi();
   }
+});
+api.onCursorScene((scene) => {
+  cursorScene = scene;
 });
 
 api.getAppVersion()
