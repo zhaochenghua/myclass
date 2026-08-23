@@ -12,6 +12,7 @@
         <div class="section-heading">
           <h2>连接教室</h2>
           <div class="heading-actions">
+            <button class="icon-button" id="helpButton" type="button" title="使用帮助">?</button>
             <button class="icon-button" id="settingsButton" type="button" title="设置服务器地址">⚙</button>
             <span class="status-dot" id="statusDot"></span>
           </div>
@@ -23,21 +24,30 @@
         <label class="field">
           <span>投屏来源</span>
           <div class="source-row">
-            <select id="sourceSelect">
-              <option value="">正在读取显示器和应用...</option>
-            </select>
-            <button class="refresh-button" id="refreshSourcesButton" type="button" title="刷新显示器和应用窗口">刷新</button>
+            <button class="source-select" id="sourceSelectButton" type="button" title="点击刷新并展开投屏来源列表">
+              <span class="source-select-label" id="sourceSelectLabel">正在读取显示器和应用...</span>
+              <span class="source-select-caret">▾</span>
+            </button>
+            <div class="source-menu" id="sourceMenu" hidden></div>
           </div>
         </label>
-        <label class="check-row">
-          <input id="localAudioOutput" type="checkbox" checked>
-          <span>投屏时在笔记本电脑上同时播放声音</span>
-        </label>
-        <label class="check-row">
-          <input id="cursorHighlight" type="checkbox" checked>
-          <span>强调鼠标位置（大屏上显示红色光标圈）</span>
-        </label>
-        <p class="hint">可选择整个显示器或单个应用窗口。窗口关闭后会自动停止投屏。取消勾选本机声音后，投屏时会暂时静音笔记本默认播放设备；停止投屏时自动恢复。</p>
+        <div class="check-list">
+          <label class="check-row">
+            <input id="localAudioOutput" type="checkbox" checked>
+            <span class="check-text">本机播放声音</span>
+            <span class="switch" aria-hidden="true"></span>
+          </label>
+          <label class="check-row">
+            <input id="micAmplify" type="checkbox">
+            <span class="check-text">启用扩音（麦克风）</span>
+            <span class="switch" aria-hidden="true"></span>
+          </label>
+          <label class="check-row">
+            <input id="cursorHighlight" type="checkbox" checked>
+            <span class="check-text">强调鼠标位置</span>
+            <span class="switch" aria-hidden="true"></span>
+          </label>
+        </div>
         <button class="primary-button" id="startButton" type="button">开始投屏</button>
       </section>
 
@@ -95,10 +105,11 @@
           <label class="field">
             <span>选择显示器或应用窗口</span>
             <div class="source-row">
-              <select id="switchSourceSelect">
-                <option value="">正在读取显示器和应用...</option>
-              </select>
-              <button class="refresh-button" id="refreshSwitchSourcesButton" type="button" title="刷新显示器和应用窗口">刷新</button>
+              <button class="source-select" id="switchSourceSelectButton" type="button" title="点击刷新并展开投屏来源列表">
+                <span class="source-select-label" id="switchSourceSelectLabel">正在读取显示器和应用...</span>
+                <span class="source-select-caret">▾</span>
+              </button>
+              <div class="source-menu" id="switchSourceMenu" hidden></div>
             </div>
           </label>
           <p class="hint" id="sourceSwitchMessage">切换时连接码和教室连接保持不变。</p>
@@ -109,8 +120,36 @@
         </div>
       </section>
 
+      <section class="source-dialog" id="helpDialog" hidden>
+        <div class="source-dialog-card" role="dialog" aria-modal="true" aria-labelledby="helpDialogTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">HELP</p>
+              <h2 id="helpDialogTitle">使用帮助</h2>
+            </div>
+            <button class="icon-button" id="closeHelpButton" type="button" title="关闭">×</button>
+          </div>
+          <div class="help-body">
+            <h3>基本流程</h3>
+            <p>输入大屏上显示的 4 位连接码，选择投屏来源（整个显示器或单个应用窗口），点击"开始投屏"。</p>
+            <h3>投屏来源</h3>
+            <p>点击来源下拉框会自动刷新并展开最新列表。投屏中可从托盘图标打开"切换投屏窗口"，切换时连接码和教室连接保持不变。所选窗口关闭后会自动停止投屏。</p>
+            <h3>本机声音</h3>
+            <p>取消勾选后，投屏时会暂时静音笔记本默认播放设备，停止投屏时自动恢复。</p>
+            <h3>启用扩音</h3>
+            <p>勾选后投屏时自动使用本机麦克风，麦克风声音会和系统声音一起发送到大屏。</p>
+            <h3>鼠标强调</h3>
+            <p>勾选后大屏上显示红色光标圈，方便学生跟随老师操作。</p>
+            <h3>托盘运行</h3>
+            <p>关闭窗口会继续在系统托盘运行。点击或右键托盘图标可切换投屏窗口、停止投屏或退出程序。</p>
+          </div>
+          <div class="source-dialog-actions">
+            <button class="primary-button" id="closeHelpAction" type="button">知道了</button>
+          </div>
+        </div>
+      </section>
+
       <p class="status-message" id="statusMessage" role="status">正在初始化...</p>
-      <p class="footer-note">关闭窗口会继续在系统托盘运行。点击或右键托盘图标可切换投屏窗口、停止投屏或退出程序。</p>
       <p class="footer-note credit">本软件由宁波三中机器人AI实验室开发维护</p>
     </main>
     <script src="./renderer.js"></script>

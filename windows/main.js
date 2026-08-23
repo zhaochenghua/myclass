@@ -29,6 +29,8 @@ let audioStateFilePath = null;
 let restoringAudioForQuit = false;
 let cursorHighlightWindow = null;
 let cursorHighlightTimer = null;
+let knownNonPresentationSourceId = null;
+let lastAutoSwitchFromId = null;
 
 const AUDIO_ENDPOINT_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -126,6 +128,105 @@ public static class MyClassAudioEndpoint {
 }
 '@
 `;
+
+const WINDOW_ENUMERATOR_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
+
+public static class MyClassWindowEnumerator {
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassNameW(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+    private static string JsonEscape(string value) {
+        if (value == null) return "";
+        var sb = new StringBuilder();
+        foreach (char c in value) {
+            switch (c) {
+                case '\\': sb.Append("\\\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 32) { sb.Append("\\u").Append(((int)c).ToString("x4")); }
+                    else { sb.Append(c); }
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    public static string EnumerateJson() {
+        var result = new StringBuilder();
+        result.Append("[");
+        bool first = true;
+        EnumWindows((hWnd, lParam) => {
+            var title = new StringBuilder(512);
+            GetWindowTextW(hWnd, title, title.Capacity);
+            var className = new StringBuilder(256);
+            GetClassNameW(hWnd, className, className.Capacity);
+            uint pid = 0;
+            GetWindowThreadProcessId(hWnd, out pid);
+            RECT rect;
+            if (!GetWindowRect(hWnd, out rect)) {
+                rect.Left = rect.Top = rect.Right = rect.Bottom = 0;
+            }
+            string processName = "";
+            try {
+                processName = Process.GetProcessById((int)pid).ProcessName;
+            } catch { }
+            if (!first) result.Append(",");
+            first = false;
+            result.Append("{\"hwnd\":").Append(hWnd.ToInt64())
+                  .Append(",\"title\":\"").Append(JsonEscape(title.ToString())).Append("\"")
+                  .Append(",\"className\":\"").Append(JsonEscape(className.ToString())).Append("\"")
+                  .Append(",\"pid\":").Append(pid)
+                  .Append(",\"processName\":\"").Append(JsonEscape(processName)).Append("\"")
+                  .Append(",\"visible\":").Append(IsWindowVisible(hWnd) ? "true" : "false")
+                  .Append(",\"iconic\":").Append(IsIconic(hWnd) ? "true" : "false")
+                  .Append(",\"x\":").Append(rect.Left)
+                  .Append(",\"y\":").Append(rect.Top)
+                  .Append(",\"width\":").Append(Math.Max(0, rect.Right - rect.Left))
+                  .Append(",\"height\":").Append(Math.Max(0, rect.Bottom - rect.Top))
+                  .Append("}");
+            return true;
+        }, IntPtr.Zero);
+        result.Append("]");
+        return result.ToString();
+    }
+}
+'@
+`;
+
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -400,6 +501,224 @@ function getCaptureSourceType(source) {
   return String(source.id || '').startsWith('window:') ? 'window' : 'screen';
 }
 
+function parseWindowHandle(sourceId) {
+  const match = /^window:(\d+)/.exec(String(sourceId || ''));
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function normalizeProcessName(name) {
+  return String(name || '').toLowerCase().replace(/\.exe$/, '');
+}
+
+function isPresentationProcess(win) {
+  const name = normalizeProcessName(win?.processName);
+    if (name === 'powerpnt' || name === 'pptview' || name === 'wpppresentation' || name.startsWith('wpp')) {
+    return true;
+  }
+  if (name.startsWith('wps')) {
+    const title = String(win?.title || '');
+    return /WPS\s*演示|演示文稿|\.pptx?|\.dps/i.test(title);
+  }
+  return false;
+}
+
+function isPresentationShowWindow(win) {
+  if (!win || !win.visible) {
+    return false;
+  }
+  const className = String(win.className || '').toLowerCase();
+  const title = String(win.title || '');
+  // Microsoft PowerPoint runs the slide show in a top-level window with the
+  // "screenClass" window class; WPS Presentation (wpp.exe) can be recognised by
+  // the slide-show title below even though its window class is not public.
+  if (className === 'screenclass') {
+    return true;
+  }
+  if (/幻灯片放映|slide show|全屏放映|演示放映|演讲者视图/i.test(title)) {
+    return true;
+  }
+  if (/^WPS\s*演示\s*[-–]\s*\[/i.test(title)) return true;
+  return false;
+}
+
+function isFullscreenWindow(win) {
+  if (!win || !win.width || !win.height) {
+    return false;
+  }
+  const displays = screen.getAllDisplays();
+  return displays.some((display) => {
+    const scale = display.scaleFactor || 1;
+    const bounds = display.bounds;
+    const physical = {
+      x: Math.round(bounds.x * scale),
+      y: Math.round(bounds.y * scale),
+      width: Math.round(bounds.width * scale),
+      height: Math.round(bounds.height * scale)
+    };
+    const dipMatch = Math.abs(win.x - bounds.x) <= 24
+      && Math.abs(win.y - bounds.y) <= 24
+      && Math.abs(win.width - bounds.width) <= 24
+      && Math.abs(win.height - bounds.height) <= 24;
+    const physicalMatch = Math.abs(win.x - physical.x) <= 24
+      && Math.abs(win.y - physical.y) <= 24
+      && Math.abs(win.width - physical.width) <= 24
+      && Math.abs(win.height - physical.height) <= 24;
+      const workArea = display.workArea || bounds;
+      const workAreaMatch = Math.abs(win.x - workArea.x) <= 24
+        && Math.abs(win.y - workArea.y) <= 24
+        && Math.abs(win.width - workArea.width) <= 24
+        && Math.abs(win.height - workArea.height) <= 24;
+    return dipMatch || physicalMatch || workAreaMatch;
+  });
+}
+
+function getWindowEnumeratorAssemblyPath() {
+  const assemblyPath = path.join(app.getPath('userData'), 'myclass-window-enumerator-v1.dll');
+  fs.mkdirSync(path.dirname(assemblyPath), { recursive: true });
+  return assemblyPath;
+}
+
+function extractWindowEnumeratorCSharp() {
+  // The C# source is stored as a PowerShell Add-Type here-string so it can be
+  // compiled once and cached as a DLL. Strip the PowerShell wrapper to reuse it.
+  return WINDOW_ENUMERATOR_SCRIPT
+    .replace(/^\s*\$ErrorActionPreference\s*=\s*'Stop'\s*\r?\n/, '')
+    .replace(/^\s*Add-Type -TypeDefinition @'\s*\r?\n/, '')
+    .replace(/\r?\n'@\s*$/, '');
+}
+
+function buildWindowEnumeratorCommand() {
+  const assemblyPath = getWindowEnumeratorAssemblyPath();
+  const escapedAssemblyPath = assemblyPath.replace(/'/g, "''");
+  const csharpSource = extractWindowEnumeratorCSharp();
+  return `$ErrorActionPreference = 'Stop'
+$assemblyPath = '${escapedAssemblyPath}'
+
+$compiled = $false
+if (-not (Test-Path $assemblyPath)) {
+
+$source = @'
+${csharpSource}
+'@
+  Add-Type -TypeDefinition $source -OutputAssembly $assemblyPath
+
+  $compiled = $true
+}
+if (-not $compiled) {
+  Add-Type -Path $assemblyPath
+}
+[Console]::Out.Write([MyClassWindowEnumerator]::EnumerateJson())`;
+}
+
+
+
+function runWindowEnumerator() {
+  if (process.platform !== 'win32') {
+    return Promise.resolve([]);
+  }
+  const encodedCommand = Buffer.from(
+    buildWindowEnumeratorCommand(),
+    'utf16le'
+  ).toString('base64');
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-EncodedCommand',
+        encodedCommand
+      ],
+      { windowsHide: true, timeout: 20000, maxBuffer: 2 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error((stderr || error.message || '无法枚举 Windows 窗口').trim()));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          resolve(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          reject(new Error('窗口枚举结果解析失败'));
+        }
+      }
+    );
+  });
+}
+
+async function findFollowWindowSource() {
+  if (process.platform !== 'win32' || selectedSourceType !== 'window' || !selectedSourceId) {
+    return null;
+  }
+  const selectedHwnd = parseWindowHandle(selectedSourceId);
+  if (!selectedHwnd) {
+    return null;
+  if (knownNonPresentationSourceId === selectedSourceId) {
+    return null;
+  }
+
+  }
+
+  if (knownNonPresentationSourceId === selectedSourceId) {
+    return null;
+  }
+
+  let windows;
+  try {
+    windows = await runWindowEnumerator();
+  } catch (error) {
+    console.warn('[FollowWindow] failed to enumerate windows:', error.message);
+    return null;
+  }
+
+  const selectedWindow = windows.find((win) => win.hwnd === selectedHwnd);
+  if (!selectedWindow || !isPresentationProcess(selectedWindow)) {
+      knownNonPresentationSourceId = selectedSourceId;
+    return null;
+  }
+
+  const selectedProcess = normalizeProcessName(selectedWindow.processName);
+
+  const candidates = windows
+    .filter((win) => win.hwnd !== selectedHwnd
+        && win.hwnd !== lastAutoSwitchFromId
+      && win.visible
+      
+        && !win.iconic
+      && (selectedProcess.startsWith('wps') || selectedProcess.startsWith('wpp')
+        ? (normalizeProcessName(win.processName).startsWith('wps') || normalizeProcessName(win.processName).startsWith('wpp'))
+        : normalizeProcessName(win.processName) === selectedProcess)
+      && (isPresentationShowWindow(win) || isFullscreenWindow(win)))
+    .sort((a, b) => (b.width * b.height) - (a.width * a.height));
+
+  const candidate = candidates[0];
+  if (!candidate) {
+    return null;
+  }
+
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['window'],
+      thumbnailSize: { width: 1, height: 1 },
+      fetchWindowIcons: false
+    });
+    const source = sources.find((item) => parseWindowHandle(item.id) === candidate.hwnd);
+    if (!source) {
+      return null;
+    }
+      lastAutoSwitchFromId = selectedHwnd;
+    return { id: source.id, type: 'window', name: source.name };
+  } catch (error) {
+    console.warn('[FollowWindow] failed to list capture sources:', error.message);
+    return null;
+  }
+}
+
+
+
 async function listCaptureSources() {
   const sources = await desktopCapturer.getSources({
     types: ['screen', 'window'],
@@ -655,13 +974,14 @@ function createTray() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 314,
-    height: 680,
-    minWidth: 314,
-    minHeight: 600,
+    width: 360,
+    height: 620,
+    minWidth: 340,
+    minHeight: 580,
     show: false,
+    alwaysOnTop: true,
     autoHideMenuBar: true,
-    backgroundColor: '#07131a',
+    backgroundColor: '#f5f5f7',
     icon: APP_ICON_PATH,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -689,9 +1009,11 @@ function registerIpc() {
   ipcMain.handle('select-source', (_event, source) => {
     selectedSourceId = String(source?.id || '') || null;
     selectedSourceType = source?.type === 'window' ? 'window' : 'screen';
+      knownNonPresentationSourceId = null;
     return { id: selectedSourceId, type: selectedSourceType };
   });
   ipcMain.handle('source-available', (_event, sourceId) => isCaptureSourceAvailable(String(sourceId || '')));
+    ipcMain.handle('find-follow-window', () => findFollowWindowSource());
   ipcMain.handle('set-local-audio-output', (_event, enabled) => setLocalAudioOutput(Boolean(enabled)));
   ipcMain.handle('signaling-connect', (_event, options) => connectSignaling(options));
   ipcMain.on('signaling-send', (_event, payload) => sendSignalingMessage(payload));

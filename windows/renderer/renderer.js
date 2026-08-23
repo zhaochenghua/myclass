@@ -4,14 +4,20 @@ const elements = {
   setupCard: document.getElementById('setupCard'),
   liveCard: document.getElementById('liveCard'),
   roomCode: document.getElementById('roomCode'),
-  sourceSelect: document.getElementById('sourceSelect'),
-  refreshSourcesButton: document.getElementById('refreshSourcesButton'),
+  sourceSelectButton: document.getElementById('sourceSelectButton'),
+  sourceSelectLabel: document.getElementById('sourceSelectLabel'),
+  sourceMenu: document.getElementById('sourceMenu'),
   localAudioOutput: document.getElementById('localAudioOutput'),
+  micAmplify: document.getElementById('micAmplify'),
   cursorHighlight: document.getElementById('cursorHighlight'),
   cursorHighlightButton: document.getElementById('cursorHighlightButton'),
   startButton: document.getElementById('startButton'),
   stopButton: document.getElementById('stopButton'),
   localAudioButton: document.getElementById('localAudioButton'),
+  helpButton: document.getElementById('helpButton'),
+  helpDialog: document.getElementById('helpDialog'),
+  closeHelpButton: document.getElementById('closeHelpButton'),
+  closeHelpAction: document.getElementById('closeHelpAction'),
   settingsButton: document.getElementById('settingsButton'),
   settingsDialog: document.getElementById('settingsDialog'),
   settingsServerUrl: document.getElementById('settingsServerUrl'),
@@ -19,8 +25,9 @@ const elements = {
   cancelSettingsAction: document.getElementById('cancelSettingsAction'),
   saveSettingsButton: document.getElementById('saveSettingsButton'),
   sourceSwitchDialog: document.getElementById('sourceSwitchDialog'),
-  switchSourceSelect: document.getElementById('switchSourceSelect'),
-  refreshSwitchSourcesButton: document.getElementById('refreshSwitchSourcesButton'),
+  switchSourceSelectButton: document.getElementById('switchSourceSelectButton'),
+  switchSourceSelectLabel: document.getElementById('switchSourceSelectLabel'),
+  switchSourceMenu: document.getElementById('switchSourceMenu'),
   cancelSourceSwitchButton: document.getElementById('cancelSourceSwitchButton'),
   cancelSourceSwitchAction: document.getElementById('cancelSourceSwitchAction'),
   confirmSourceSwitchButton: document.getElementById('confirmSourceSwitchButton'),
@@ -44,10 +51,13 @@ const state = {
   joined: false,
   localAudioOutput: localStorage.getItem('myclass.localAudioOutput') !== 'false',
   localAudioMuted: false,
+  micAmplify: localStorage.getItem('myclass.micAmplify') === 'true',
+  micStream: null,
   cursorHighlight: localStorage.getItem('myclass.cursorHighlight') !== 'false',
   captureSourceId: '',
   captureSourceType: 'screen',
   sourceMonitorTimer: null,
+    followingWindowProbe: false,
   switchingSource: false,
   sourceSwitchGeneration: 0,
   stopping: false
@@ -55,6 +65,7 @@ const state = {
 
 elements.settingsServerUrl.value = state.serverUrl;
 elements.localAudioOutput.checked = state.localAudioOutput;
+elements.micAmplify.checked = state.micAmplify;
 elements.cursorHighlight.checked = state.cursorHighlight;
 
 function setStatus(message, isError = false) {
@@ -90,74 +101,160 @@ async function setCursorHighlight(enabled) {
   }
 }
 
-function populateSourceOptions(select, sourceResult, selectedId) {
-  const sources = sourceResult?.sources || [];
-  select.replaceChildren();
-  if (sources.length === 0) {
-    const option = document.createElement('option');
-    option.textContent = '没有检测到显示器或应用窗口';
-    option.value = '';
-    select.append(option);
-    return;
+// 自定义投屏来源下拉：点击按钮先刷新列表，再展开显示（原生 select 无法在
+// 展开前拦截刷新，所以用外观一致的下拉替代，刷新按钮因此可以删除）。
+function createSourcePicker({ button, label, menu, onSelect }) {
+  let open = false;
+  let loading = false;
+  let value = '';
+  let type = null;
+
+  function close() {
+    open = false;
+    menu.hidden = true;
   }
-  const groups = [
-    { type: 'screen', label: '显示器' },
-    { type: 'window', label: '应用窗口' }
-  ];
-  for (const group of groups) {
-    const groupSources = sources.filter((source) => source.type === group.type);
-    if (groupSources.length === 0) continue;
-    const optgroup = document.createElement('optgroup');
-    optgroup.label = group.label;
-    for (const source of groupSources) {
-      const option = document.createElement('option');
-      option.value = source.id;
-      option.textContent = source.type === 'screen' && source.displayId
-        ? `${source.name}（显示器 ${source.displayId}）`
-        : source.name;
-      option.dataset.sourceType = source.type;
-      optgroup.append(option);
+
+  function sourceName(source) {
+    return source.type === 'screen' && source.displayId
+      ? `${source.name}（显示器 ${source.displayId}）`
+      : source.name;
+  }
+
+  function render(sourceResult, preferredId) {
+    const sources = sourceResult?.sources || [];
+    menu.replaceChildren();
+    value = '';
+    type = null;
+    if (sources.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'source-menu-item is-disabled';
+      empty.textContent = '没有检测到显示器或应用窗口';
+      menu.append(empty);
+      label.textContent = '没有检测到显示器或应用窗口';
+      return null;
     }
-    select.append(optgroup);
+    const groups = [
+      { type: 'screen', label: '显示器' },
+      { type: 'window', label: '应用窗口' }
+    ];
+    for (const group of groups) {
+      const groupSources = sources.filter((source) => source.type === group.type);
+      if (groupSources.length === 0) continue;
+      const title = document.createElement('div');
+      title.className = 'source-menu-group';
+      title.textContent = group.label;
+      menu.append(title);
+      for (const source of groupSources) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'source-menu-item';
+        item.textContent = sourceName(source);
+        item.dataset.sourceId = source.id;
+        item.dataset.sourceType = source.type;
+        item.addEventListener('click', () => {
+          value = source.id;
+          type = source.type;
+          label.textContent = sourceName(source);
+          for (const el of menu.querySelectorAll('.source-menu-item')) {
+            el.classList.toggle('is-selected', el === item);
+          }
+          close();
+          onSelect?.(source);
+        });
+        menu.append(item);
+      }
+    }
+    const requestedId = preferredId || sourceResult.selectedId;
+    const next = sources.find((source) => source.id === requestedId) || sources[0];
+    value = next.id;
+    type = next.type;
+    label.textContent = sourceName(next);
+    for (const el of menu.querySelectorAll('.source-menu-item')) {
+      el.classList.toggle('is-selected', el.dataset.sourceId === next.id);
+    }
+    return next;
   }
-  const requestedId = selectedId || sourceResult.selectedId;
-  const nextSelectedId = sources.some((source) => source.id === requestedId)
-    ? requestedId
-    : sources[0].id;
-  select.value = nextSelectedId;
-  const selected = sources.find((source) => source.id === nextSelectedId) || sources[0];
-  return selected;
+
+  button.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    if (open) {
+      close();
+      return;
+    }
+    if (loading) {
+      return;
+    }
+    loading = true;
+    const previousLabel = label.textContent;
+    label.textContent = '正在刷新...';
+    try {
+      render(await api.listSources());
+      open = true;
+      menu.hidden = false;
+    } catch (error) {
+      label.textContent = previousLabel;
+      setStatus(`读取投屏来源失败：${error.message}`, true);
+    } finally {
+      loading = false;
+    }
+  });
+
+  document.addEventListener('click', (event) => {
+    if (open && !menu.contains(event.target)) {
+      close();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && open) {
+      close();
+    }
+  });
+
+  return {
+    get value() { return value; },
+    get type() { return type; },
+    render,
+    close,
+    focus() { button.focus(); }
+  };
 }
 
-function setSourceOptions(sourceResult) {
-  const selected = populateSourceOptions(elements.sourceSelect, sourceResult);
-  if (!selected) {
-    return;
+const sourcePicker = createSourcePicker({
+  button: elements.sourceSelectButton,
+  label: elements.sourceSelectLabel,
+  menu: elements.sourceMenu,
+  onSelect: (source) => {
+    state.captureSourceId = source.id;
+    state.captureSourceType = source.type;
+    api.selectSource({ id: source.id, type: source.type })
+      .catch((error) => setStatus(`选择投屏来源失败：${error.message}`, true));
   }
-  state.captureSourceId = selected.id;
-  state.captureSourceType = selected.type;
-}
+});
+
+const switchSourcePicker = createSourcePicker({
+  button: elements.switchSourceSelectButton,
+  label: elements.switchSourceSelectLabel,
+  menu: elements.switchSourceMenu,
+  onSelect: (source) => {
+    elements.confirmSourceSwitchButton.disabled = !source.id;
+    elements.sourceSwitchMessage.textContent = source.id
+      ? '切换时连接码和教室连接保持不变。'
+      : '没有检测到可投屏的显示器或应用窗口。';
+  }
+});
 
 async function refreshSources() {
-  elements.refreshSourcesButton.disabled = true;
   try {
-    setSourceOptions(await api.listSources());
+    sourcePicker.render(await api.listSources());
   } catch (error) {
     setStatus(`读取投屏来源失败：${error.message}`, true);
-  } finally {
-    elements.refreshSourcesButton.disabled = false;
   }
 }
 
 async function refreshSwitchSources() {
-  elements.refreshSwitchSourcesButton.disabled = true;
   try {
-    const sourceResult = await api.listSources();
-    const selected = populateSourceOptions(
-      elements.switchSourceSelect,
-      sourceResult,
-      state.captureSourceId
-    );
+    const selected = switchSourcePicker.render(await api.listSources(), state.captureSourceId);
     elements.confirmSourceSwitchButton.disabled = !selected;
     elements.sourceSwitchMessage.textContent = selected
       ? '切换时连接码和教室连接保持不变。'
@@ -165,21 +262,21 @@ async function refreshSwitchSources() {
   } catch (error) {
     elements.confirmSourceSwitchButton.disabled = true;
     elements.sourceSwitchMessage.textContent = `读取投屏来源失败：${error.message}`;
-  } finally {
-    elements.refreshSwitchSourcesButton.disabled = false;
   }
 }
 
 function closeSourceSwitcher() {
+  switchSourcePicker.close();
   elements.sourceSwitchDialog.hidden = true;
 }
 
 async function openSourceSwitcher() {
   if (!state.mediaStream) {
     setStatus('当前未投屏，请在主界面选择来源后开始投屏');
-    elements.sourceSelect.focus();
+    sourcePicker.focus();
     return;
   }
+  sourcePicker.close();
   elements.sourceSwitchDialog.hidden = false;
   await refreshSwitchSources();
 }
@@ -216,6 +313,31 @@ async function requestScreenStream() {
   return stream;
 }
 
+async function startMicCapture() {
+  if (state.micStream) {
+    return state.micStream;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('当前环境不支持麦克风采集');
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    }
+  });
+  state.micStream = stream;
+  return stream;
+}
+
+function stopMicCapture() {
+  if (state.micStream) {
+    state.micStream.getTracks().forEach((track) => track.stop());
+    state.micStream = null;
+  }
+}
+
 function startSourceMonitor() {
   if (state.captureSourceType !== 'window' || state.sourceMonitorTimer) {
     return;
@@ -225,7 +347,32 @@ function startSourceMonitor() {
     try {
       if (!await api.sourceAvailable(state.captureSourceId)) {
         await stopProjection(false, '应用窗口已关闭，投屏已停止');
+
       }
+        if (!state.mediaStream) return;
+        if (!state.followingWindowProbe) {
+          state.followingWindowProbe = true;
+          try {
+            const follow = await api.findFollowWindow();
+            if (follow?.id && follow.id !== state.captureSourceId) {
+              await switchProjectionSourceTo(follow);
+            }
+          } finally {
+            state.followingWindowProbe = false;
+          }
+        }
+        return;
+        if (!state.followingWindowProbe) {
+          state.followingWindowProbe = true;
+          try {
+            const follow = await api.findFollowWindow();
+            if (follow?.id && follow.id !== state.captureSourceId) {
+              await switchProjectionSourceTo(follow);
+            }
+          } finally {
+            state.followingWindowProbe = false;
+          }
+        }
     } catch {
       // The media track's ended event remains the fallback when source probing fails.
     }
@@ -292,6 +439,14 @@ function createPeerConnection() {
   for (const track of state.mediaStream.getTracks()) {
     const sender = peerConnection.addTrack(track, state.mediaStream);
     configureSender(sender, track.kind);
+  }
+  // 扩音：把麦克风音频作为第二条音频轨一起发送到大屏。
+  if (state.micAmplify && state.micStream) {
+    const micTrack = state.micStream.getAudioTracks()[0];
+    if (micTrack) {
+      const sender = peerConnection.addTrack(micTrack, state.micStream);
+      configureSender(sender, 'audio');
+    }
   }
   return peerConnection;
 }
@@ -376,6 +531,14 @@ async function handleSignal(message) {
   }
 }
 
+function closeHelpDialog() {
+  elements.helpDialog.hidden = true;
+}
+
+function openHelpDialog() {
+  elements.helpDialog.hidden = false;
+}
+
 function closeSettingsDialog() {
   elements.settingsDialog.hidden = true;
 }
@@ -411,7 +574,7 @@ async function startProjection() {
     openSettingsDialog();
     return;
   }
-  if (!elements.sourceSelect.value) {
+  if (!sourcePicker.value) {
     setStatus('没有可用的显示器或应用窗口', true);
     return;
   }
@@ -420,17 +583,23 @@ async function startProjection() {
   elements.startButton.textContent = '正在准备屏幕...';
   state.stopping = false;
   state.roomCode = code;
-  const selectedOption = elements.sourceSelect.selectedOptions[0];
-  state.captureSourceId = elements.sourceSelect.value;
-  state.captureSourceType = selectedOption?.dataset.sourceType === 'window' ? 'window' : 'screen';
+  state.captureSourceId = sourcePicker.value;
+  state.captureSourceType = sourcePicker.type;
   state.localAudioOutput = elements.localAudioOutput.checked;
+  state.micAmplify = elements.micAmplify.checked;
   state.cursorHighlight = elements.cursorHighlight.checked;
   localStorage.setItem('myclass.serverUrl', state.serverUrl);
   localStorage.setItem('myclass.localAudioOutput', String(state.localAudioOutput));
+  localStorage.setItem('myclass.micAmplify', String(state.micAmplify));
   localStorage.setItem('myclass.cursorHighlight', String(state.cursorHighlight));
   updateCursorHighlightUi();
   try {
     await api.selectSource({ id: state.captureSourceId, type: state.captureSourceType });
+    if (state.micAmplify) {
+      await startMicCapture();
+    } else {
+      stopMicCapture();
+    }
     if (state.cursorHighlight) {
       await api.setCursorHighlight(true);
     }
@@ -444,7 +613,9 @@ async function startProjection() {
     elements.localPreview.srcObject = state.mediaStream;
     await elements.localPreview.play().catch(() => {});
     const audioTrack = state.mediaStream.getAudioTracks()[0];
-    elements.audioStatus.textContent = audioTrack ? '系统声音已启用' : '未获取到系统声音';
+    elements.audioStatus.textContent = audioTrack
+      ? (state.micAmplify ? '系统声音 + 麦克风已启用' : '系统声音已启用')
+      : '未获取到系统声音';
     state.config = await api.connectSignaling({ baseUrl: state.serverUrl, code });
     elements.setupCard.hidden = true;
     elements.liveCard.hidden = false;
@@ -461,9 +632,8 @@ async function startProjection() {
 }
 
 async function switchProjectionSource() {
-  const selectedOption = elements.switchSourceSelect.selectedOptions[0];
-  const nextSourceId = elements.switchSourceSelect.value;
-  const nextSourceType = selectedOption?.dataset.sourceType === 'window' ? 'window' : 'screen';
+  const nextSourceId = switchSourcePicker.value;
+  const nextSourceType = switchSourcePicker.type;
   if (!nextSourceId || !state.mediaStream || state.switchingSource) {
     return;
   }
@@ -480,8 +650,8 @@ async function switchProjectionSource() {
   const generation = ++state.sourceSwitchGeneration;
   let nextStream = null;
   state.switchingSource = true;
+  switchSourcePicker.close();
   elements.confirmSourceSwitchButton.disabled = true;
-  elements.refreshSwitchSourcesButton.disabled = true;
   elements.sourceSwitchMessage.textContent = '正在切换投屏窗口，请稍候...';
   setLiveStatus('正在切换窗口');
 
@@ -500,7 +670,9 @@ async function switchProjectionSource() {
     elements.localPreview.srcObject = nextStream;
     await elements.localPreview.play().catch(() => {});
     const audioTrack = nextStream.getAudioTracks()[0];
-    elements.audioStatus.textContent = audioTrack ? '系统声音已启用' : '未获取到系统声音';
+    elements.audioStatus.textContent = audioTrack
+      ? (state.micAmplify ? '系统声音 + 麦克风已启用' : '系统声音已启用')
+      : '未获取到系统声音';
     startSourceMonitor();
     await negotiate();
     if (generation !== state.sourceSwitchGeneration || state.stopping) {
@@ -531,14 +703,90 @@ async function switchProjectionSource() {
   } finally {
     state.switchingSource = false;
     elements.confirmSourceSwitchButton.disabled = false;
-    elements.refreshSwitchSourcesButton.disabled = false;
   }
 }
+
+async function switchProjectionSourceTo(nextSource) {
+  const nextSourceId = String(nextSource?.id || '');
+  const nextSourceType = nextSource?.type === 'window' ? 'window' : 'screen';
+  if (!nextSourceId || !state.mediaStream || state.switchingSource) {
+    return;
+  }
+  if (nextSourceId === state.captureSourceId) {
+    closeSourceSwitcher();
+    return;
+  }
+
+  const previousStream = state.mediaStream;
+  const previousSource = {
+    id: state.captureSourceId,
+    type: state.captureSourceType
+  };
+  const generation = ++state.sourceSwitchGeneration;
+  let nextStream = null;
+  state.switchingSource = true;
+  switchSourcePicker.close();
+  closeSourceSwitcher();
+  elements.confirmSourceSwitchButton.disabled = true;
+  setLiveStatus('正在切换窗口');
+  setStatus('检测到演示文稿放映窗口，正在自动切换...');
+
+  try {
+    await api.selectSource({ id: nextSourceId, type: nextSourceType });
+    state.captureSourceId = nextSourceId;
+    state.captureSourceType = nextSourceType;
+    nextStream = await requestScreenStream();
+    if (generation !== state.sourceSwitchGeneration || state.stopping) {
+      nextStream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    stopSourceMonitor();
+    state.mediaStream = nextStream;
+    elements.localPreview.srcObject = nextStream;
+    await elements.localPreview.play().catch(() => {});
+    const audioTrack = nextStream.getAudioTracks()[0];
+    elements.audioStatus.textContent = audioTrack
+      ? (state.micAmplify ? '系统声音 + 麦克风已启用' : '系统声音已启用')
+      : '未获取到系统声音';
+    startSourceMonitor();
+    await negotiate();
+    if (generation !== state.sourceSwitchGeneration || state.stopping) {
+      return;
+    }
+
+    previousStream.getTracks().forEach((track) => track.stop());
+    setStatus(nextSourceType === 'window' ? '已自动切换到演示文稿放映窗口' : '已切换到显示器');
+      refreshSources().catch(() => {});
+  } catch (error) {
+    if (nextStream) {
+      nextStream.getTracks().forEach((track) => track.stop());
+    }
+    if (generation !== state.sourceSwitchGeneration || state.stopping) {
+      return;
+    }
+    stopSourceMonitor();
+    state.mediaStream = previousStream;
+    elements.localPreview.srcObject = previousStream;
+    await elements.localPreview.play().catch(() => {});
+    state.captureSourceId = previousSource.id;
+    state.captureSourceType = previousSource.type;
+    await api.selectSource(previousSource).catch(() => {});
+    startSourceMonitor();
+    setStatus(`自动切换演示文稿放映窗口失败：${error.message || '未知错误'}`, true);
+    setLiveStatus('已连接');
+  } finally {
+    state.switchingSource = false;
+    elements.confirmSourceSwitchButton.disabled = false;
+  }
+}
+
 
 async function stopProjection(disconnect = true, message = '') {
   state.stopping = true;
   state.sourceSwitchGeneration += 1;
   state.switchingSource = false;
+    state.followingWindowProbe = false;
   closeSourceSwitcher();
   stopSourceMonitor();
   if (state.peerConnection) {
@@ -549,6 +797,7 @@ async function stopProjection(disconnect = true, message = '') {
     state.mediaStream.getTracks().forEach((track) => track.stop());
     state.mediaStream = null;
   }
+  stopMicCapture();
   elements.localPreview.srcObject = null;
   if (state.cursorHighlight) {
     await api.setCursorHighlight(false).catch(() => {});
@@ -579,6 +828,9 @@ async function stopProjection(disconnect = true, message = '') {
 
 elements.startButton.addEventListener('click', startProjection);
 elements.stopButton.addEventListener('click', () => stopProjection(true));
+elements.helpButton.addEventListener('click', openHelpDialog);
+elements.closeHelpButton.addEventListener('click', closeHelpDialog);
+elements.closeHelpAction.addEventListener('click', closeHelpDialog);
 elements.settingsButton.addEventListener('click', openSettingsDialog);
 elements.closeSettingsButton.addEventListener('click', closeSettingsDialog);
 elements.cancelSettingsAction.addEventListener('click', closeSettingsDialog);
@@ -586,6 +838,27 @@ elements.saveSettingsButton.addEventListener('click', saveSettings);
 elements.localAudioOutput.addEventListener('change', async () => {
   state.localAudioOutput = elements.localAudioOutput.checked;
   localStorage.setItem('myclass.localAudioOutput', String(state.localAudioOutput));
+});
+elements.micAmplify.addEventListener('change', () => {
+  state.micAmplify = elements.micAmplify.checked;
+  localStorage.setItem('myclass.micAmplify', String(state.micAmplify));
+  if (!state.mediaStream) {
+    return;
+  }
+  if (state.micAmplify) {
+    startMicCapture()
+      .then(() => negotiate())
+      .catch((error) => {
+        state.micAmplify = false;
+        elements.micAmplify.checked = false;
+        localStorage.setItem('myclass.micAmplify', 'false');
+        stopMicCapture();
+        setStatus(`启用扩音失败：${error.message}`, true);
+      });
+  } else {
+    stopMicCapture();
+    negotiate().catch((error) => setStatus(`重新建立连接失败：${error.message}`, true));
+  }
 });
 elements.cursorHighlight.addEventListener('change', () => {
   if (state.mediaStream) {
@@ -614,20 +887,7 @@ elements.localAudioButton.addEventListener('click', async () => {
 elements.roomCode.addEventListener('input', () => {
   elements.roomCode.value = elements.roomCode.value.replace(/\D/g, '').slice(0, 4);
 });
-elements.sourceSelect.addEventListener('change', async () => {
-  const option = elements.sourceSelect.selectedOptions[0];
-  state.captureSourceId = elements.sourceSelect.value;
-  state.captureSourceType = option?.dataset.sourceType === 'window' ? 'window' : 'screen';
-  await api.selectSource({ id: state.captureSourceId, type: state.captureSourceType });
-});
-elements.refreshSourcesButton.addEventListener('click', refreshSources);
-elements.switchSourceSelect.addEventListener('change', () => {
-  const option = elements.switchSourceSelect.selectedOptions[0];
-  elements.sourceSwitchMessage.textContent = option?.value
-    ? '切换时连接码和教室连接保持不变。'
-    : '没有检测到可投屏的显示器或应用窗口。';
-});
-elements.refreshSwitchSourcesButton.addEventListener('click', refreshSwitchSources);
+
 elements.cancelSourceSwitchButton.addEventListener('click', closeSourceSwitcher);
 elements.cancelSourceSwitchAction.addEventListener('click', closeSourceSwitcher);
 elements.confirmSourceSwitchButton.addEventListener('click', switchProjectionSource);

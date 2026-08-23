@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('myclass', {
   listSources: () => ipcRenderer.invoke('list-sources'),
   selectSource: (source) => ipcRenderer.invoke('select-source', source),
   sourceAvailable: (sourceId) => ipcRenderer.invoke('source-available', sourceId),
+    findFollowWindow: () => ipcRenderer.invoke('find-follow-window'),
   setLocalAudioOutput: (enabled) => ipcRenderer.invoke('set-local-audio-output', enabled),
   connectSignaling: (options) => ipcRenderer.invoke('signaling-connect', options),
   sendSignaling: (payload) => ipcRenderer.send('signaling-send', payload),
