@@ -16,10 +16,46 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
-const APP_VERSION = process.env.APP_VERSION || '1.4.5-20260822';
-const APK_URL = `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(APP_VERSION)}`;
-const WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.19';
-const WINDOWS_URL = `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(WINDOWS_VERSION)}`;
+const DEFAULT_APP_VERSION = process.env.APP_VERSION || '1.4.5-20260822';
+const DEFAULT_WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.22';
+const VERSIONS_PATH = path.join(__dirname, 'data', 'versions.json');
+let versionsCache = { mtimeMs: -1, data: null };
+
+// 版本号从 data/versions.json 动态读取（带 mtime 缓存），改文件即生效，无需重启
+function readVersions() {
+  let stat;
+  try {
+    stat = fs.statSync(VERSIONS_PATH);
+  } catch {
+    return {
+      appVersion: DEFAULT_APP_VERSION,
+      windowsVersion: DEFAULT_WINDOWS_VERSION
+    };
+  }
+  if (versionsCache.data && versionsCache.mtimeMs === stat.mtimeMs) {
+    return versionsCache.data;
+  }
+  let data = {
+    appVersion: DEFAULT_APP_VERSION,
+    windowsVersion: DEFAULT_WINDOWS_VERSION
+  };
+  try {
+    const raw = JSON.parse(fs.readFileSync(VERSIONS_PATH, 'utf8'));
+    if (typeof raw.appVersion === 'string' && raw.appVersion.trim()) {
+      data.appVersion = raw.appVersion.trim();
+    }
+    if (typeof raw.windowsVersion === 'string' && raw.windowsVersion.trim()) {
+      data.windowsVersion = raw.windowsVersion.trim();
+    }
+  } catch {}
+  versionsCache = { mtimeMs: stat.mtimeMs, data };
+  return data;
+}
+
+function getApkUrl() {
+  const { appVersion } = readVersions();
+  return `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(appVersion)}`;
+}
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
   (process.env.ALLOWED_HOSTS || `${SERVER_IP},localhost,127.0.0.1,ai.nbsdszx.cn`)
@@ -109,12 +145,13 @@ app.get(`${PATH_PREFIX}/health`, (req, res) => {
 });
 
 app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
+  const { appVersion, windowsVersion } = readVersions();
   res.json({
     title: '上课投屏平台',
-    apkVersion: APP_VERSION,
-    apkUrl: APK_URL,
-    windowsVersion: WINDOWS_VERSION,
-    windowsUrl: WINDOWS_URL,
+    apkVersion: appVersion,
+    apkUrl: getApkUrl(),
+    windowsVersion,
+    windowsUrl: `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(windowsVersion)}`,
     wsPath: `${PATH_PREFIX}/ws`,
     roomTtlSeconds: Math.floor(ROOM_TTL_MS / 1000),
     video: {
@@ -143,7 +180,7 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
 
 app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
   try {
-    const svg = await QRCode.toString(APK_URL, {
+    const svg = await QRCode.toString(getApkUrl(), {
       type: 'svg',
       margin: 2,
       width: 360,
@@ -442,7 +479,7 @@ app.get(`${PATH_PREFIX}/myclass.apk`, (req, res) => {
       .send('myclass.apk 尚未生成，请先完成 Android 构建。');
     return;
   }
-  res.download(apkPath, `myclass-${safeDownloadVersion(APP_VERSION)}.apk`);
+  res.download(apkPath, `myclass-${safeDownloadVersion(readVersions().appVersion)}.apk`);
 });
 
 app.get(`${PATH_PREFIX}/myclass-windows.exe`, (req, res) => {
@@ -453,7 +490,7 @@ app.get(`${PATH_PREFIX}/myclass-windows.exe`, (req, res) => {
       .send('Windows 投屏程序尚未生成，请先完成 Windows 构建。');
     return;
   }
-  res.download(windowsInstallerPath, `myclass-windows-${safeDownloadVersion(WINDOWS_VERSION)}.exe`);
+  res.download(windowsInstallerPath, `myclass-windows-${safeDownloadVersion(readVersions().windowsVersion)}.exe`);
 });
 
 app.use(
@@ -487,7 +524,7 @@ app.use(
 setupWebSocket(server, {
   pathPrefix: PATH_PREFIX,
   roomTtlMs: ROOM_TTL_MS,
-  apkUrl: APK_URL,
+  apkUrl: getApkUrl(),
   isAllowedHost,
   isAllowedOrigin,
   readCoursewareIndex,
@@ -518,7 +555,7 @@ app.use((error, req, res, next) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`MyClass server listening on http://${HOST}:${PORT}${PATH_PREFIX}/`);
-  console.log(`APK QR points to ${APK_URL}`);
+  console.log(`APK QR points to ${getApkUrl()}`);
 });
 
 function normalizePrefix(prefix) {

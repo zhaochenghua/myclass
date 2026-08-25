@@ -175,7 +175,7 @@ Windows 安装包下载地址：
 http://10.30.13.1/myclass/myclass-windows.exe
 ```
 
-更新 Windows 客户端时，将新的安装包复制为 `web/public/myclass-windows.exe`，并通过 `WINDOWS_VERSION` 环境变量更新页面显示的版本号。
+更新 Windows 客户端时，将新的安装包复制为 `web/public/myclass-windows.exe`，并修改 `server/data/versions.json` 中的 `windowsVersion` 字段更新页面显示的版本号（改完即生效，无需重启服务）。Android 版本号同理，修改 `appVersion` 字段即可。
 
 ## GitHub Actions
 
