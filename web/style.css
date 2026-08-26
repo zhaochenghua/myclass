@@ -393,10 +393,31 @@ video {
   background: rgba(255, 255, 255, 0.28);
 }
 
+.annotation-colors-dropdown {
+  position: relative;
+  display: flex;
+}
+
 .annotation-colors {
   display: flex;
   gap: 0.35rem;
   padding-right: 0.2rem;
+}
+
+.annotation-mode-menu {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.annotation-mode-menu .toolbar-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.8rem;
+}
+
+.annotation-mode-menu .toolbar-dropdown-item svg {
+  display: block;
 }
 
 .annotation-color {
@@ -448,6 +469,23 @@ video {
 .annotation-button:disabled {
   color: rgba(255, 255, 255, 0.42);
   border-color: rgba(255, 255, 255, 0.12);
+}
+
+.annotation-eraser-btn.is-active {
+  border-color: var(--warm);
+  background: rgba(255, 209, 102, 0.2);
+  color: var(--warm);
+}
+
+.annotation-eraser-cursor {
+  position: fixed;
+  pointer-events: none;
+  z-index: 100;
+  border: 2px solid var(--warm);
+  border-radius: 50%;
+  background: rgba(255, 209, 102, 0.15);
+  transform: translate(-50%, -50%);
+  display: none;
 }
 
 /* 课件下拉菜单 */
@@ -736,9 +774,17 @@ video {
   width: min(60vmin, 60vh);
   height: min(60vmin, 60vh);
   border-radius: 50%;
-  /* 圆形背景+彩色描边由 ::before 承载，避免与文字渐变冲突 */
   background: transparent;
-  /* 彩虹渐变文字 */
+  transition: left 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              top 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              opacity 0.35s ease;
+}
+
+/* 学号数字（彩虹渐变文字，置于磨砂层之上） */
+.roll-student-big-num {
+  position: relative;
+  z-index: 1;
   color: transparent;
   background-image: linear-gradient(135deg, #ff5d8f 0%, #ffd166 28%, #4ade80 52%, #38bdf8 76%, #c084fc 100%);
   -webkit-background-clip: text;
@@ -749,10 +795,6 @@ video {
   font-family: inherit;
   line-height: 1;
   filter: drop-shadow(0 0 2rem rgba(192, 132, 252, 0.45));
-  transition: left 0.5s cubic-bezier(0.22, 1, 0.36, 1),
-              top 0.5s cubic-bezier(0.22, 1, 0.36, 1),
-              transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
-              opacity 0.35s ease;
 }
 
 /* 圆形深色底 + 彩虹描边 */
@@ -762,11 +804,23 @@ video {
   inset: 0;
   border-radius: 50%;
   background:
-    rgba(20, 22, 28, 0.82) padding-box,
+    rgba(20, 22, 28, 0.35) padding-box,
     linear-gradient(135deg, #ff5d8f, #ffd166, #4ade80, #38bdf8, #c084fc) border-box;
   border: 0.6vmin solid transparent;
   box-shadow: 0 0 4rem rgba(0, 0, 0, 0.55);
   z-index: -1;
+}
+
+/* 磨砂玻璃层（真实 DOM 元素，确保 backdrop-filter 生效） */
+.roll-student-big-bg {
+  position: absolute;
+  inset: 0.6vmin;
+  border-radius: 50%;
+  backdrop-filter: blur(24px) saturate(1.5) brightness(1.05);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5) brightness(1.05);
+  background: rgba(20, 22, 28, 0.25);
+  z-index: 0;
+  pointer-events: none;
 }
 
 .roll-student-big.show {
@@ -778,22 +832,28 @@ video {
 
 /* 滚动中：粉蓝活泼色 */
 .roll-student-big.rolling {
+  animation: bigRollBounce 0.08s infinite alternate;
+}
+
+.roll-student-big.rolling .roll-student-big-num {
   background-image: linear-gradient(135deg, #ff8fb1 0%, #ffd166 30%, #5eead4 60%, #7dd3fc 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   filter: drop-shadow(0 0 2rem rgba(56, 189, 248, 0.5));
-  animation: bigRollBounce 0.08s infinite alternate;
 }
 
 /* 抽中：金红喜庆糖果色 */
 .roll-student-big.done {
+  animation: bigPopIn 0.5s ease-out;
+}
+
+.roll-student-big.done .roll-student-big-num {
   background-image: linear-gradient(135deg, #ff5d8f 0%, #ffb020 50%, #ffd166 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   filter: drop-shadow(0 0 2.2rem rgba(255, 176, 32, 0.6));
-  animation: bigPopIn 0.5s ease-out;
 }
 
 @keyframes bigRollBounce {
@@ -802,9 +862,9 @@ video {
 }
 
 @keyframes bigPopIn {
-  0% { transform: translate(-50%, -50%) scale(0.4); opacity: 0; }
-  55% { transform: translate(-50%, -50%) scale(1.12); opacity: 1; }
-  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  0% { transform: translate(-50%, -50%) scale(1); }
+  55% { transform: translate(-50%, -50%) scale(1.12); }
+  100% { transform: translate(-50%, -50%) scale(1); }
 }
 
 /* 课件选择弹窗 */

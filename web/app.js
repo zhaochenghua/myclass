@@ -27,7 +27,9 @@ const state = {
     strokes: [],
     activeStrokes: new Map(),  // key: pointerId → stroke，支持多笔同时绘制
     currentColor: '#ff4d6d',
-    tool: 'pen'
+    tool: 'pen',
+    mode: 'solid',  // solid | dashed | dashdot | highlighter
+    eraserWidth: 40  // 板擦直径(px)
   },
   blackboard: {
     active: false,
@@ -37,6 +39,7 @@ const state = {
     tool: 'pen',               // 'pen' | 'eraser' | 'hand' | 'select'
     eraserWidth: 40,           // 板擦半径(px)
     currentColor: '#ff4d6d',   // 黑板专用颜色（默认红色）
+    mode: 'solid',             // solid | dashed | dashdot | highlighter
     // 圈选系统
     selection: {
       lassoPoints: [],          // 正在绘制的套索多边形点
@@ -116,10 +119,14 @@ const elements = {
   annotationToolbar: document.getElementById('annotationToolbar'),
   penToolButton: document.getElementById('penToolButton'),
   panToolButton: document.getElementById('panToolButton'),
+  annotationEraserButton: document.getElementById('annotationEraserButton'),
+  annotationEraserCursor: document.getElementById('annotationEraserCursor'),
   annotationColorsContainer: document.getElementById('annotationColors'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
   clearAnnotationButton: document.getElementById('clearAnnotationButton'),
   annotationColorButtons: Array.from(document.querySelectorAll('.annotation-color')),
+  annotationColorsDropdown: document.getElementById('annotationColorsDropdown'),
+  annotationModeMenu: document.getElementById('annotationModeMenu'),
   fullscreenButton: document.getElementById('fullscreenButton'),
   coursewareDropdown: document.getElementById('coursewareDropdown'),
   coursewareMenuButton: document.getElementById('coursewareMenuButton'),
@@ -164,6 +171,8 @@ const elements = {
   blackboardDeleteSelButton: document.getElementById('blackboardDeleteSelButton'),
   blackboardColorButtons: Array.from(document.querySelectorAll('#blackboardColors .annotation-color')),
   blackboardColorsContainer: document.getElementById('blackboardColors'),
+  blackboardColorsDropdown: document.getElementById('blackboardColorsDropdown'),
+  blackboardModeMenu: document.getElementById('blackboardModeMenu'),
   // 视频播放器
   videoPlayerOverlay: document.getElementById('videoPlayerOverlay'),
   coursewareVideo: document.getElementById('coursewareVideo'),
@@ -370,8 +379,33 @@ async function bootstrap() {
     elements.blackboardSelectButton.addEventListener('click', toggleBlackboardSelect);
     elements.blackboardDeleteSelButton.addEventListener('click', deleteBlackboardSelection);
     elements.blackboardColorButtons.forEach((btn) => {
-      btn.addEventListener('click', () => setBlackboardColor(btn.dataset.color));
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menu = elements.blackboardModeMenu;
+        if (btn.dataset.color === state.blackboard.currentColor && menu.classList.contains('is-open')) {
+          menu.classList.remove('is-open');
+          return;
+        }
+        setBlackboardColor(btn.dataset.color);
+        menu.classList.add('is-open');
+      });
     });
+    elements.blackboardModeMenu.querySelectorAll('.toolbar-dropdown-item').forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setBlackboardMode(item.dataset.mode);
+        elements.blackboardModeMenu.classList.remove('is-open');
+      });
+    });
+    document.addEventListener('click', (e) => {
+      const dropdown = elements.blackboardColorsDropdown;
+      if (dropdown && !dropdown.contains(e.target)) {
+        elements.blackboardModeMenu.classList.remove('is-open');
+      }
+    });
+    // 初始化模式菜单图标颜色为当前选中颜色
+    updateModeMenuIconColor(elements.annotationModeMenu, state.annotations.currentColor);
+    updateModeMenuIconColor(elements.blackboardModeMenu, state.blackboard.currentColor);
     window.addEventListener('resize', resizeBlackboardCanvas);
     // 黑板板擦光标跟踪（文档级，绕过 canvas 指针捕获）
     document.addEventListener('pointermove', (event) => {
@@ -386,6 +420,18 @@ async function bootstrap() {
       elements.penToolButton.addEventListener('click', () => setAnnotationTool('pen'));
     }
     elements.panToolButton.addEventListener('click', () => setAnnotationTool('pan'));
+    elements.annotationEraserButton.addEventListener('click', () => {
+      setAnnotationTool(state.annotations.tool === 'eraser' ? 'pen' : 'eraser');
+    });
+    // 普通标注板擦光标跟踪（文档级，绕过 canvas 指针捕获）
+    document.addEventListener('pointermove', (event) => {
+      if (state.annotations.tool !== 'eraser') return;
+      elements.annotationEraserCursor.style.left = event.clientX + 'px';
+      elements.annotationEraserCursor.style.top = event.clientY + 'px';
+      const size = state.annotations.eraserWidth;
+      elements.annotationEraserCursor.style.width = size + 'px';
+      elements.annotationEraserCursor.style.height = size + 'px';
+    });
     elements.undoAnnotationButton.addEventListener('click', undoAnnotationStroke);
     elements.clearAnnotationButton.addEventListener('click', clearAnnotations);
     elements.fullscreenButton.addEventListener('click', toggleFullscreen);
@@ -413,7 +459,29 @@ async function bootstrap() {
     if (elements.selectCoursewareButton) elements.selectCoursewareButton.addEventListener('click', showTeacherCoursewarePicker);
     document.addEventListener('fullscreenchange', updateFullscreenButton);
     elements.annotationColorButtons.forEach((button) => {
-      button.addEventListener('click', () => setAnnotationColor(button.dataset.color));
+      button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menu = elements.annotationModeMenu;
+        if (button.dataset.color === state.annotations.currentColor && menu.classList.contains('is-open')) {
+          menu.classList.remove('is-open');
+          return;
+        }
+        setAnnotationColor(button.dataset.color);
+        menu.classList.add('is-open');
+      });
+    });
+    elements.annotationModeMenu.querySelectorAll('.toolbar-dropdown-item').forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setAnnotationMode(item.dataset.mode);
+        elements.annotationModeMenu.classList.remove('is-open');
+      });
+    });
+    document.addEventListener('click', (e) => {
+      const dropdown = elements.annotationColorsDropdown;
+      if (dropdown && !dropdown.contains(e.target)) {
+        elements.annotationModeMenu.classList.remove('is-open');
+      }
     });
     updateAnnotationButtons();
     updateAnnotationColorButtons();
@@ -449,6 +517,7 @@ function setupStudentRoller() {
   const btn = document.getElementById('rollStudentButton');
   const result = document.getElementById('rollStudentResult');
   const big = document.getElementById('rollStudentBig');
+  const bigNum = big.querySelector('.roll-student-big-num');
   let rolling = false;
   let timer = null;
   // 班级人数，首次使用抽学号时设置，默认 50
@@ -570,12 +639,13 @@ function setupStudentRoller() {
   function startRoll() {
     if (rolling) return;
     rolling = true;
+    btn.disabled = true;
     const startTime = Date.now();
 
     result.classList.remove('done');
     result.classList.add('rolling');
     // 居中超大显示开始滚动
-    big.textContent = '??';
+    bigNum.textContent = '??';
     big.classList.remove('done');
     big.classList.add('rolling', 'show');
 
@@ -587,7 +657,7 @@ function setupStudentRoller() {
         const final = Math.floor(Math.random() * studentCount) + 1;
         const text = String(final).padStart(2, '0');
         result.textContent = text;
-        big.textContent = text;
+        bigNum.textContent = text;
         result.classList.add('done');
         big.classList.add('done');
         // 抽完后缩回右下角（保留短暂展示再隐藏）
@@ -595,12 +665,13 @@ function setupStudentRoller() {
           big.classList.remove('show');
         }, 1400);
         rolling = false;
+        btn.disabled = false;
         return;
       }
       const n = Math.floor(Math.random() * studentCount) + 1;
       const text = String(n).padStart(2, '0');
       result.textContent = text;
-      big.textContent = text;
+      bigNum.textContent = text;
       const interval = elapsed < 200 ? 50 : elapsed < 800 ? 100 : elapsed < 1400 ? 180 : 280;
       timer = setTimeout(tick, interval);
     };
@@ -1786,10 +1857,13 @@ function beginAnnotationStroke(event) {
   }
   event.preventDefault();
   elements.annotationCanvas.setPointerCapture(event.pointerId);
+  const isEraser = state.annotations.tool === 'eraser';
   state.annotations.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
-    color: state.annotations.currentColor,
-    width: 6,
+    color: isEraser ? '#000' : state.annotations.currentColor,
+    width: isEraser ? state.annotations.eraserWidth : 4,
+    isEraser: isEraser,
+    mode: isEraser ? null : state.annotations.mode,
     points: [point]
   });
   drawAnnotations();
@@ -1853,6 +1927,8 @@ function finishAnnotationStroke(event) {
     state.annotations.strokes.push({
       color: stroke.color,
       width: stroke.width,
+      isEraser: !!stroke.isEraser,
+      mode: stroke.mode,
       points: stroke.points
     });
   }
@@ -2033,6 +2109,13 @@ function resetAnnotations() {
   updateAnnotationButtons();
 }
 
+function updateModeMenuIconColor(menu, color) {
+  if (!menu) return;
+  menu.querySelectorAll('svg line').forEach((line) => {
+    line.setAttribute('stroke', color);
+  });
+}
+
 function setAnnotationColor(color) {
   if (!color) {
     return;
@@ -2040,24 +2123,37 @@ function setAnnotationColor(color) {
   state.annotations.currentColor = color;
   setAnnotationTool('pen');
   updateAnnotationColorButtons();
+  updateModeMenuIconColor(elements.annotationModeMenu, color);
+}
+
+function setAnnotationMode(mode) {
+  state.annotations.mode = mode;
 }
 
 function setAnnotationTool(tool) {
-  state.annotations.tool = tool === 'pan' ? 'pan' : 'pen';
+  state.annotations.tool = (tool === 'pan' || tool === 'eraser') ? tool : 'pen';
   updateAnnotationToolButtons();
 }
 
 function updateAnnotationToolButtons() {
   const isPan = state.annotations.tool === 'pan';
+  const isEraser = state.annotations.tool === 'eraser';
   // 画笔按钮已整合至颜色选择交互中
   if (elements.penToolButton) elements.penToolButton.hidden = true;
   elements.panToolButton.classList.toggle('is-active', isPan);
+  elements.annotationEraserButton.classList.toggle('is-active', isEraser);
   elements.annotationCanvas.classList.toggle('is-pan-tool', isPan);
-  // 手型模式只移除调色盘选中圈，调色盘保持可见
-  if (isPan) {
+  elements.annotationCanvas.classList.toggle('is-eraser', isEraser);
+  // 非画笔模式只移除调色盘选中圈，调色盘保持可见
+  if (isPan || isEraser) {
     elements.annotationColorButtons.forEach((btn) => btn.classList.remove('is-active'));
   } else {
     updateAnnotationColorButtons();
+  }
+  if (!isEraser) {
+    elements.annotationEraserCursor.style.display = 'none';
+  } else {
+    elements.annotationEraserCursor.style.display = 'block';
   }
 }
 
@@ -2115,11 +2211,29 @@ function drawAnnotations() {
 
 function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
   context.save();
-  context.strokeStyle = stroke.color;
-  context.fillStyle = stroke.color;
-  context.lineWidth = stroke.width;
-  context.lineCap = 'round';
-  context.lineJoin = 'round';
+  if (stroke.isEraser) {
+    // 标注画布透明（叠在视频上），板擦用 destination-out 真正擦除下层笔画
+    context.globalCompositeOperation = 'destination-out';
+    context.strokeStyle = '#000';
+    context.fillStyle = '#000';
+    context.lineWidth = stroke.width;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+  } else {
+    context.strokeStyle = stroke.color;
+    context.fillStyle = stroke.color;
+    context.lineWidth = stroke.width;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    if (stroke.mode === 'dashed') {
+      context.setLineDash([stroke.width * 2.2, stroke.width * 1.6]);
+    } else if (stroke.mode === 'dashdot') {
+      context.setLineDash([stroke.width * 2.2, stroke.width * 1.2, 0.1, stroke.width * 1.2]);
+    } else if (stroke.mode === 'highlighter') {
+      context.lineWidth = stroke.width * 5;
+      context.globalAlpha = 0.45;
+    }
+  }
 
   let segmentStarted = false;
   let visiblePoints = 0;
@@ -2155,7 +2269,7 @@ function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
       .find((point) => point.visible);
     if (onlyPoint) {
       context.beginPath();
-      context.arc(onlyPoint.x, onlyPoint.y, stroke.width / 2, 0, Math.PI * 2);
+      context.arc(onlyPoint.x, onlyPoint.y, (stroke.mode === 'highlighter' ? stroke.width * 5 : stroke.width) / 2, 0, Math.PI * 2);
       context.fill();
     }
   }
@@ -2528,6 +2642,7 @@ function beginBlackboardStroke(event) {
     color: isEraser ? '#2c2f36' : state.blackboard.currentColor,
     width: isEraser ? state.blackboard.eraserWidth : 6,
     isEraser: isEraser,
+    mode: isEraser ? null : state.blackboard.mode,
     points: [point]
   });
   renderBlackboard();
@@ -2604,6 +2719,7 @@ function finishBlackboardStroke(event) {
       color: stroke.color,
       width: stroke.width,
       isEraser: !!stroke.isEraser,
+      mode: stroke.mode,
       points: stroke.points
     });
   }
@@ -2679,6 +2795,16 @@ function drawBlackboardStroke(ctx, stroke) {
   ctx.lineWidth = stroke.width;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+  if (!stroke.isEraser) {
+    if (stroke.mode === 'dashed') {
+      ctx.setLineDash([stroke.width * 2.2, stroke.width * 1.6]);
+    } else if (stroke.mode === 'dashdot') {
+      ctx.setLineDash([stroke.width * 2.2, stroke.width * 1.2, 0.1, stroke.width * 1.2]);
+    } else if (stroke.mode === 'highlighter') {
+      ctx.lineWidth = stroke.width * 5;
+      ctx.globalAlpha = 0.45;
+    }
+  }
 
   ctx.beginPath();
   ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
@@ -2689,7 +2815,8 @@ function drawBlackboardStroke(ctx, stroke) {
 
   if (stroke.points.length === 1) {
     ctx.beginPath();
-    ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.width / 2, 0, Math.PI * 2);
+    const r = (!stroke.isEraser && stroke.mode === 'highlighter') ? stroke.width * 5 : stroke.width;
+    ctx.arc(stroke.points[0].x, stroke.points[0].y, r / 2, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -2722,7 +2849,7 @@ function flushBlackboardActiveStrokes() {
   if (!page) return;
   for (const stroke of state.blackboard.activeStrokes.values()) {
     if (stroke.points.length > 0) {
-      page.strokes.push({ color: stroke.color, width: stroke.width, isEraser: !!stroke.isEraser, points: stroke.points });
+      page.strokes.push({ color: stroke.color, width: stroke.width, isEraser: !!stroke.isEraser, mode: stroke.mode, points: stroke.points });
     }
   }
   state.blackboard.activeStrokes.clear();
@@ -2970,12 +3097,17 @@ function endBlackboardPinch() {
   }
 }
 
+function setBlackboardMode(mode) {
+  state.blackboard.mode = mode;
+}
+
 function setBlackboardColor(color) {
   if (!color) return;
   state.blackboard.currentColor = color;
   // 选颜色自动切回画笔
   setBlackboardTool('pen');
   updateBlackboardColorButtons();
+  updateModeMenuIconColor(elements.blackboardModeMenu, color);
 }
 
 function updateBlackboardColorButtons() {
@@ -3261,6 +3393,7 @@ function deepCopyStrokesForSelection() {
     color: page.strokes[i].color,
     width: page.strokes[i].width,
     isEraser: !!page.strokes[i].isEraser,
+    mode: page.strokes[i].mode,
     points: page.strokes[i].points.map(p => ({ x: p.x, y: p.y })),
   }));
 }
@@ -3290,6 +3423,7 @@ function commitDragSelection(snapshot) {
       color: s.color,
       width: s.width,
       isEraser: !!s.isEraser,
+      mode: s.mode,
       points: s.points.map(p => ({ x: p.x, y: p.y })),
     });
   }

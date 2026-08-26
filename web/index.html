@@ -78,14 +78,32 @@
         <video id="remoteVideo" autoplay playsinline muted></video>
         <canvas class="courseware-canvas" id="coursewareCanvas" hidden></canvas>
         <canvas class="annotation-canvas" id="annotationCanvas"></canvas>
+        <div class="annotation-eraser-cursor" id="annotationEraserCursor"></div>
         <div class="annotation-toolbar" id="annotationToolbar" aria-label="画笔工具">
           <button class="annotation-mode" id="panToolButton" type="button" hidden>手型</button>
-          <div class="annotation-colors" id="annotationColors" aria-label="画笔颜色">
-            <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
-            <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
-            <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
-            <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
-            <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
+          <button class="annotation-button annotation-eraser-btn" id="annotationEraserButton" type="button">板擦</button>
+          <div class="annotation-colors-dropdown" id="annotationColorsDropdown">
+            <div class="annotation-colors" id="annotationColors" aria-label="画笔颜色">
+              <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
+              <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
+              <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
+              <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
+              <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
+            </div>
+            <div class="toolbar-dropdown-menu annotation-mode-menu" id="annotationModeMenu">
+              <button class="toolbar-dropdown-item" type="button" data-mode="solid" title="实线" aria-label="实线">
+                <svg viewBox="0 0 48 12" width="48" height="12" aria-hidden="true"><line x1="4" y1="6" x2="44" y2="6" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+              </button>
+              <button class="toolbar-dropdown-item" type="button" data-mode="dashed" title="虚线" aria-label="虚线">
+                <svg viewBox="0 0 48 12" width="48" height="12" aria-hidden="true"><line x1="4" y1="6" x2="44" y2="6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="8 6"/></svg>
+              </button>
+              <button class="toolbar-dropdown-item" type="button" data-mode="dashdot" title="点划线" aria-label="点划线">
+                <svg viewBox="0 0 48 12" width="48" height="12" aria-hidden="true"><line x1="4" y1="6" x2="44" y2="6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="8 4 0.5 4"/></svg>
+              </button>
+              <button class="toolbar-dropdown-item" type="button" data-mode="highlighter" title="荧光笔" aria-label="荧光笔">
+                <svg viewBox="0 0 48 12" width="48" height="12" aria-hidden="true"><line x1="4" y1="6" x2="44" y2="6" stroke="currentColor" stroke-width="9" stroke-linecap="round" opacity="0.5"/></svg>
+              </button>
+            </div>
           </div>
           <button class="annotation-button" id="undoAnnotationButton" type="button">撤销</button>
           <button class="annotation-button" id="clearAnnotationButton" type="button">清空</button>
@@ -109,7 +127,7 @@
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
         <span class="relay-badge" id="relayBadge" hidden>中继模式</span>
-        <div class="roll-student-big" id="rollStudentBig" aria-hidden="true">??</div>
+        <div class="roll-student-big" id="rollStudentBig" aria-hidden="true"><div class="roll-student-big-bg"></div><span class="roll-student-big-num">??</span></div>
       </section>
 
       <!-- 视频播放器覆盖层 -->
@@ -172,12 +190,28 @@
           <button class="annotation-button blackboard-select-btn" id="blackboardSelectButton" type="button">圈选</button>
           <button class="annotation-button blackboard-delete-sel-btn" id="blackboardDeleteSelButton" type="button" style="display:none">删除</button>
           <div class="toolbar-divider"></div>
-          <div class="annotation-colors" id="blackboardColors" aria-label="黑板颜色">
-            <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
-            <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
-            <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
-            <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
-            <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
+          <div class="annotation-colors-dropdown" id="blackboardColorsDropdown">
+            <div class="annotation-colors" id="blackboardColors" aria-label="黑板颜色">
+              <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
+              <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
+              <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
+              <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
+              <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
+            </div>
+            <div class="toolbar-dropdown-menu annotation-mode-menu" id="blackboardModeMenu">
+              <button class="toolbar-dropdown-item" type="button" data-mode="solid" title="实线" aria-label="实线">
+                <svg viewBox="0 0 48 12" width="48" height="12" aria-hidden="true"><line x1="4" y1="6" x2="44" y2="6" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+              </button>
+              <button class="toolbar-dropdown-item" type="button" data-mode="dashed" title="虚线" aria-label="虚线">
+                <svg viewBox="0 0 48 12" width="48" height="12" aria-hidden="true"><line x1="4" y1="6" x2="44" y2="6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="8 6"/></svg>
+              </button>
+              <button class="toolbar-dropdown-item" type="button" data-mode="dashdot" title="点划线" aria-label="点划线">
+                <svg viewBox="0 0 48 12" width="48" height="12" aria-hidden="true"><line x1="4" y1="6" x2="44" y2="6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="8 4 0.5 4"/></svg>
+              </button>
+              <button class="toolbar-dropdown-item" type="button" data-mode="highlighter" title="荧光笔" aria-label="荧光笔">
+                <svg viewBox="0 0 48 12" width="48" height="12" aria-hidden="true"><line x1="4" y1="6" x2="44" y2="6" stroke="currentColor" stroke-width="9" stroke-linecap="round" opacity="0.5"/></svg>
+              </button>
+            </div>
           </div>
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="blackboardNewPageButton" type="button">+新页</button>
