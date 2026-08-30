@@ -14,7 +14,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 3000);
 const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
-  process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
+  process.env.PUBLIC_BASE_URL || `http://ai.nbsdszx.cn${PATH_PREFIX}`
 );
 const DEFAULT_APP_VERSION = process.env.APP_VERSION || '1.4.5-20260822';
 const DEFAULT_WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.22';

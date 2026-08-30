@@ -19,7 +19,7 @@
             <div class="code-right">
               <img class="qr-code" id="apkQr" alt="APP 下载二维码">
               <div class="download-hint">请扫描二维码安装APP</div>
-              <a class="download-apk-btn" id="downloadApkButton" hidden>无法扫码？点击下载安卓apk文件</a>
+              <a class="download-apk-btn" id="downloadApkButton" hidden>点击下载安卓APP</a>
               <a class="download-windows-btn" id="downloadWindowsButton" hidden>下载 Windows 投屏程序</a>
               <div class="platform-note">支持安卓/鸿蒙和 Windows 平台</div>
             </div>
@@ -27,9 +27,9 @@
           <div class="code-actions">
             <button class="action-btn action-btn-teach" id="directTeachButton">打开课件</button>
             <button class="action-btn action-btn-blackboard" id="quickBlackboardButton">电子黑板</button>
-            <a class="action-btn action-btn-exam" href="https://exam.fclassroom.com/login?redirect=%2Fhome" target="_blank" rel="noopener">考试平台</a>
+            <a class="action-btn action-btn-exam" href="https://teacher.chenji100.com/login" target="_blank" rel="noopener">晨计平台</a>
             <a class="action-btn action-btn-admin" href="./admin.html">后台管理</a>
-            <button class="action-btn action-btn-fullscreen" id="fullscreenButton">全屏</button>
+            <button class="action-btn action-btn-fullscreen" id="homeFullscreenButton">全屏</button>
           </div>
         </div>
         <div class="status-text" id="statusText">正在创建课堂...</div>
@@ -80,7 +80,9 @@
         <canvas class="annotation-canvas" id="annotationCanvas"></canvas>
         <div class="annotation-eraser-cursor" id="annotationEraserCursor"></div>
         <div class="annotation-toolbar" id="annotationToolbar" aria-label="画笔工具">
-          <button class="annotation-mode" id="panToolButton" type="button" hidden>手型</button>
+          <button class="annotation-mode" id="panToolButton" type="button" title="手型" aria-label="手型" hidden>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+          </button>
           <button class="annotation-button annotation-eraser-btn" id="annotationEraserButton" type="button">板擦</button>
           <div class="annotation-colors-dropdown" id="annotationColorsDropdown">
             <div class="annotation-colors" id="annotationColors" aria-label="画笔颜色">
@@ -105,13 +107,12 @@
               </button>
             </div>
           </div>
+          <button class="annotation-button line-toggle-btn" id="annotationLineToggle" type="button" title="直线/曲线切换" aria-label="直线/曲线切换">直线</button>
           <button class="annotation-button" id="undoAnnotationButton" type="button">撤销</button>
           <button class="annotation-button" id="clearAnnotationButton" type="button">清空</button>
           <div class="toolbar-divider"></div>
           <button class="nav-page-button" id="prevPageButton" type="button" hidden>上一页</button>
           <button class="nav-page-button" id="nextPageButton" type="button" hidden>下一页</button>
-          <button class="nav-page-button" id="selectCoursewareButton" type="button" hidden>课件列表</button>
-          <button class="annotation-button" id="fullscreenButton" type="button">全屏</button>
           <div class="toolbar-dropdown" id="coursewareDropdown" hidden>
             <button class="annotation-button toolbar-dropdown-btn" id="coursewareMenuButton" type="button">课件</button>
             <div class="toolbar-dropdown-menu" id="coursewareDropdownMenu">
@@ -123,6 +124,7 @@
           <button class="annotation-button" id="rollStudentButton" type="button">抽学号</button>
           <span class="roll-student-result" id="rollStudentResult">??</span>
           <div class="toolbar-divider"></div>
+          <button class="annotation-button" id="annotationFullscreenButton" type="button">全屏</button>
           <button class="annotation-button blackboard-toggle-btn" id="blackboardToggleButton" type="button">黑板</button>
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
@@ -186,7 +188,9 @@
           <button class="annotation-button" id="blackboardUndoButton" type="button">撤销</button>
           <button class="annotation-button" id="blackboardClearButton" type="button">清屏</button>
           <button class="annotation-button blackboard-eraser-btn" id="blackboardEraserButton" type="button">板擦</button>
-          <button class="annotation-button blackboard-hand-btn" id="blackboardHandButton" type="button">手型</button>
+          <button class="annotation-button blackboard-hand-btn" id="blackboardHandButton" type="button" title="手型" aria-label="手型">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+          </button>
           <button class="annotation-button blackboard-select-btn" id="blackboardSelectButton" type="button">圈选</button>
           <button class="annotation-button blackboard-delete-sel-btn" id="blackboardDeleteSelButton" type="button" style="display:none">删除</button>
           <div class="toolbar-divider"></div>
@@ -213,6 +217,7 @@
               </button>
             </div>
           </div>
+          <button class="annotation-button line-toggle-btn" id="blackboardLineToggle" type="button" title="直线/曲线切换" aria-label="直线/曲线切换">直线</button>
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="blackboardNewPageButton" type="button">+新页</button>
           <button class="annotation-button" id="blackboardDelPageButton" type="button">删页</button>
@@ -220,6 +225,9 @@
           <button class="annotation-button" id="blackboardCloseButton" type="button">关闭黑板</button>
         </div>
       </div>
+
+      <!-- 角度/长度指示器：置于 videoView 与 blackboardOverlay 同级，确保黑板模式下也能显示 -->
+      <div class="angle-indicator" id="angleIndicator"><span id="angleValue">0°</span><span class="angle-sep">·</span><span id="lengthValue">0px</span></div>
     </main>
 
     <!-- 左上角当前时间 -->
@@ -238,6 +246,6 @@
       window.pdfjsLib = pdfjsLib;
       pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs?v=5.4.530';
     </script>
-    <script defer src="./app.js?v=20260822a"></script>
+    <script defer src="./app.js?v=20260830a"></script>
   </body>
 </html>

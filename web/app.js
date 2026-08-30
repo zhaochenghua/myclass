@@ -29,6 +29,7 @@ const state = {
     currentColor: '#ff4d6d',
     tool: 'pen',
     mode: 'solid',  // solid | dashed | dashdot | highlighter
+    lineMode: false,  // true=直线 false=曲线（与线型正交）
     eraserWidth: 40  // 板擦直径(px)
   },
   blackboard: {
@@ -40,6 +41,7 @@ const state = {
     eraserWidth: 40,           // 板擦半径(px)
     currentColor: '#ff4d6d',   // 黑板专用颜色（默认红色）
     mode: 'solid',             // solid | dashed | dashdot | highlighter
+    lineMode: false,           // true=直线 false=曲线（与线型正交）
     // 圈选系统
     selection: {
       lassoPoints: [],          // 正在绘制的套索多边形点
@@ -121,13 +123,17 @@ const elements = {
   panToolButton: document.getElementById('panToolButton'),
   annotationEraserButton: document.getElementById('annotationEraserButton'),
   annotationEraserCursor: document.getElementById('annotationEraserCursor'),
+  angleIndicator: document.getElementById('angleIndicator'),
+  angleValue: document.getElementById('angleValue'),
+  lengthValue: document.getElementById('lengthValue'),
   annotationColorsContainer: document.getElementById('annotationColors'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
   clearAnnotationButton: document.getElementById('clearAnnotationButton'),
   annotationColorButtons: Array.from(document.querySelectorAll('.annotation-color')),
   annotationColorsDropdown: document.getElementById('annotationColorsDropdown'),
   annotationModeMenu: document.getElementById('annotationModeMenu'),
-  fullscreenButton: document.getElementById('fullscreenButton'),
+  annotationLineToggle: document.getElementById('annotationLineToggle'),
+  fullscreenButton: document.getElementById('annotationFullscreenButton'),
   coursewareDropdown: document.getElementById('coursewareDropdown'),
   coursewareMenuButton: document.getElementById('coursewareMenuButton'),
   coursewareDropdownMenu: document.getElementById('coursewareDropdownMenu'),
@@ -135,7 +141,6 @@ const elements = {
   switchCoursewareMenuItem: document.getElementById('switchCoursewareMenuItem'),
   prevPageButton: document.getElementById('prevPageButton'),
   nextPageButton: document.getElementById('nextPageButton'),
-  selectCoursewareButton: document.getElementById('selectCoursewareButton'),
   downloadApkButton: document.getElementById('downloadApkButton'),
   downloadWindowsButton: document.getElementById('downloadWindowsButton'),
   directTeachButton: document.getElementById('directTeachButton'),
@@ -151,7 +156,7 @@ const elements = {
   teacherPassword: document.getElementById('teacherPassword'),
   teacherLoginCancel: document.getElementById('teacherLoginCancel'),
   teacherLoginSubmit: document.getElementById('teacherLoginSubmit'),
-  homeFullscreenButton: document.getElementById('fullscreenButton'),
+  homeFullscreenButton: document.getElementById('homeFullscreenButton'),
   quickBlackboardButton: document.getElementById('quickBlackboardButton'),
   blackboardOverlay: document.getElementById('blackboardOverlay'),
   blackboardCanvas: document.getElementById('blackboardCanvas'),
@@ -173,6 +178,7 @@ const elements = {
   blackboardColorsContainer: document.getElementById('blackboardColors'),
   blackboardColorsDropdown: document.getElementById('blackboardColorsDropdown'),
   blackboardModeMenu: document.getElementById('blackboardModeMenu'),
+  blackboardLineToggle: document.getElementById('blackboardLineToggle'),
   // 视频播放器
   videoPlayerOverlay: document.getElementById('videoPlayerOverlay'),
   coursewareVideo: document.getElementById('coursewareVideo'),
@@ -209,6 +215,8 @@ function checkBrowserCompatibility() {
 }
 
 async function bootstrap() {
+  // 屏蔽右键菜单，避免上课时误触弹出浏览器菜单
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
   // 浏览器兼容性检测
   const compatIssues = checkBrowserCompatibility();
   if (compatIssues.length > 0) {
@@ -221,42 +229,9 @@ async function bootstrap() {
     const apkVersion = state.config?.apkVersion || 'latest';
     elements.apkQr.src = `./api/apk-qrcode.svg?v=${encodeURIComponent(apkVersion)}`;
     elements.downloadHint.textContent = `APP v${apkVersion}`;
-    if (state.config?.apkUrl) {
-      elements.downloadApkButton.href = '#';
+    if (state.config?.apkUrl && elements.downloadApkButton) {
+      elements.downloadApkButton.href = state.config.apkUrl;
       elements.downloadApkButton.style.display = '';
-      elements.downloadApkButton.addEventListener('click', async (e) => {
-        e.preventDefault();
-        elements.downloadApkButton.textContent = '正在下载...';
-        elements.downloadApkButton.style.pointerEvents = 'none';
-        try {
-          const response = await fetch(state.config.apkUrl);
-          const total = Number(response.headers.get('content-length')) || 0;
-          const reader = response.body.getReader();
-          const chunks = [];
-          let loaded = 0;
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            loaded += value.length;
-            if (total) {
-              const pct = Math.round(loaded / total * 100);
-              elements.downloadApkButton.textContent = `下载中 ${pct}%`;
-            }
-          }
-          elements.downloadApkButton.textContent = '下载完成';
-          const blob = new Blob(chunks);
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'myclass.apk';
-          a.click();
-          URL.revokeObjectURL(url);
-        } catch {
-          elements.downloadApkButton.textContent = '下载失败，请重试';
-          elements.downloadApkButton.style.pointerEvents = 'auto';
-        }
-      });
     }
     if (state.config?.windowsUrl && elements.downloadWindowsButton) {
       elements.downloadWindowsButton.href = state.config.windowsUrl;
@@ -403,6 +378,16 @@ async function bootstrap() {
         elements.blackboardModeMenu.classList.remove('is-open');
       }
     });
+    // 直线/曲线切换按钮
+    elements.annotationLineToggle.addEventListener('click', () => {
+      state.annotations.lineMode = !state.annotations.lineMode;
+      updateLineToggleButtons();
+    });
+    elements.blackboardLineToggle.addEventListener('click', () => {
+      state.blackboard.lineMode = !state.blackboard.lineMode;
+      updateLineToggleButtons();
+    });
+    updateLineToggleButtons();
     // 初始化模式菜单图标颜色为当前选中颜色
     updateModeMenuIconColor(elements.annotationModeMenu, state.annotations.currentColor);
     updateModeMenuIconColor(elements.blackboardModeMenu, state.blackboard.currentColor);
@@ -456,7 +441,6 @@ async function bootstrap() {
     });
     elements.prevPageButton.addEventListener('click', () => navigatePage(-1));
     elements.nextPageButton.addEventListener('click', () => navigatePage(1));
-    if (elements.selectCoursewareButton) elements.selectCoursewareButton.addEventListener('click', showTeacherCoursewarePicker);
     document.addEventListener('fullscreenchange', updateFullscreenButton);
     elements.annotationColorButtons.forEach((button) => {
       button.addEventListener('click', (e) => {
@@ -1174,7 +1158,6 @@ function showCoursewareViewForVideo(info) {
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
-  if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
   if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
 
   // 先绑定事件（内部会 cloneNode 替换元素），再设置 src 避免被 cloneNode(false) 丢弃
@@ -1462,7 +1445,6 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   try { elements.panToolButton.hidden = true; } catch {}
   try { elements.prevPageButton.hidden = true; } catch {}
   try { elements.nextPageButton.hidden = true; } catch {}
-  if (elements.selectCoursewareButton) try { elements.selectCoursewareButton.hidden = true; } catch {}
   try { elements.remoteVideo.hidden = false; } catch {}
 
   // 2. 重置状态
@@ -1858,13 +1840,16 @@ function beginAnnotationStroke(event) {
   event.preventDefault();
   elements.annotationCanvas.setPointerCapture(event.pointerId);
   const isEraser = state.annotations.tool === 'eraser';
+  const isLine = !isEraser && state.annotations.lineMode;
   state.annotations.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
     color: isEraser ? '#000' : state.annotations.currentColor,
     width: isEraser ? state.annotations.eraserWidth : 4,
     isEraser: isEraser,
     mode: isEraser ? null : state.annotations.mode,
-    points: [point]
+    lineMode: isLine,
+    points: [point],
+    startScreen: isLine ? { x: event.clientX, y: event.clientY } : null
   });
   drawAnnotations();
 }
@@ -1901,7 +1886,14 @@ function continueAnnotationStroke(event) {
   if (lastPoint && Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 0.001) {
     return;
   }
-  stroke.points.push(point);
+  if (stroke.lineMode) {
+    // 直线模式：只保留起点与当前点，水平/竖直自动吸附，实时显示长度与夹角
+    const { storagePoint, screenPoint } = computeLineSnap(stroke.points[0], point, stroke.startScreen, event);
+    stroke.points = [stroke.points[0], storagePoint];
+    updateAngleIndicator(stroke.startScreen, screenPoint);
+  } else {
+    stroke.points.push(point);
+  }
   drawAnnotations();
 }
 
@@ -1929,11 +1921,13 @@ function finishAnnotationStroke(event) {
       width: stroke.width,
       isEraser: !!stroke.isEraser,
       mode: stroke.mode,
+      lineMode: !!stroke.lineMode,
       points: stroke.points
     });
   }
   state.annotations.activeStrokes.delete(event.pointerId);
   runCatching(() => elements.annotationCanvas.releasePointerCapture(event.pointerId));
+  if (stroke.lineMode) hideAngleIndicator();
   drawAnnotations();
   updateAnnotationButtons();
 }
@@ -2128,6 +2122,17 @@ function setAnnotationColor(color) {
 
 function setAnnotationMode(mode) {
   state.annotations.mode = mode;
+}
+
+function updateLineToggleButtons() {
+  if (elements.annotationLineToggle) {
+    elements.annotationLineToggle.textContent = state.annotations.lineMode ? '曲线' : '直线';
+    elements.annotationLineToggle.classList.toggle('is-active', state.annotations.lineMode);
+  }
+  if (elements.blackboardLineToggle) {
+    elements.blackboardLineToggle.textContent = state.blackboard.lineMode ? '曲线' : '直线';
+    elements.blackboardLineToggle.classList.toggle('is-active', state.blackboard.lineMode);
+  }
 }
 
 function setAnnotationTool(tool) {
@@ -2352,7 +2357,6 @@ function showJoinView() {
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
-  if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = true;
 }
 
 function showVideoView() {
@@ -2383,7 +2387,6 @@ function showCoursewareView() {
   elements.panToolButton.hidden = false;
   elements.prevPageButton.hidden = false;
   elements.nextPageButton.hidden = false;
-  if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = !state.directTeach;
   elements.videoStatus.hidden = true;
   updatePageNavButtons();
   resizeAnnotationCanvas();
@@ -2498,7 +2501,6 @@ async function loadTeacherCourseware() {
 
 function showPicker() {
   elements.coursewarePicker.hidden = false;
-  if (elements.selectCoursewareButton) elements.selectCoursewareButton.hidden = false;
 }
 
 function showTeacherCoursewarePicker() {
@@ -2637,13 +2639,16 @@ function beginBlackboardStroke(event) {
   elements.blackboardCanvas.setPointerCapture(event.pointerId);
 
   const isEraser = state.blackboard.tool === 'eraser';
+  const isLine = !isEraser && state.blackboard.lineMode;
   state.blackboard.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
     color: isEraser ? '#2c2f36' : state.blackboard.currentColor,
     width: isEraser ? state.blackboard.eraserWidth : 6,
     isEraser: isEraser,
     mode: isEraser ? null : state.blackboard.mode,
-    points: [point]
+    lineMode: isLine,
+    points: [point],
+    startScreen: isLine ? { x: event.clientX, y: event.clientY } : null
   });
   renderBlackboard();
 }
@@ -2683,7 +2688,14 @@ function continueBlackboardStroke(event) {
   if (!point) return;
   const lastPoint = stroke.points.at(-1);
   if (lastPoint && Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 0.001) return;
-  stroke.points.push(point);
+  if (stroke.lineMode) {
+    // 直线模式：只保留起点与当前点，水平/竖直自动吸附，实时显示长度与夹角
+    const { storagePoint, screenPoint } = computeLineSnap(stroke.points[0], point, stroke.startScreen, event);
+    stroke.points = [stroke.points[0], storagePoint];
+    updateAngleIndicator(stroke.startScreen, screenPoint);
+  } else {
+    stroke.points.push(point);
+  }
   renderBlackboard();
 }
 
@@ -2720,14 +2732,58 @@ function finishBlackboardStroke(event) {
       width: stroke.width,
       isEraser: !!stroke.isEraser,
       mode: stroke.mode,
+      lineMode: !!stroke.lineMode,
       points: stroke.points
     });
   }
   state.blackboard.activeStrokes.delete(event.pointerId);
   runCatching(() => elements.blackboardCanvas.releasePointerCapture(event.pointerId));
+  if (stroke.lineMode) hideAngleIndicator();
 
   renderBlackboard();
   updateBlackboardPageIndicator();
+}
+
+const LINE_SNAP_THRESHOLD = 5; // 水平/竖直吸附阈值（度）
+
+// 直线吸附：根据屏幕角度判断是否吸附到水平/竖直，返回存储坐标点和屏幕坐标点
+function computeLineSnap(startPoint, point, startScreen, event) {
+  const dx = event.clientX - startScreen.x;
+  const dy = event.clientY - startScreen.y;
+  const angle = Math.atan2(-dy, dx) * 180 / Math.PI;
+  let storagePoint = point;
+  let screenPoint = { x: event.clientX, y: event.clientY };
+  // 水平吸附：角度接近 0° 或 ±180°
+  if (Math.abs(angle) < LINE_SNAP_THRESHOLD || Math.abs(angle) > 180 - LINE_SNAP_THRESHOLD) {
+    storagePoint = { x: point.x, y: startPoint.y };
+    screenPoint = { x: event.clientX, y: startScreen.y };
+  } else if (Math.abs(Math.abs(angle) - 90) < LINE_SNAP_THRESHOLD) {
+    // 竖直吸附：角度接近 ±90°
+    storagePoint = { x: startPoint.x, y: point.y };
+    screenPoint = { x: startScreen.x, y: event.clientY };
+  }
+  return { storagePoint, screenPoint };
+}
+
+function updateAngleIndicator(startScreen, screenPoint) {
+  if (!startScreen || !elements.angleIndicator) return;
+  const dx = screenPoint.x - startScreen.x;
+  const dy = screenPoint.y - startScreen.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 2) return;
+  // 与水平方向的夹角（屏幕 y 轴向下，取负使向上为正），范围 -180°~180°
+  const angle = Math.atan2(-dy, dx) * 180 / Math.PI;
+  elements.angleValue.textContent = `${angle.toFixed(1)}°`;
+  elements.lengthValue.textContent = `${Math.round(length)}px`;
+  elements.angleIndicator.style.left = `${screenPoint.x}px`;
+  elements.angleIndicator.style.top = `${screenPoint.y}px`;
+  elements.angleIndicator.classList.add('is-visible');
+}
+
+function hideAngleIndicator() {
+  if (elements.angleIndicator) {
+    elements.angleIndicator.classList.remove('is-visible');
+  }
 }
 
 function blackboardPointerToPoint(event) {
