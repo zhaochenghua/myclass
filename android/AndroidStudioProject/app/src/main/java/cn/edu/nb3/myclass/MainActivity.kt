@@ -31,6 +31,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -2094,14 +2095,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
             rightPanel.addView(pageRow)
-            rightPanel.addView(secondaryButton("跳转到指定页").apply {
-                isEnabled = !isUploading && roomJoined
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(58)
-                ).apply { topMargin = dp(12) }
-                setOnClickListener { showJumpToPageDialog() }
-            })
+            rightPanel.addView(buildCoursewareJumpRow(isUploading))
             if (isUploading) {
                 rightPanel.addView(secondaryButton("返回菜单").apply {
                     layoutParams = LinearLayout.LayoutParams(
@@ -2138,14 +2132,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(titleText("播放课件", 28f))
             root.addView(statusText)
             root.addView(pageRow)
-            root.addView(secondaryButton("跳转到指定页").apply {
-                isEnabled = !isUploading && roomJoined
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(58)
-                ).apply { topMargin = dp(12) }
-                setOnClickListener { showJumpToPageDialog() }
-            })
+            root.addView(buildCoursewareJumpRow(isUploading))
 
             if (isUploading) {
                 root.addView(secondaryButton("返回菜单").apply {
@@ -2317,7 +2304,43 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         updateStatus("$coursewareTitle\n正在跳转到第 $target 页...")
     }
 
-    private fun showJumpToPageDialog() {
+    private fun buildCoursewareJumpRow(isUploading: Boolean): LinearLayout {
+        val pageInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            imeOptions = EditorInfo.IME_ACTION_GO
+            hint = "页码 1-${coursewarePageCount.coerceAtLeast(1)}"
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                marginEnd = dp(8)
+            }
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
+                    gotoCoursewarePageFromInput(this)
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply { topMargin = dp(12) }
+            addView(pageInput)
+            addView(primaryButton("跳转").apply {
+                isEnabled = !isUploading && roomJoined
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    marginStart = dp(8)
+                }
+                setOnClickListener { gotoCoursewarePageFromInput(pageInput) }
+            })
+        }
+    }
+
+    private fun gotoCoursewarePageFromInput(input: EditText) {
         if (coursewareUploadInProgress) {
             toast("课件正在上传/转换，暂不可跳转")
             return
@@ -2327,32 +2350,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             updateStatus("$coursewareTitle\n正在重新连接教室端...")
             return
         }
-        val pageCount = coursewarePageCount.coerceAtLeast(1)
-        if (pageCount <= 1) {
-            toast("当前课件只有 1 页")
+        val raw = input.text.toString().trim()
+        val page = raw.toIntOrNull()
+        if (page == null || page < 1) {
+            toast("请输入有效页码")
             return
         }
-        val input = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(coursewarePage.toString())
-            gravity = Gravity.CENTER
-            setSelection(text.length)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("跳转到指定页")
-            .setMessage("当前课件共 $pageCount 页，请输入目标页码")
-            .setView(input)
-            .setPositiveButton("跳转") { _, _ ->
-                val raw = input.text.toString().trim()
-                val page = raw.toIntOrNull()
-                if (page == null || page < 1 || page > pageCount) {
-                    toast("请输入 1 ~ $pageCount 之间的有效页码")
-                    return@setPositiveButton
-                }
-                jumpToCoursewarePage(page)
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        jumpToCoursewarePage(page)
     }
 
     private fun closeCoursewareAndReturnMenu() {
