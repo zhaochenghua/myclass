@@ -23,6 +23,7 @@ import android.text.InputType
 import android.util.AttributeSet
 import android.util.Base64
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.OrientationEventListener
 import android.view.ScaleGestureDetector
@@ -149,6 +150,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareFastSeekRunnable: Runnable? = null
     private var signalReconnectInProgress = false
     private var savedCoursewareState: CoursewareState? = null
+    private var appInForeground = false
+    private var lastCoursewareVolumeKeyAtMs = 0L
+    private val volumeKeyRepeatIntervalMs = 180L
     private var coursewareSubScreen: CoursewareSubScreen = CoursewareSubScreen.None
     private var initialIntentProcessed = false
     private val coursewareHttpClient = OkHttpClient.Builder()
@@ -272,6 +276,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onResume() {
         super.onResume()
+        appInForeground = true
         if (currentScreen == Screen.Camera && cameraPausedForBackground) {
             val shouldRestartLive = restartLiveOnResume
             val roomCode = activeRoomCode
@@ -319,6 +324,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     override fun onPause() {
+        appInForeground = false
         if (isPickingImageForProjection) {
             super.onPause()
             return
@@ -2171,6 +2177,53 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ""
         }
         return "$title\n$pageText$screenText"
+    }
+
+    /**
+     * 课件播放期间用音量键翻页：音量+ 上一页，音量- 下一页。
+     * 仅在 App 前台且课件正在播放时拦截；App 退到后台后音量键恢复为系统音量调节。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (appInForeground && isCoursewarePlayingForVolumeKeys()) {
+            val isVolumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+                event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+            if (isVolumeKey) {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    handleCoursewareVolumeKey(event)
+                }
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun isCoursewarePlayingForVolumeKeys(): Boolean {
+        if (coursewareUploadInProgress) {
+            return false
+        }
+        return isCoursewarePlaybackScreen() || savedCoursewareState != null
+    }
+
+    private fun isCoursewarePlaybackScreen(): Boolean =
+        currentScreen == Screen.Courseware && coursewareSubScreen == CoursewareSubScreen.Playback
+
+    private fun handleCoursewareVolumeKey(event: KeyEvent) {
+        val now = System.currentTimeMillis()
+        if (event.repeatCount > 0 && now - lastCoursewareVolumeKeyAtMs < volumeKeyRepeatIntervalMs) {
+            return
+        }
+        lastCoursewareVolumeKeyAtMs = now
+        val delta = if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) -1 else 1
+        if (isCoursewarePlaybackScreen()) {
+            changeCoursewarePage(delta)
+        } else {
+            // 已返回菜单但课件仍在大屏播放：静默翻页，不改动菜单页状态文本
+            if (!roomJoined) {
+                reconnectSignalingForCurrentRoom()
+                return
+            }
+            signalingClient?.sendCoursewareNavigate(delta)
+        }
     }
 
     private fun changeCoursewarePage(delta: Int) {
