@@ -196,9 +196,36 @@ const elements = {
   // 课件连接码角标
   coursewareConnIndicator: document.getElementById('coursewareConnIndicator'),
   coursewareConnCode: document.getElementById('coursewareConnCode'),
+  // iPhone 网页版入口
+  iosWebAppButton: document.getElementById('iosWebAppButton'),
+  iosModal: document.getElementById('iosModal'),
+  iosQr: document.getElementById('iosQr'),
+  iosUrlText: document.getElementById('iosUrlText'),
+  iosModalClose: document.getElementById('iosModalClose'),
 };
 
 bootstrap();
+
+/** iPhone 网页版入口：二维码 + 使用说明（iOS 摄像头需要 https 才能授权） */
+function setupIosWebAppEntry() {
+  const iosVersion = state.config?.iosVersion || 'latest';
+  const iosUrl = state.config?.iosUrl || '';
+  if (!iosUrl) {
+    if (elements.iosWebAppButton) elements.iosWebAppButton.hidden = true;
+    return;
+  }
+  elements.iosQr.src = `./api/ios-qrcode.svg?v=${encodeURIComponent(iosVersion)}`;
+  elements.iosUrlText.textContent = iosUrl.replace(/\?v=.*$/, '');
+  elements.iosWebAppButton.addEventListener('click', () => {
+    elements.iosModal.hidden = false;
+  });
+  elements.iosModalClose.addEventListener('click', () => {
+    elements.iosModal.hidden = true;
+  });
+  elements.iosModal.addEventListener('click', (event) => {
+    if (event.target === elements.iosModal) elements.iosModal.hidden = true;
+  });
+}
 
 function checkBrowserCompatibility() {
   const issues = [];
@@ -239,6 +266,7 @@ async function bootstrap() {
       elements.downloadWindowsButton.hidden = false;
       elements.downloadWindowsButton.textContent = `下载 Windows 投屏程序 v${state.config.windowsVersion || ''}`.trim();
     }
+    setupIosWebAppEntry();
     // 直接上课
     elements.directTeachButton.addEventListener('click', () => {
       if (state.teacherToken) {

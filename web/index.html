@@ -29,6 +29,7 @@
             <button class="action-btn action-btn-blackboard" id="quickBlackboardButton">电子黑板</button>
             <a class="action-btn action-btn-exam" href="https://teacher.chenji100.com/login" target="_blank" rel="noopener">晨计平台</a>
             <a class="action-btn action-btn-admin" href="./admin.html">后台管理</a>
+            <button class="action-btn action-btn-ios" id="iosWebAppButton">iPhone 网页版</button>
             <button class="action-btn action-btn-fullscreen" id="homeFullscreenButton">全屏</button>
           </div>
         </div>
@@ -47,6 +48,24 @@
           <div class="courseware-grid" id="coursewareGrid"></div>
           <div class="modal-actions">
             <button type="button" class="btn-secondary" id="closePickerButton">取消</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- iPhone 网页版二维码 -->
+      <div class="modal-overlay" id="iosModal" hidden>
+        <div class="modal-card ios-modal-card">
+          <h3>iPhone 网页版</h3>
+          <img class="ios-qr" id="iosQr" alt="iPhone 网页版二维码">
+          <p class="ios-url" id="iosUrlText"></p>
+          <ol class="ios-steps">
+            <li>用 iPhone 相机或 Safari 扫描上方二维码。</li>
+            <li>Safari 提示证书不受信任时，选择“显示详细信息”→“访问此网站”。</li>
+            <li>点击底部分享按钮 → “添加到主屏幕”，即可像 App 一样全屏使用。</li>
+            <li>打开后输入大屏上的 4 位连接码即可投屏。</li>
+          </ol>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="iosModalClose">关闭</button>
           </div>
         </div>
       </div>

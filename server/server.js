@@ -1,5 +1,6 @@
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
@@ -8,6 +9,7 @@ const express = require('express');
 const multer = require('multer');
 const QRCode = require('qrcode');
 const setupWebSocket = require('./websocket');
+const { RoomManager } = require('./roomManager');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
 const HOST = process.env.HOST || '0.0.0.0';
@@ -18,6 +20,7 @@ const PUBLIC_BASE_URL = removeTrailingSlash(
 );
 const DEFAULT_APP_VERSION = process.env.APP_VERSION || '1.4.5-20260822';
 const DEFAULT_WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.22';
+const DEFAULT_IOS_VERSION = process.env.IOS_VERSION || '1.0.0-20260902';
 const VERSIONS_PATH = path.join(__dirname, 'data', 'versions.json');
 let versionsCache = { mtimeMs: -1, data: null };
 
@@ -29,7 +32,8 @@ function readVersions() {
   } catch {
     return {
       appVersion: DEFAULT_APP_VERSION,
-      windowsVersion: DEFAULT_WINDOWS_VERSION
+      windowsVersion: DEFAULT_WINDOWS_VERSION,
+      iosVersion: DEFAULT_IOS_VERSION
     };
   }
   if (versionsCache.data && versionsCache.mtimeMs === stat.mtimeMs) {
@@ -37,7 +41,8 @@ function readVersions() {
   }
   let data = {
     appVersion: DEFAULT_APP_VERSION,
-    windowsVersion: DEFAULT_WINDOWS_VERSION
+    windowsVersion: DEFAULT_WINDOWS_VERSION,
+    iosVersion: DEFAULT_IOS_VERSION
   };
   try {
     const raw = JSON.parse(fs.readFileSync(VERSIONS_PATH, 'utf8'));
@@ -47,6 +52,9 @@ function readVersions() {
     if (typeof raw.windowsVersion === 'string' && raw.windowsVersion.trim()) {
       data.windowsVersion = raw.windowsVersion.trim();
     }
+    if (typeof raw.iosVersion === 'string' && raw.iosVersion.trim()) {
+      data.iosVersion = raw.iosVersion.trim();
+    }
   } catch {}
   versionsCache = { mtimeMs: stat.mtimeMs, data };
   return data;
@@ -55,6 +63,24 @@ function readVersions() {
 function getApkUrl() {
   const { appVersion } = readVersions();
   return `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(appVersion)}`;
+}
+
+// iPhone 网页版必须走 https：iOS Safari 只允许在安全上下文中访问摄像头。
+// 若 PUBLIC_BASE_URL 已是 https 则直接复用（例如域名证书），否则回退到 IP 自签证书地址。
+const IOS_BASE_URL = removeTrailingSlash(
+  process.env.IOS_BASE_URL ||
+    (PUBLIC_BASE_URL.startsWith('https://')
+      ? PUBLIC_BASE_URL
+      : `https://${SERVER_IP}${PATH_PREFIX}`)
+);
+// HTTPS 监听端口，0 表示关闭；证书不存在时同样不会启动。
+const HTTPS_PORT = Number(process.env.HTTPS_PORT || 0);
+const TLS_KEY_PATH = process.env.TLS_KEY || path.join(__dirname, 'data', 'tls', 'server.key');
+const TLS_CERT_PATH = process.env.TLS_CERT || path.join(__dirname, 'data', 'tls', 'server.crt');
+
+function getIosUrl() {
+  const { iosVersion } = readVersions();
+  return `${IOS_BASE_URL}/ios/?v=${encodeURIComponent(iosVersion)}`;
 }
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
@@ -145,13 +171,15 @@ app.get(`${PATH_PREFIX}/health`, (req, res) => {
 });
 
 app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
-  const { appVersion, windowsVersion } = readVersions();
+  const { appVersion, windowsVersion, iosVersion } = readVersions();
   res.json({
     title: '上课投屏平台',
     apkVersion: appVersion,
     apkUrl: getApkUrl(),
     windowsVersion,
     windowsUrl: `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(windowsVersion)}`,
+    iosVersion,
+    iosUrl: getIosUrl(),
     wsPath: `${PATH_PREFIX}/ws`,
     roomTtlSeconds: Math.floor(ROOM_TTL_MS / 1000),
     video: {
@@ -181,6 +209,24 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
 app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
   try {
     const svg = await QRCode.toString(getApkUrl(), {
+      type: 'svg',
+      margin: 2,
+      width: 360,
+      color: {
+        dark: '#061014',
+        light: '#f7fbff'
+      }
+    });
+    res.type('image/svg+xml').send(svg);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// iPhone 网页版入口二维码（扫码后在 Safari 打开，可"添加到主屏幕"当 App 用）
+app.get(`${PATH_PREFIX}/api/ios-qrcode.svg`, async (req, res, next) => {
+  try {
+    const svg = await QRCode.toString(getIosUrl(), {
       type: 'svg',
       margin: 2,
       width: 360,
@@ -521,10 +567,14 @@ app.use(
   })
 );
 
-setupWebSocket(server, {
+// HTTP 与 HTTPS 共用一个 RoomManager，保证两种协议下拿到的连接码属于同一间教室。
+const roomManager = new RoomManager({ roomTtlMs: ROOM_TTL_MS });
+
+const websocketOptions = {
   pathPrefix: PATH_PREFIX,
   roomTtlMs: ROOM_TTL_MS,
   apkUrl: getApkUrl(),
+  roomManager,
   isAllowedHost,
   isAllowedOrigin,
   readCoursewareIndex,
@@ -537,7 +587,9 @@ setupWebSocket(server, {
     await writeUsers(users);
     return { id: user.id, username: user.username, token: user.token };
   }
-});
+};
+
+setupWebSocket(server, websocketOptions);
 
 app.use((error, req, res, next) => {
   if (res.headersSent) {
@@ -557,6 +609,41 @@ server.listen(PORT, HOST, () => {
   console.log(`MyClass server listening on http://${HOST}:${PORT}${PATH_PREFIX}/`);
   console.log(`APK QR points to ${getApkUrl()}`);
 });
+
+// iOS Safari 只在安全上下文（https）中开放摄像头，
+// 因此可选地再起一个 HTTPS 监听供 iPhone 网页版使用。
+function startHttpsServer() {
+  if (!HTTPS_PORT) {
+    return;
+  }
+  if (!fs.existsSync(TLS_KEY_PATH) || !fs.existsSync(TLS_CERT_PATH)) {
+    console.warn(
+      `[HTTPS] 未找到证书（${TLS_KEY_PATH} / ${TLS_CERT_PATH}），跳过 HTTPS 监听。`
+    );
+    console.warn('[HTTPS] 执行 scripts/generate-selfsigned-cert.sh 生成自签证书后重启即可。');
+    return;
+  }
+
+  const httpsServer = https.createServer(
+    {
+      key: fs.readFileSync(TLS_KEY_PATH),
+      cert: fs.readFileSync(TLS_CERT_PATH)
+    },
+    app
+  );
+  httpsServer.requestTimeout = COURSEWARE_REQUEST_TIMEOUT_MS;
+  httpsServer.timeout = COURSEWARE_REQUEST_TIMEOUT_MS;
+  httpsServer.headersTimeout = Math.min(120000, COURSEWARE_REQUEST_TIMEOUT_MS);
+
+  setupWebSocket(httpsServer, websocketOptions);
+
+  httpsServer.listen(HTTPS_PORT, HOST, () => {
+    console.log(`MyClass HTTPS listening on https://${HOST}:${HTTPS_PORT}${PATH_PREFIX}/`);
+    console.log(`iOS web app URL: ${getIosUrl()}`);
+  });
+}
+
+startHttpsServer();
 
 function normalizePrefix(prefix) {
   const withSlash = prefix.startsWith('/') ? prefix : `/${prefix}`;

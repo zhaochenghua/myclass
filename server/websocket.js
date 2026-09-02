@@ -12,9 +12,13 @@ const TEACHER_ONLY_MESSAGE_TYPES = new Set([
 ]);
 
 function setupWebSocket(server, options) {
-  const roomManager = new RoomManager({
-    roomTtlMs: options.roomTtlMs || DEFAULT_ROOM_TTL_MS
-  });
+  // HTTPS 与 HTTP 监听必须共享同一个 RoomManager，
+  // 否则大屏端（http）和 iPhone 网页端（https，摄像头需要安全上下文）会进入不同的房间池。
+  const roomManager =
+    options.roomManager ||
+    new RoomManager({
+      roomTtlMs: options.roomTtlMs || DEFAULT_ROOM_TTL_MS
+    });
 
   const wss = new WebSocketServer({
     server,

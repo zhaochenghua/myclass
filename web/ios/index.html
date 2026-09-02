@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>上课投屏平台</title>
+
+    <!-- PWA / 添加到主屏幕 -->
+    <meta name="theme-color" content="#071012" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="MyClass" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+    <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
+    <div class="source-holder" aria-hidden="true">
+      <video id="sourceVideo" playsinline muted autoplay></video>
+      <img id="sourceImage" alt="" />
+    </div>
+
+    <main class="app">
+      <!-- ============ 登录 / 注册 ============ -->
+      <section class="view view-center" id="viewAuth" hidden>
+        <div class="panel">
+          <h1 class="title">上课投屏平台</h1>
+          <p class="subtitle">首次使用请注册账号</p>
+          <label class="field">
+            <input
+              id="authUsername"
+              type="text"
+              inputmode="text"
+              autocomplete="username"
+              placeholder="用户名（2-20位）"
+            />
+          </label>
+          <label class="field">
+            <input
+              id="authPassword"
+              type="password"
+              autocomplete="current-password"
+              placeholder="密码（4-32位）"
+            />
+          </label>
+          <button class="btn btn-primary" id="authLogin" type="button">登录</button>
+          <button class="btn btn-ghost" id="authRegister" type="button">注册新账号</button>
+          <p class="footnote">本应用由宁波三中人工智能实验室开发维护</p>
+          <p class="footnote footnote-dim" id="authVersion"></p>
+        </div>
+      </section>
+
+      <!-- ============ 输入连接码 ============ -->
+      <section class="view view-center" id="viewConnect" hidden>
+        <div class="panel">
+          <h1 class="title">上课投屏平台</h1>
+          <p class="subtitle" id="connectHint">请输入教室大屏上的 4 位连接码</p>
+          <input
+            id="roomCodeInput"
+            class="code-input"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            maxlength="4"
+            autocomplete="off"
+            placeholder="----"
+          />
+          <button class="btn btn-primary" id="connectButton" type="button">连接</button>
+          <div class="split-row">
+            <button class="btn btn-ghost" id="manageCoursewareButton" type="button">
+              课件管理
+            </button>
+            <button class="btn btn-ghost" id="switchUserButton" type="button">
+              切换用户
+            </button>
+          </div>
+          <p class="footnote" id="connectServerHint"></p>
+          <p class="footnote footnote-dim" id="connectVersion"></p>
+        </div>
+      </section>
+
+      <!-- ============ 功能菜单 ============ -->
+      <section class="view view-center" id="viewMenu" hidden>
+        <div class="panel">
+          <h1 class="title">功能菜单</h1>
+          <p class="subtitle" id="menuStatus">已连接课堂</p>
+          <button class="btn btn-primary" id="menuCamera" type="button">摄像头直播</button>
+          <button class="btn btn-primary" id="menuImage" type="button">图片投屏</button>
+          <button class="btn btn-primary" id="menuCourseware" type="button">播放课件</button>
+          <label class="field field-inline">
+            <span>画质</span>
+            <select id="qualitySelect"></select>
+          </label>
+          <button class="btn btn-ghost" id="menuDisconnect" type="button">断开连接</button>
+          <p class="footnote" id="menuVersion"></p>
+        </div>
+      </section>
+
+      <!-- ============ 直播页（摄像头 / 图片） ============ -->
+      <section class="view view-live" id="viewLive" hidden>
+        <div class="live-stage" id="liveStage">
+          <canvas id="previewCanvas"></canvas>
+          <div class="focus-ring" id="focusRing" hidden></div>
+        </div>
+
+        <header class="live-top">
+          <button class="pill" id="liveBack" type="button">返回</button>
+          <span class="live-status" id="liveStatus">准备中...</span>
+          <span class="pill pill-flat" id="liveZoom" hidden>1.0x</span>
+        </header>
+
+        <footer class="live-bottom">
+          <div class="tool-row" id="liveTools">
+            <button class="tool" id="switchCameraButton" type="button">切换镜头</button>
+            <button class="tool" id="lockFrameButton" type="button">锁定画面</button>
+            <button class="tool" id="torchButton" type="button">补光灯</button>
+            <button class="tool" id="rotateButton" type="button">旋转</button>
+            <button class="tool" id="resetZoomButton" type="button">复位</button>
+          </div>
+          <button class="btn btn-primary btn-live" id="liveToggle" type="button">开始直播</button>
+        </footer>
+      </section>
+
+      <!-- ============ 课件来源 ============ -->
+      <section class="view view-center" id="viewCoursewareSource" hidden>
+        <div class="panel">
+          <h1 class="title">播放课件</h1>
+          <button class="btn btn-primary" id="cwServerButton" type="button">服务器课件</button>
+          <button class="btn btn-primary" id="cwUploadButton" type="button">本地上传</button>
+          <button class="btn btn-ghost" id="cwSourceBack" type="button">返回菜单</button>
+          <p class="footnote" id="cwSourceStatus">
+            可直接打开服务器暂存课件，或从手机重新上传
+          </p>
+        </div>
+        <input id="cwFileInput" type="file" hidden />
+      </section>
+
+      <!-- ============ 服务器课件列表 ============ -->
+      <section class="view" id="viewCoursewareList" hidden>
+        <header class="list-header">
+          <button class="pill" id="cwListBack" type="button">返回</button>
+          <h2 class="list-title">服务器课件</h2>
+          <button class="pill" id="cwListRefresh" type="button">刷新</button>
+        </header>
+        <div class="list-body" id="cwListBody"></div>
+        <footer class="list-footer">
+          <button class="btn btn-primary" id="cwListUpload" type="button">本地上传</button>
+        </footer>
+        <input id="cwListFileInput" type="file" hidden />
+      </section>
+
+      <!-- ============ 课件播放 ============ -->
+      <section class="view view-center" id="viewCoursewarePlay" hidden>
+        <div class="panel">
+          <h1 class="title title-sm" id="cwPlayTitle">课件</h1>
+          <p class="subtitle" id="cwPlayStatus">正在打开...</p>
+          <div class="page-row">
+            <button class="btn btn-nav" id="cwPrevPage" type="button">上一页</button>
+            <button class="btn btn-nav" id="cwNextPage" type="button">下一页</button>
+          </div>
+          <div class="page-row">
+            <input
+              id="cwPageInput"
+              class="code-input code-input-sm"
+              type="text"
+              inputmode="numeric"
+              pattern="[0-9]*"
+              placeholder="页码"
+            />
+            <button class="btn btn-nav" id="cwGotoPage" type="button">跳转</button>
+          </div>
+          <button class="btn btn-ghost" id="cwCloseButton" type="button">结束播放</button>
+          <p class="footnote footnote-dim">长按上一页/下一页可连续翻页</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- 通用遮罩 -->
+    <div class="overlay" id="overlay" hidden>
+      <div class="overlay-card">
+        <div class="spinner"></div>
+        <p class="overlay-text" id="overlayText">请稍候...</p>
+        <div class="progress-track" id="overlayProgress" hidden>
+          <div class="progress-fill" id="overlayProgressFill"></div>
+        </div>
+        <button class="btn btn-ghost" id="overlayCancel" type="button" hidden>取消</button>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>

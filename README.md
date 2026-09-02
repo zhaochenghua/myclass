@@ -1,12 +1,13 @@
 # MyClass 教师投屏平台
 
-MyClass 是一套面向局域网课堂展示的投屏系统。教师电脑打开网页端，教师手机安装 Android App 后输入网页端显示的 4 位连接码，即可把手机摄像头画面通过 WebRTC 低延迟投到教室大屏。
+MyClass 是一套面向局域网课堂展示的投屏系统。教师电脑打开网页端，教师手机安装 Android App、或 iPhone 直接用 Safari 打开网页版，输入网页端显示的 4 位连接码，即可把手机摄像头画面通过 WebRTC 低延迟投到教室大屏。
 
-当前版本重点支持“手机摄像头拍摄试卷、讲义、实验器材并投到大屏讲解”的场景。
+当前版本重点支持“手机摄像头拍摄试卷、讲义、实验器材并投到大屏讲解”的场景。iPhone 用户无需安装 App，把网页版“添加到主屏幕”即可像原生应用一样使用。
 
 ## 主要功能
 
 - Android 手机摄像头直播到网页教师端。
+- iPhone / iPad 通过浏览器网页版直播到网页教师端（无需上架 App Store）。
 - 支持前置/后置摄像头切换。
 - 支持 1080p 级别高清采集，尽量保持摄像头原始比例。
 - 支持后置摄像头补光灯。
@@ -19,8 +20,9 @@ MyClass 是一套面向局域网课堂展示的投屏系统。教师电脑打开
 - 网页端支持画笔标注，可用手指、触控笔、教鞭或鼠标圈画。
 - 网页端画笔支持撤销和清空。
 - 标注绑定到视频内容坐标；手机端移动锁定画面时，网页端标注会跟随画面移动，避免错位。
+- iPhone 网页版支持“添加到主屏幕”全屏运行、离线打开界面、课件上传与播放。
 
-手机屏幕共享入口目前保留在 App 菜单中，暂未开放。
+手机屏幕共享入口目前保留在 Android App 菜单中，暂未开放；iPhone 网页版不提供屏幕共享。
 
 ## 目录结构
 
@@ -35,7 +37,13 @@ myclass/
 │   ├── index.html
 │   ├── app.js
 │   ├── style.css
-│   └── public/
+│   ├── public/
+│   └── ios/            # iPhone 网页版（PWA）
+│       ├── index.html
+│       ├── style.css
+│       ├── sw.js
+│       ├── manifest.webmanifest
+│       └── js/
 ├── android/
 │   └── AndroidStudioProject/
 ├── windows/
@@ -43,7 +51,9 @@ myclass/
 │   ├── preload.js
 │   └── renderer/
 ├── scripts/
-│   └── copy-apk.js
+│   ├── copy-apk.js
+│   ├── generate-selfsigned-cert.sh
+│   └── generate-ios-icons.py
 ├── .github/
 │   └── workflows/
 │       └── build.yml
@@ -109,6 +119,11 @@ PUBLIC_BASE_URL=http://10.30.13.1/myclass
 ALLOWED_HOSTS=10.30.13.1,localhost,127.0.0.1
 ROOM_TTL_MS=7200000
 APP_VERSION=1.1.28-20260622
+HTTPS_PORT=443
+TLS_KEY=server/data/tls/server.key
+TLS_CERT=server/data/tls/server.crt
+IOS_BASE_URL=https://10.30.13.1/myclass
+IOS_VERSION=1.0.0
 LIBREOFFICE_PATH=C:\Program Files\LibreOffice\program\soffice.exe
 COURSEWARE_MAX_BYTES=2147483648
 COURSEWARE_REQUEST_TIMEOUT_MS=1800000
@@ -118,6 +133,95 @@ COURSEWARE_CONVERT_TIMEOUT_MS=120000
 “播放课件”功能由手机 App 选择本机 PDF/PPT/PPTX 并上传到服务端。PDF 会直接发布，PPT/PPTX 会通过 LibreOffice headless 转换为 PDF 后在网页端自动打开，并写入服务器暂存课件列表；App 后续可直接选择或删除服务器课件，避免大课件重复上传。网页端使用本地 PDF.js 单页渲染课件；横向幻灯片整页显示，竖向 A4 文档按屏幕宽度铺满并支持上一屏/下一屏、长按快速定位页码与手型拖拽。画笔标注绑定在课件页坐标上，会跟随拖动画面移动。服务器需要安装 LibreOffice；如果不在默认路径，请设置 `LIBREOFFICE_PATH` 或 `SOFFICE_PATH`。
 
 HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认只允许 `10.30.13.1`、`localhost`、`127.0.0.1`。请不要把该服务直接暴露到公网。
+
+HTTPS 与 HTTP 由同一个 `RoomManager` 管理，因此大屏端走 http、iPhone 走 https 时连接码依然匹配，两种协议可以混用。
+
+## iPhone 网页版（iOS）
+
+iOS 浏览器无法实现屏幕共享，且上架 App Store 成本较高，所以 iPhone / iPad 直接提供网页版：
+用 Safari 打开 `https://10.30.13.1/myclass/ios/`，点底部分享按钮 → “添加到主屏幕”，
+桌面会生成图标，之后点开即全屏运行，没有地址栏，体验与原生 App 一致。
+
+### 为什么必须用 https
+
+iOS Safari 只在**安全上下文**中开放摄像头，在 `http://10.30.13.1/...` 下调用 `getUserMedia` 会直接失败。
+因此服务端需要额外监听一个 HTTPS 端口；教室大屏仍可继续使用原来的 http 地址，两者共用同一套连接码。
+
+### 部署步骤
+
+**方式一（推荐，已有 Nginx/OpenResty 反代）：** 本项目部署在 1Panel OpenResty 后，
+`proxy/myclass.conf` 已把 `/myclass/` 反代到 Node 的 3000 端口（含 WebSocket 头），
+443 上已有 TLS。此时 **Node 不需要监听 HTTPS**，直接用现成入口：
+
+1. 确认 `server/data/versions.json` 里有 `iosVersion` 字段（没有则补上）。
+2. 用新版代码重启 Node 服务（改代码后需重启）：
+
+```bash
+cd server
+# 停掉旧进程后：
+nohup node server.js > /home/zch/myclass-server.log 2>&1 &
+```
+
+   服务端 `IOS_BASE_URL` 默认回退为 `https://<SERVER_IP>/myclass`，反代可达，无需额外配置。
+   若想用已有 https 域名，可设 `IOS_BASE_URL=https://ai.nbsdszx.cn/myclass`。
+
+3. 教室大屏页面点“iPhone 网页版”按钮，会弹出二维码和使用说明。
+4. iPhone 扫码后用 Safari 打开 `https://10.30.13.1/myclass/ios/`，
+   出现“此网站的安全证书无效”时点“显示详细信息” → “访问此网站”。
+   首次开启摄像头时同样允许一次即可。
+
+**方式二（无反代环境）：** 让 Node 自己监听 HTTPS。
+
+1. 生成自签证书（证书必须带 IP SAN，否则 iOS 校验不通过）：
+
+```bash
+SERVER_IP=10.30.13.1 bash scripts/generate-selfsigned-cert.sh
+```
+
+   需要域名也能访问时追加 `EXTRA_DNS=ai.nbsdszx.cn`。证书生成在 `server/data/tls/`，已被 `.gitignore` 忽略。
+
+2. 带 HTTPS 端口启动（443 需要 root 权限，普通用户可改用 8443 并设置 `IOS_BASE_URL` 带端口）：
+
+```bash
+cd server
+HTTPS_PORT=443 PORT=3000 npm start
+```
+
+> 如果服务器已有正式证书（例如通过域名 https 访问），直接把 `IOS_BASE_URL` 指向该域名即可，
+> 不需要自签证书，也不用设 `HTTPS_PORT`。
+
+### 功能对照
+
+| 功能 | Android App | iPhone 网页版 |
+| --- | --- | --- |
+| 输入连接码连接 | 支持 | 支持 |
+| 摄像头直播 | 支持 | 支持 |
+| 前后镜头切换 | 支持 | 支持 |
+| 双指缩放 | 光学 + 数字变焦 | 数字变焦 1-8x |
+| 点击对焦 | 支持 | 部分机型（不支持时仅显示对焦提示框） |
+| 补光灯 | 支持 | 不支持（iOS Safari 未开放） |
+| 锁定画面 + 放大平移 | 支持 | 支持 |
+| 图片投屏 | 支持 | 支持 |
+| 课件上传 / 服务器课件 / 翻页 | 支持 | 支持 |
+| 手机屏幕共享 | 保留入口，未开放 | 不支持 |
+
+### 实现要点
+
+- 画面统一先绘制到 canvas，再用 `canvas.captureStream()` 推给 WebRTC。
+  这样在不依赖任何原生能力的前提下也能实现数字变焦、锁定帧和静态图片推流。
+- 锁定画面时停止重绘 canvas，并定时调用 `track.requestFrame()`，保证大屏端画面不中断。
+- `teacher.orientation` 上报的裁剪区域采用“已旋转后的显示画面坐标”，
+  因此大屏端画笔标注同样会跟随手机端的缩放和平移。
+- 信令消息、课件接口、连接码规则与 Android 端完全一致，同一个连接码既能连 Android 手机，也能连 iPhone。
+- 画质可在功能菜单中切换（流畅 960×720 / 标准 1280×960 / 高清 1920×1440），下次开始直播时生效。
+
+### 图标更新
+
+图标由脚本生成（需要 Python + Pillow）：
+
+```bash
+python3 scripts/generate-ios-icons.py
+```
 
 ## Android 构建
 
@@ -175,7 +279,7 @@ Windows 安装包下载地址：
 http://10.30.13.1/myclass/myclass-windows.exe
 ```
 
-更新 Windows 客户端时，将新的安装包复制为 `web/public/myclass-windows.exe`，并修改 `server/data/versions.json` 中的 `windowsVersion` 字段更新页面显示的版本号（改完即生效，无需重启服务）。Android 版本号同理，修改 `appVersion` 字段即可。
+更新 Windows 客户端时，将新的安装包复制为 `web/public/myclass-windows.exe`，并修改 `server/data/versions.json` 中的 `windowsVersion` 字段更新页面显示的版本号（改完即生效，无需重启服务）。Android 版本号同理，修改 `appVersion` 字段即可；iPhone 网页版修改 `iosVersion` 字段（该值会作为二维码和页面缓存的刷新参数）。
 
 ## GitHub Actions
 
@@ -214,8 +318,9 @@ WebSocket 只做信令和状态同步，不传输视频流。主要流程：
 
 1. 教师电脑打开 `http://10.30.13.1/myclass/`。
 2. 大屏显示 4 位连接码和 App 下载二维码。
-3. 教师手机扫码安装 App。
-4. 打开 App，输入大屏上的 4 位连接码。
+3. 安卓手机扫码安装 App；iPhone 点大屏上的“iPhone 网页版”按钮扫码，
+   用 Safari 打开后“添加到主屏幕”，以后直接点桌面图标进入。
+4. 打开 App（或 iPhone 网页版），输入大屏上的 4 位连接码。
 5. 进入功能菜单，点击“摄像头直播”。
 6. 授权摄像头权限。
 7. 在直播界面点击“开始直播”。
@@ -259,4 +364,29 @@ WebSocket 只做信令和状态同步，不传输视频流。主要流程：
 
 ### 是否支持手机屏幕共享
 
-当前版本暂未开放。Android App 中已经保留入口，后续可基于 Android MediaProjection 增加屏幕采集，并复用现有 WebRTC 信令链路。
+当前版本暂未开放。Android App 中已经保留入口，后续可基于 Android MediaProjection 增加屏幕采集，并复用现有 WebRTC 信令链路。iPhone 网页版受 iOS 限制无法提供屏幕共享。
+
+### iPhone 提示“无法访问摄像头”
+
+iOS Safari 只在 https 下开放摄像头。请确认：
+
+1. 访问地址以 `https://` 开头，而不是 `http://`；
+2. 服务端已用 `HTTPS_PORT` 启动，或 `IOS_BASE_URL` 指向了已有的 https 域名；
+3. 首次访问时在证书警告页选择了“访问此网站”；
+4. Safari 的相机权限设为“允许”（设置 → Safari 浏览器 → 相机）。
+
+### iPhone 提示证书无效
+
+自签证书属于正常现象，点“显示详细信息” → “访问此网站”即可。
+如果希望长期免提示，可在“设置 → 通用 → VPN 与设备管理”中安装并信任该描述文件，
+或在“设置 → 通用 → 关于本机 → 证书信任设置”中打开对该证书的完全信任。
+
+### iPhone 网页版没有补光灯
+
+iOS Safari 没有开放摄像头补光灯接口，按钮会显示为“补光灯(不支持)”。
+拍摄试卷时建议借助教室灯光，或用另一台手机的手电筒补光。
+
+### 添加到主屏幕后界面打不开
+
+主屏幕图标依赖 Service Worker 缓存，而 Service Worker 同样只在 https 下注册。
+请确认是通过 https 打开的页面；之后重新添加一次即可。
