@@ -87,6 +87,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         MediaSource,
         ListLoading,
         ServerList,
+        ServerMediaList,
         Playback
     }
 
@@ -332,6 +333,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         showCoursewareListLoadingScreen()
                         loadServerCoursewareList()
                     }
+                    CoursewareSubScreen.ServerMediaList -> loadServerMediaList()
                     CoursewareSubScreen.Playback -> showCoursewareScreen(
                         title = coursewareTitle,
                         isUploading = coursewareUploadInProgress
@@ -749,6 +751,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             gravity = Gravity.CENTER
             textSize = 28f
             setSingleLine(true)
+            val lastCode = prefs.getString("last_connect_code", "").orEmpty()
+            if (lastCode.length == 4) {
+                setText(lastCode)
+                setSelection(lastCode.length)
+            }
         }
         inputLayout.addView(codeInput)
 
@@ -768,6 +775,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 inputLayout.error = null
                 isEnabled = false
                 text = "连接中..."
+                prefs.edit().putString("last_connect_code", code).apply()
                 connectToRoom(code)
             }
         }
@@ -1584,6 +1592,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 handleClipboardLink()
             }
         }
+        val serverBtn = primaryButton("服务器图片视频").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(16)
+            }
+            setOnClickListener {
+                loadServerMediaList()
+            }
+        }
         val backBtn = secondaryButton("返回菜单").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1595,7 +1614,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 showMenuScreen()
             }
         }
-        statusText = bodyText("选择手机中的图片或视频上传到服务器播放，或使用剪贴板中的链接").apply {
+        statusText = bodyText("选择图片或视频投屏到大屏：本机上传、服务器暂存，或使用剪贴板链接").apply {
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1627,6 +1646,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             rightPanel.addView(localBtn)
             rightPanel.addView(linkBtn)
+            rightPanel.addView(serverBtn)
             rightPanel.addView(backBtn)
 
             root.addView(leftPanel)
@@ -1640,6 +1660,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(titleText("图片视频投屏", 28f))
             root.addView(localBtn)
             root.addView(linkBtn)
+            root.addView(serverBtn)
             root.addView(backBtn)
             root.addView(statusText)
             root.addView(versionLabel())
@@ -1652,6 +1673,235 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             mediaPickerLauncher.launch(arrayOf("image/*", "video/*"))
         }.onFailure {
             toast("无法打开文件选择器")
+        }
+    }
+
+    /**
+     * 加载服务器上已暂存的图片/视频，供图片视频投屏选择。
+     * 复用课件列表接口，过滤出图片/视频类型后展示，点按即投送到大屏。
+     */
+    private fun loadServerMediaList() {
+        if (!roomJoined) {
+            if (reconnectSignalingForCurrentRoom()) {
+                toast("正在重新连接教室端，请稍候")
+            }
+            return
+        }
+        showServerMediaListLoadingScreen()
+        Thread {
+            runCatching {
+                fetchServerCoursewareListBlocking().filter {
+                    mediaKindOf(it.url) != CastMediaKind.None
+                }
+            }.onSuccess { items ->
+                runOnUiThread { showServerMediaList(items) }
+            }.onFailure { error ->
+                runOnUiThread {
+                    toast(error.message ?: "服务器图片视频加载失败")
+                    showMediaCastSourceScreen()
+                }
+            }
+        }.start()
+    }
+
+    private fun showServerMediaListLoadingScreen() {
+        currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.ServerMediaList
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+        statusText = bodyText("正在加载服务器图片视频...").apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(if (isLandscape) 12 else 24)
+            }
+        }
+
+        if (isLandscape) {
+            val root = landscapeRoot().apply {
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                gravity = Gravity.CENTER
+            }
+            val leftPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(24)
+                }
+            }
+            leftPanel.addView(titleText("服务器图片视频", 22f))
+            leftPanel.addView(versionLabel())
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            rightPanel.addView(statusText)
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("服务器图片视频", 28f))
+            root.addView(statusText)
+            root.addView(versionLabel())
+            setContentView(root)
+        }
+    }
+
+    private fun showServerMediaList(items: List<StoredCoursewareItem>) {
+        currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.ServerMediaList
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+        val backBtn = secondaryButton("返回").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(12)
+            }
+            setOnClickListener {
+                showMediaCastSourceScreen()
+            }
+        }
+
+        if (isLandscape) {
+            val root = landscapeRoot().apply {
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+            }
+            val leftPanel = baseColumn().apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    marginEnd = dp(20)
+                }
+            }
+            leftPanel.addView(titleText("服务器图片视频", 22f))
+
+            if (items.isEmpty()) {
+                leftPanel.addView(bodyText("服务器还没有暂存的图片或视频").apply {
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(24) }
+                })
+            } else {
+                val listColumn = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                items.forEachIndexed { index, item ->
+                    val row = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            if (index > 0) topMargin = dp(4)
+                        }
+                    }
+                    row.addView(secondaryButton(coursewareButtonText(item)).apply {
+                        maxLines = 2
+                        setSingleLine(false)
+                        ellipsize = TextUtils.TruncateAt.END
+                        layoutParams = LinearLayout.LayoutParams(
+                            0,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            1f
+                        ).apply { marginEnd = dp(4) }
+                        setOnClickListener { openStoredCourseware(item) }
+                    })
+                    listColumn.addView(row)
+                }
+                leftPanel.addView(ScrollView(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                    ).apply { topMargin = dp(16) }
+                    addView(listColumn)
+                })
+            }
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = dp(20)
+                }
+            }
+            rightPanel.addView(backBtn)
+            rightPanel.addView(versionLabel())
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("服务器图片视频", 28f))
+
+            if (items.isEmpty()) {
+                root.addView(bodyText("服务器还没有暂存的图片或视频").apply {
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(24) }
+                })
+            } else {
+                val listColumn = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                items.forEachIndexed { index, item ->
+                    val row = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            if (index > 0) topMargin = dp(4)
+                        }
+                    }
+                    row.addView(secondaryButton(coursewareButtonText(item)).apply {
+                        maxLines = 2
+                        setSingleLine(false)
+                        ellipsize = TextUtils.TruncateAt.END
+                        layoutParams = LinearLayout.LayoutParams(
+                            0,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            1f
+                        ).apply { marginEnd = dp(4) }
+                        setOnClickListener { openStoredCourseware(item) }
+                    })
+                    listColumn.addView(row)
+                }
+                root.addView(ScrollView(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                    ).apply { topMargin = dp(16) }
+                    addView(listColumn)
+                })
+            }
+
+            root.addView(backBtn)
+            root.addView(versionLabel())
+            setContentView(root)
         }
     }
 
