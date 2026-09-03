@@ -52,6 +52,8 @@ class SignalingClient(
         fun onCoursewareVideoState(playing: Boolean, position: Double, duration: Double)
         fun onViewerCoursewareOpen(url: String, title: String, page: Int, screen: Int)
         fun onViewerCoursewareClose()
+        /** 服务器明确返回的错误（连接本身仍存活，例如旧版服务器不支持某条消息类型） */
+        fun onServerError(message: String)
         fun onSignalError(message: String)
     }
 
@@ -200,7 +202,7 @@ class SignalingClient(
                 screen = message.optInt("screen", 1).coerceAtLeast(1)
             )
             "viewer.courseware.close" -> callback.onViewerCoursewareClose()
-            "error" -> callback.onSignalError(message.optString("message", "信令错误"))
+            "error" -> callback.onServerError(message.optString("message", "信令错误"))
         }
     }
 

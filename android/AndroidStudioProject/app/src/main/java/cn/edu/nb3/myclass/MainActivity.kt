@@ -168,8 +168,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var lastVideoStateAtMs = 0L
     /** 最近一次提示“课件控制已重新连接”的时间，避免弱网反复重连时反复弹提示 */
     private var lastCoursewareReconnectToastAtMs = 0L
+    /** 最近一次展示“服务器返回错误”提示的时间（节流） */
+    private var lastServerErrorShownAtMs = 0L
     /** 重连提示的最小间隔 */
     private val reconnectToastIntervalMs = 15_000L
+    /** “服务器返回错误”提示的最小间隔 */
+    private val serverErrorToastIntervalMs = 5_000L
     /** 大屏视频状态的有效期：超过该时间没收到状态，就认为大屏端已停止播放 */
     private val videoStateFreshIntervalMs = 60_000L
     private var coursewareUploadInProgress = false
@@ -3626,6 +3630,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             coursewareSubScreen = CoursewareSubScreen.None
             resetMediaCastState()
             showMenuScreen()
+        }
+    }
+
+    /** 服务器明确返回的错误：连接本身仍然存活，不应触发断线重连，
+     *  否则会陷入“发消息→服务器报错→重连→再发消息”的死循环
+     *  （典型场景：服务器版本过旧，不认识图片视口/视频控制等新消息类型）。 */
+    override fun onServerError(message: String) {
+        runOnUiThread {
+            updateStatus(message)
+            val now = System.currentTimeMillis()
+            if (now - lastServerErrorShownAtMs >= serverErrorToastIntervalMs) {
+                lastServerErrorShownAtMs = now
+                toast(message)
+            }
         }
     }
 

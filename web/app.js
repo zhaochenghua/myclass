@@ -1222,6 +1222,26 @@ function showCoursewareViewForImage(info) {
 
 // ---- 视频课件播放器 ----
 
+// 浏览器对“无用户手势的有声自动播放”有拦截策略（带 room 参数自动进入的大屏页面
+// 常常没有任何点击），直接 play() 会被拒绝。此时先以静音启动拿到播放许可，
+// 播放起来后再恢复声音；用户手动点击播放则走正常有声路径。
+function startCoursewareVideo() {
+  const v = elements.coursewareVideo;
+  if (!v.paused && !v.ended) return;
+  const wasMuted = v.muted;
+  const p = v.play();
+  if (!p) return;
+  p.then(() => {
+    if (!wasMuted) v.muted = false;
+  }).catch(() => {
+    v.muted = true;
+    const retry = v.play();
+    if (retry) {
+      retry.then(() => { if (!wasMuted) v.muted = false; }).catch(() => {});
+    }
+  });
+}
+
 function showCoursewareViewForVideo(info) {
   state.presentationMode = 'courseware';
   state.videoPlayer.active = true;
@@ -1251,7 +1271,7 @@ function showCoursewareViewForVideo(info) {
   elements.videoProgressFill.style.width = '0%';
   elements.videoProgressThumb.style.left = '0%';
 
-  video.play().catch(() => {});
+  startCoursewareVideo();
   updateCoursewareConnectionIndicator();
 }
 
@@ -1302,7 +1322,7 @@ function bindVideoEvents() {
   v.addEventListener('click', () => {
     if (v.paused) {
       if (v.ended) { v.currentTime = 0; }
-      v.play().catch(() => {});
+      startCoursewareVideo();
     } else {
       v.pause();
     }
@@ -1368,7 +1388,7 @@ function handleCoursewareVideoControl(message) {
   if (action === 'play' || action === 'toggle') {
     if (v.paused) {
       if (v.ended) v.currentTime = 0;
-      v.play().catch(() => {});
+      startCoursewareVideo();
     } else if (action === 'toggle') {
       v.pause();
     }
@@ -1450,7 +1470,7 @@ elements.videoPlayPause.addEventListener('click', () => {
   const v = elements.coursewareVideo;
   if (v.paused) {
     if (v.ended) { v.currentTime = 0; }
-    v.play().catch(() => {});
+    startCoursewareVideo();
   } else {
     v.pause();
   }
