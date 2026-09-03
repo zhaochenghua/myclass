@@ -163,6 +163,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var videoSeekBar: SeekBar? = null
     private var videoTimeText: TextView? = null
     private var videoCastStatusText: TextView? = null
+    /** 大屏视频的静音/音量（0~100），随大屏端状态上报更新 */
+    private var videoMuted = false
+    private var videoVolumePercent = 100
+    private var videoUserVolumeScrubbing = false
+    private var videoVolumeSeekBar: SeekBar? = null
+    private var videoMuteButton: MaterialButton? = null
     private var zoomableImageView: ZoomableImageView? = null
     /** 最近一次收到大屏视频状态的时间，用于判断大屏端是否仍在播放 */
     private var lastVideoStateAtMs = 0L
@@ -2737,6 +2743,68 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         root.addView(timeText)
 
+        // 音量控制行：静音开关 + 音量滑块（0~100）。遥控大屏音量，浏览器静音限制由大屏端自行兜底
+        var lastVolumeSendAt = 0L
+        val muteButton = secondaryButton(if (videoMuted) "🔇" else "🔊").apply {
+            textSize = 20f
+            layoutParams = LinearLayout.LayoutParams(
+                dp(68),
+                dp(56)
+            )
+            setOnClickListener {
+                val muted = !videoMuted
+                videoMuted = muted
+                text = if (muted) "🔇" else "🔊"
+                signalingClient?.sendCoursewareVideoControl("mute", muted = muted)
+            }
+        }
+        val volumeSeekBar = SeekBar(this).apply {
+            max = 100
+            progress = videoVolumePercent.coerceIn(0, 100)
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply { marginStart = dp(12) }
+        }
+        volumeSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                videoVolumePercent = progress
+                if (progress <= 0) videoMuted = true
+                // 拖动中节流发送，避免 WebSocket 消息过密
+                val now = System.currentTimeMillis()
+                if (now - lastVolumeSendAt >= 120L) {
+                    lastVolumeSendAt = now
+                    signalingClient?.sendCoursewareVideoControl("volume", volume = progress)
+                }
+            }
+
+            override fun onStartTrackingTouch(bar: SeekBar?) {
+                videoUserVolumeScrubbing = true
+            }
+
+            override fun onStopTrackingTouch(bar: SeekBar?) {
+                videoUserVolumeScrubbing = false
+                val progress = bar?.progress ?: return
+                videoVolumePercent = progress
+                if (progress <= 0) videoMuted = true
+                signalingClient?.sendCoursewareVideoControl("volume", volume = progress)
+            }
+        })
+        root.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+                addView(muteButton)
+                addView(volumeSeekBar)
+            }
+        )
+
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser && videoDuration > 0.0) {
@@ -2789,6 +2857,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         videoSeekBar = seekBar
         videoTimeText = timeText
         videoCastStatusText = statusText
+        videoVolumeSeekBar = volumeSeekBar
+        videoMuteButton = muteButton
         updateVideoCastUi()
         // 探活：大屏端即使不认识该 action 也会回传一次当前播放状态
         signalingClient?.sendCoursewareVideoControl("query")
@@ -2805,7 +2875,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         statusText.text = when {
             !roomJoined -> "正在重新连接教室端..."
             videoDuration <= 0.0 -> "大屏正在加载视频..."
-            videoPlaying -> "大屏正在播放"
+            videoPlaying -> if (videoMuted) "大屏正在播放（已静音）" else "大屏正在播放"
             else -> "大屏已暂停"
         }
         if (!videoUserScrubbing) {
@@ -2817,6 +2887,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         val durationText = if (videoDuration > 0.0) formatMediaTime(videoDuration) else "--:--"
         timeText.text = "${formatMediaTime(videoPosition)} / $durationText"
+        updateVolumeRowUi()
+    }
+
+    /** 用最近收到的大屏音量/静音状态刷新音量控制行 */
+    private fun updateVolumeRowUi() {
+        videoMuteButton?.text = if (videoMuted) "🔇" else "🔊"
+        val bar = videoVolumeSeekBar ?: return
+        if (!videoUserVolumeScrubbing) {
+            bar.progress = videoVolumePercent.coerceIn(0, 100)
+        }
     }
 
     private fun seekVideoBy(deltaSeconds: Double) {
@@ -3576,6 +3656,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (duration > 0.0) {
                 videoDuration = duration
             }
+            if (currentScreen == Screen.Courseware &&
+                mediaKindOf(coursewareUrl) == CastMediaKind.Video
+            ) {
+                updateVideoCastUi()
+            }
+        }
+    }
+
+    override fun onCoursewareVideoAudio(muted: Boolean, volumePercent: Int) {
+        runOnUiThread {
+            videoMuted = muted
+            videoVolumePercent = volumePercent.coerceIn(0, 100)
             if (currentScreen == Screen.Courseware &&
                 mediaKindOf(coursewareUrl) == CastMediaKind.Video
             ) {

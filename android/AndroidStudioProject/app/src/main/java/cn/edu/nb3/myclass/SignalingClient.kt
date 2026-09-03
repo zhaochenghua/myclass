@@ -50,6 +50,8 @@ class SignalingClient(
         fun onRemoteIceCandidate(candidate: IceCandidatePayload)
         fun onCoursewareState(state: CoursewareStatePayload)
         fun onCoursewareVideoState(playing: Boolean, position: Double, duration: Double)
+        /** 大屏端音量/静音状态（随 courseware.video.state 一起上报），volumePercent 为 0~100 */
+        fun onCoursewareVideoAudio(muted: Boolean, volumePercent: Int)
         fun onViewerCoursewareOpen(url: String, title: String, page: Int, screen: Int)
         fun onViewerCoursewareClose()
         /** 服务器明确返回的错误（连接本身仍存活，例如旧版服务器不支持某条消息类型） */
@@ -124,13 +126,26 @@ class SignalingClient(
     fun sendCoursewareClose(): Boolean =
         sendJson(JSONObject().put("type", "courseware.close"))
 
-    /** 远程控制大屏端视频播放：action 为 play / pause / toggle / seek，seek 时附带 position（秒） */
-    fun sendCoursewareVideoControl(action: String, position: Double? = null): Boolean =
+    /**
+     * 远程控制大屏端视频播放：
+     * action 为 play / pause / toggle / seek / volume / mute / query；
+     * seek 附带 position（秒）；volume 附带 volume（0~100）；mute 附带 muted（Boolean）。
+     */
+    fun sendCoursewareVideoControl(
+        action: String,
+        position: Double? = null,
+        volume: Int? = null,
+        muted: Boolean? = null
+    ): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.video.control")
                 .put("action", action)
-                .apply { position?.let { put("position", it) } }
+                .apply {
+                    position?.let { put("position", it) }
+                    volume?.let { put("volume", it) }
+                    muted?.let { put("muted", it) }
+                }
         )
 
     /**
@@ -190,11 +205,17 @@ class SignalingClient(
             "webrtc.answer" -> callback.onAnswer(message.optString("sdp"))
             "webrtc.ice-candidate" -> parseIceCandidate(message)?.let(callback::onRemoteIceCandidate)
             "courseware.state" -> parseCoursewareState(message)?.let(callback::onCoursewareState)
-            "courseware.video.state" -> callback.onCoursewareVideoState(
-                playing = message.optBoolean("playing", false),
-                position = message.optDouble("position", 0.0).coerceAtLeast(0.0),
-                duration = message.optDouble("duration", 0.0).coerceAtLeast(0.0)
-            )
+            "courseware.video.state" -> {
+                callback.onCoursewareVideoState(
+                    playing = message.optBoolean("playing", false),
+                    position = message.optDouble("position", 0.0).coerceAtLeast(0.0),
+                    duration = message.optDouble("duration", 0.0).coerceAtLeast(0.0)
+                )
+                callback.onCoursewareVideoAudio(
+                    muted = message.optBoolean("muted", false),
+                    volumePercent = message.optInt("volume", 100).coerceIn(0, 100)
+                )
+            }
             "viewer.courseware.open" -> callback.onViewerCoursewareOpen(
                 url = message.optString("url"),
                 title = message.optString("title"),
