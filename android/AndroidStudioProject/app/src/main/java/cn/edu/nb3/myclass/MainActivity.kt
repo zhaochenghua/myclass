@@ -2168,6 +2168,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }.start()
     }
 
+    /** 链接课件保存到服务器列表后直接投送大屏（大屏以弹窗提示用户打开） */
+    fun openLinkCoursewareOnScreen(url: String, title: String) {
+        if (!roomJoined) {
+            toast("请先连接教室端后再投送链接")
+            return
+        }
+        signalingClient?.sendCoursewareOpen(url, title, 1, 1, url)
+        toast("链接已投送到大屏")
+    }
+
     private fun uploadCoursewareBlocking(uri: Uri, fileName: String): CoursewareUploadResult {
         val totalBytes = contentLengthForUri(uri)
         val requestBody = object : RequestBody() {

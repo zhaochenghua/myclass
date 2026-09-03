@@ -149,7 +149,7 @@ object ExternalFileReceiver {
                 iterator.remove()
                 attempted++
                 activity.runOnUiThread {
-                    Toast.makeText(activity, "${pending.displayName} 添加完成", Toast.LENGTH_SHORT).show()
+                    (activity as? MainActivity)?.openLinkCoursewareOnScreen(pending.url, pending.displayName)
                 }
             } catch (e: Exception) {
                 activity.runOnUiThread {
