@@ -3786,9 +3786,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         signalingClient?.close()
         signalingClient = null
         message?.let { toast(it) }
-        if (currentScreen != Screen.Connect && currentScreen != Screen.Auth) {
-            showConnectScreen()
+        if (currentScreen == Screen.Auth) {
+            return
         }
+        // 无论当前在连接码输入页还是其它页面都重建连接页。
+        // 此前仅在非 Connect 页才重建，导致在连接码页输错码被拒后，
+        // “连接”按钮仍停留在禁用态“连接中...”，界面看似卡死、无法重新输入。
+        showConnectScreen()
+        // 把被拒原因（如“连接码错误”）显示在状态栏，避免用户只看到一闪而过的 toast
+        message?.let { updateStatus(it) }
     }
 
     private fun ensureCameraPermissions() {
