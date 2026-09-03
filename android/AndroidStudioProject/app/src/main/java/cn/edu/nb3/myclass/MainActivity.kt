@@ -9,6 +9,8 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -44,6 +46,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -148,6 +151,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareScreenCount = 1
     private var coursewareTitle = ""
     private var coursewareUrl = ""
+    /** 本次投屏课件的本地原文件：图片投屏时用它预览，避免从服务器重复下载 */
+    private var coursewareLocalUri: Uri? = null
+    private var castImageBitmap: Bitmap? = null
+    private var videoPlaying = false
+    private var videoPosition = 0.0
+    private var videoDuration = 0.0
+    private var videoUserScrubbing = false
+    private var videoPlayPauseButton: MaterialButton? = null
+    private var videoSeekBar: SeekBar? = null
+    private var videoTimeText: TextView? = null
+    private var videoCastStatusText: TextView? = null
+    private var zoomableImageView: ZoomableImageView? = null
     private var coursewareUploadInProgress = false
     private var coursewareFastSeekDirection = 0
     private var coursewareFastSeekTargetPage = 1
@@ -342,6 +357,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri ?: return@registerForActivityResult
+        // 保留读取权限，上传完成后仍可用原文件做本地预览
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
         uploadCourseware(uri)
     }
 
@@ -2122,6 +2144,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val fileName = displayNameForUri(uri)
         coursewareTitle = fileName
         coursewareUrl = ""
+        coursewareLocalUri = uri
+        castImageBitmap = null
         coursewarePage = 1
         coursewarePageCount = 1
         coursewareScreen = 1
@@ -2284,6 +2308,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showCoursewareScreen(title: String, isUploading: Boolean) {
+        // 图片/视频课件改用专用界面：
+        // 图片可缩放平移并同步大屏视口，视频以遥控器方式控制大屏播放
+        if (!isUploading) {
+            when (mediaKindOf(coursewareUrl)) {
+                CastMediaKind.Image -> {
+                    showImageCastScreen(title)
+                    return
+                }
+                CastMediaKind.Video -> {
+                    showVideoCastScreen(title)
+                    return
+                }
+                CastMediaKind.None -> Unit
+            }
+        }
         currentScreen = Screen.Courseware
         coursewareSubScreen = CoursewareSubScreen.Playback
         coursewareUploadInProgress = isUploading
@@ -2419,6 +2458,374 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(versionLabel())
             setContentView(root)
         }
+    }
+
+    private enum class CastMediaKind { None, Image, Video }
+
+    private val videoExtensionPattern =
+        Pattern.compile("\\.(mp4|mov|avi|webm|mkv|3gp)(\\?|$)", Pattern.CASE_INSENSITIVE)
+    private val imageExtensionPattern =
+        Pattern.compile("\\.(jpe?g|png|gif|webp|bmp)(\\?|$)", Pattern.CASE_INSENSITIVE)
+
+    /** 与大屏端 openCourseware 的类型判断保持一致 */
+    private fun mediaKindOf(url: String): CastMediaKind = when {
+        videoExtensionPattern.matcher(url).find() -> CastMediaKind.Video
+        imageExtensionPattern.matcher(url).find() -> CastMediaKind.Image
+        else -> CastMediaKind.None
+    }
+
+    /** 图片投屏界面：手机端用经典图片控件查看（双指缩放/拖动/双击），并把视口同步到大屏 */
+    private fun showImageCastScreen(title: String) {
+        currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.Playback
+        coursewareUploadInProgress = false
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.BLACK)
+        }
+
+        val imageHost = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+        val zoomable = ZoomableImageView(this)
+        imageHost.addView(
+            zoomable,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        val hintText = TextView(this).apply {
+            text = "正在加载：$title"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            )
+        }
+        imageHost.addView(hintText)
+        root.addView(imageHost)
+
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        actionRow.addView(secondaryButton("重置视图").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) }
+            setOnClickListener {
+                zoomable.resetViewport()
+                toast("已重置，大屏同步显示整张图片")
+            }
+        })
+        actionRow.addView(primaryButton("返回主菜单").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                marginStart = dp(6)
+                marginEnd = dp(6)
+            }
+            setOnClickListener { pauseCoursewareAndReturnMenu() }
+        })
+        actionRow.addView(secondaryButton("结束投屏").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
+            setOnClickListener { closeCoursewareAndReturnMenu() }
+        })
+        root.addView(actionRow)
+
+        setContentView(root)
+
+        zoomableImageView = zoomable
+        zoomable.onViewportChanged = { scale, centerX, centerY ->
+            signalingClient?.sendCoursewareImageViewport(scale, centerX, centerY)
+        }
+
+        val cached = castImageBitmap
+        if (cached != null) {
+            zoomable.setImage(cached)
+            hintText.visibility = View.GONE
+        } else {
+            loadImageCastBitmap { bitmap ->
+                if (currentScreen != Screen.Courseware ||
+                    mediaKindOf(coursewareUrl) != CastMediaKind.Image
+                ) {
+                    return@loadImageCastBitmap
+                }
+                if (bitmap != null) {
+                    castImageBitmap = bitmap
+                    zoomable.setImage(bitmap)
+                    hintText.visibility = View.GONE
+                } else {
+                    hintText.text = "图片预览加载失败，大屏仍会正常显示"
+                }
+            }
+        }
+    }
+
+    private val maxImagePreviewEdge = 2048
+
+    /** 优先用手机本地原文件做预览（省流量），取不到时再回退到服务器地址 */
+    private fun loadImageCastBitmap(onLoaded: (Bitmap?) -> Unit) {
+        val localUri = coursewareLocalUri
+        val remoteUrl = coursewareUrl
+        Thread {
+            val bitmap = localUri?.let { runCatching { decodeBitmapFromUri(it) }.getOrNull() }
+                ?: runCatching { decodeBitmapFromUrl(remoteUrl) }.getOrNull()
+            runOnUiThread { onLoaded(bitmap) }
+        }.start()
+    }
+
+    private fun decodeBitmapFromUri(uri: Uri): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        } ?: return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = calculateImageSampleSize(bounds.outWidth, bounds.outHeight)
+        }
+        return contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, options)
+        }
+    }
+
+    private fun decodeBitmapFromUrl(url: String): Bitmap? {
+        if (url.isBlank()) return null
+        val request = Request.Builder().url(url).build()
+        val bytes = coursewareHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) null else response.body?.bytes()
+        } ?: return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = calculateImageSampleSize(bounds.outWidth, bounds.outHeight)
+        }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+    }
+
+    /** 按屏幕可见需求降采样，避免大图导致内存溢出 */
+    private fun calculateImageSampleSize(width: Int, height: Int): Int {
+        val maxEdge = maxOf(width, height)
+        var sample = 1
+        while (maxEdge / sample > maxImagePreviewEdge) {
+            sample *= 2
+        }
+        return sample
+    }
+
+    /** 视频投屏界面：手机端作为遥控器控制大屏播放（不重复下载视频，也不产生两处声音） */
+    private fun showVideoCastScreen(title: String) {
+        currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.Playback
+        coursewareUploadInProgress = false
+
+        val root = baseColumn().apply {
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+        }
+        root.addView(titleText(title, 20f))
+
+        val statusText = bodyText("正在等待大屏返回播放状态...").apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+        }
+        root.addView(statusText)
+
+        val playPause = primaryButton("播放").apply {
+            textSize = 20f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(76)
+            ).apply { topMargin = dp(24) }
+            setOnClickListener { signalingClient?.sendCoursewareVideoControl("toggle") }
+        }
+        root.addView(playPause)
+
+        val seekRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(56)
+            ).apply { topMargin = dp(12) }
+        }
+        seekRow.addView(secondaryButton("−10 秒").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                1f
+            ).apply { marginEnd = dp(8) }
+            setOnClickListener { seekVideoBy(-10.0) }
+        })
+        seekRow.addView(secondaryButton("+10 秒").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                1f
+            ).apply { marginStart = dp(8) }
+            setOnClickListener { seekVideoBy(10.0) }
+        })
+        root.addView(seekRow)
+
+        val seekBar = SeekBar(this).apply {
+            max = 1000
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) }
+        }
+        root.addView(seekBar)
+
+        val timeText = TextView(this).apply {
+            text = "0:00 / 0:00"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_muted))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+        }
+        root.addView(timeText)
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser && videoDuration > 0.0) {
+                    val seconds = progress / 1000.0 * videoDuration
+                    timeText.text = "${formatMediaTime(seconds)} / ${formatMediaTime(videoDuration)}"
+                }
+            }
+
+            override fun onStartTrackingTouch(bar: SeekBar?) {
+                videoUserScrubbing = true
+            }
+
+            override fun onStopTrackingTouch(bar: SeekBar?) {
+                videoUserScrubbing = false
+                val progress = bar?.progress ?: return
+                if (videoDuration > 0.0) {
+                    signalingClient?.sendCoursewareVideoControl(
+                        "seek",
+                        progress / 1000.0 * videoDuration
+                    )
+                }
+            }
+        })
+
+        root.addView(primaryButton("返回主菜单").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply { topMargin = dp(20) }
+            setOnClickListener { pauseCoursewareAndReturnMenu() }
+        })
+        root.addView(secondaryButton("结束播放").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply { topMargin = dp(12) }
+            setOnClickListener { closeCoursewareAndReturnMenu() }
+        })
+        root.addView(versionLabel())
+
+        // 横屏时内容可能超过屏幕高度，用滚动容器兜底
+        setContentView(
+            ScrollView(this).apply {
+                isFillViewport = true
+                addView(root)
+            }
+        )
+
+        videoPlayPauseButton = playPause
+        videoSeekBar = seekBar
+        videoTimeText = timeText
+        videoCastStatusText = statusText
+        updateVideoCastUi()
+        // 探活：大屏端即使不认识该 action 也会回传一次当前播放状态
+        signalingClient?.sendCoursewareVideoControl("query")
+    }
+
+    /** 用大屏回传的状态刷新遥控器界面 */
+    private fun updateVideoCastUi() {
+        val playPause = videoPlayPauseButton ?: return
+        val seekBar = videoSeekBar ?: return
+        val timeText = videoTimeText ?: return
+        val statusText = videoCastStatusText ?: return
+
+        playPause.text = if (videoPlaying) "暂停" else "播放"
+        statusText.text = when {
+            !roomJoined -> "正在重新连接教室端..."
+            videoDuration <= 0.0 -> "大屏正在加载视频..."
+            videoPlaying -> "大屏正在播放"
+            else -> "大屏已暂停"
+        }
+        if (!videoUserScrubbing) {
+            seekBar.progress = if (videoDuration > 0.0) {
+                ((videoPosition / videoDuration) * 1000.0).toInt().coerceIn(0, 1000)
+            } else {
+                0
+            }
+        }
+        val durationText = if (videoDuration > 0.0) formatMediaTime(videoDuration) else "--:--"
+        timeText.text = "${formatMediaTime(videoPosition)} / $durationText"
+    }
+
+    private fun seekVideoBy(deltaSeconds: Double) {
+        if (videoDuration <= 0.0) {
+            toast("暂未获取到视频时长")
+            return
+        }
+        val target = (videoPosition + deltaSeconds).coerceIn(0.0, videoDuration)
+        videoPosition = target
+        signalingClient?.sendCoursewareVideoControl("seek", target)
+        updateVideoCastUi()
+    }
+
+    private fun formatMediaTime(seconds: Double): String {
+        val total = seconds.coerceAtLeast(0.0).toLong()
+        val minutes = total / 60
+        val secs = total % 60
+        return if (minutes >= 60) {
+            String.format("%d:%02d:%02d", minutes / 60, minutes % 60, secs)
+        } else {
+            String.format("%d:%02d", minutes, secs)
+        }
+    }
+
+    /** 结束图片/视频投屏时释放预览资源与界面引用 */
+    private fun resetMediaCastState() {
+        coursewareLocalUri = null
+        castImageBitmap = null
+        zoomableImageView = null
+        videoPlaying = false
+        videoPosition = 0.0
+        videoDuration = 0.0
+        videoUserScrubbing = false
+        videoPlayPauseButton = null
+        videoSeekBar = null
+        videoTimeText = null
+        videoCastStatusText = null
+    }
+
+    /** 仅释放界面引用，保留播放进度，便于从菜单返回后继续遥控 */
+    private fun releaseMediaCastViews() {
+        zoomableImageView = null
+        videoPlayPauseButton = null
+        videoSeekBar = null
+        videoTimeText = null
+        videoCastStatusText = null
     }
 
     private fun coursewareStatusText(title: String): String {
@@ -2689,12 +3096,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareUrl = ""
         savedCoursewareState = null
         coursewareSubScreen = CoursewareSubScreen.None
+        resetMediaCastState()
         showMenuScreen()
     }
 
     private fun pauseCoursewareAndReturnMenu() {
         cancelCoursewareFastSeek()
         coursewareSubScreen = CoursewareSubScreen.None
+        releaseMediaCastViews()
         savedCoursewareState = CoursewareState(
             title = coursewareTitle,
             url = coursewareUrl,
@@ -3102,6 +3511,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         webRtcClient?.addRemoteIceCandidate(candidate)
     }
 
+    override fun onCoursewareVideoState(playing: Boolean, position: Double, duration: Double) {
+        runOnUiThread {
+            videoPlaying = playing
+            videoPosition = position
+            if (duration > 0.0) {
+                videoDuration = duration
+            }
+            if (currentScreen == Screen.Courseware &&
+                mediaKindOf(coursewareUrl) == CastMediaKind.Video
+            ) {
+                updateVideoCastUi()
+            }
+        }
+    }
+
     override fun onCoursewareState(state: CoursewareStatePayload) {
         runOnUiThread {
             // 无论当前在哪个页面都同步课件页码，
@@ -3146,6 +3570,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             coursewareUrl = ""
             savedCoursewareState = null
             coursewareSubScreen = CoursewareSubScreen.None
+            resetMediaCastState()
             showMenuScreen()
         }
     }

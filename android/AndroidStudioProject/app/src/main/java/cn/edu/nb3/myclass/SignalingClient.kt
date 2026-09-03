@@ -49,6 +49,7 @@ class SignalingClient(
         fun onAnswer(sdp: String)
         fun onRemoteIceCandidate(candidate: IceCandidatePayload)
         fun onCoursewareState(state: CoursewareStatePayload)
+        fun onCoursewareVideoState(playing: Boolean, position: Double, duration: Double)
         fun onViewerCoursewareOpen(url: String, title: String, page: Int, screen: Int)
         fun onViewerCoursewareClose()
         fun onSignalError(message: String)
@@ -121,6 +122,28 @@ class SignalingClient(
     fun sendCoursewareClose(): Boolean =
         sendJson(JSONObject().put("type", "courseware.close"))
 
+    /** 远程控制大屏端视频播放：action 为 play / pause / toggle / seek，seek 时附带 position（秒） */
+    fun sendCoursewareVideoControl(action: String, position: Double? = null): Boolean =
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.video.control")
+                .put("action", action)
+                .apply { position?.let { put("position", it) } }
+        )
+
+    /**
+     * 同步图片视口到大屏：scale 为相对适应屏幕的放大倍数，
+     * centerX / centerY 为视口中心在图片中的归一化坐标（0~1）。
+     */
+    fun sendCoursewareImageViewport(scale: Float, centerX: Float, centerY: Float): Boolean =
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.image.viewport")
+                .put("scale", scale.toDouble())
+                .put("centerX", centerX.toDouble())
+                .put("centerY", centerY.toDouble())
+        )
+
     fun sendOrientation(orientation: DeviceOrientationPayload) {
         sendJson(
             JSONObject()
@@ -165,6 +188,11 @@ class SignalingClient(
             "webrtc.answer" -> callback.onAnswer(message.optString("sdp"))
             "webrtc.ice-candidate" -> parseIceCandidate(message)?.let(callback::onRemoteIceCandidate)
             "courseware.state" -> parseCoursewareState(message)?.let(callback::onCoursewareState)
+            "courseware.video.state" -> callback.onCoursewareVideoState(
+                playing = message.optBoolean("playing", false),
+                position = message.optDouble("position", 0.0).coerceAtLeast(0.0),
+                duration = message.optDouble("duration", 0.0).coerceAtLeast(0.0)
+            )
             "viewer.courseware.open" -> callback.onViewerCoursewareOpen(
                 url = message.optString("url"),
                 title = message.optString("title"),

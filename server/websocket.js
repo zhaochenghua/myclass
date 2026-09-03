@@ -3,9 +3,11 @@ const { RoomManager, sendJson, DEFAULT_ROOM_TTL_MS } = require('./roomManager');
 
 const TEACHER_ONLY_MESSAGE_TYPES = new Set([
   'courseware.close',
+  'courseware.image.viewport',
   'courseware.navigate',
   'courseware.open',
   'courseware.page',
+  'courseware.video.control',
   'webrtc.offer',
   'teacher.orientation',
   'teacher.stop'
@@ -88,10 +90,13 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'webrtc.answer':
     case 'webrtc.ice-candidate':
     case 'courseware.close':
+    case 'courseware.image.viewport':
     case 'courseware.navigate':
     case 'courseware.open':
     case 'courseware.page':
     case 'courseware.state':
+    case 'courseware.video.control':
+    case 'courseware.video.state':
     case 'teacher.orientation':
     case 'teacher.stop':
     case 'viewer.courseware.open':

@@ -99,7 +99,8 @@ const state = {
   videoPlayer: {
     active: false,
     idleTimer: null,
-    scrubbing: false
+    scrubbing: false,
+    lastReportAt: 0
   }
 };
 
@@ -826,6 +827,12 @@ async function handleSignalMessage(message) {
     case 'courseware.close':
       closeCourseware('课件已结束');
       break;
+    case 'courseware.video.control':
+      handleCoursewareVideoControl(message);
+      break;
+    case 'courseware.image.viewport':
+      handleCoursewareImageViewport(message);
+      break;
     case 'courseware.original':
       handleCoursewareOriginal(message);
       break;
@@ -1204,6 +1211,9 @@ function showCoursewareViewForImage(info) {
   elements.nextPageButton.hidden = true;
   if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
 
+  // 打开新图片时复位缩放/平移，并裁剪溢出部分（避免沿用上一张的视口）
+  elements.imagePlayerOverlay.style.overflow = 'hidden';
+  elements.coursewareImage.style.transform = '';
   elements.coursewareImage.src = info.url;
   elements.coursewareImage.alt = info.title || '图片';
   elements.imagePlayerOverlay.hidden = false;
@@ -1262,22 +1272,31 @@ function bindVideoEvents() {
       elements.videoProgressThumb.style.left = pct + '%';
       elements.videoTime.textContent = formatTime(v.currentTime) + ' / ' + formatTime(v.duration);
     }
+    reportVideoState();
   });
 
   v.addEventListener('loadedmetadata', () => {
     elements.videoTime.textContent = '0:00 / ' + formatTime(v.duration);
+    reportVideoState(true);
   });
 
   v.addEventListener('play', () => {
     elements.videoPlayPause.textContent = '⏸';
+    reportVideoState(true);
   });
 
   v.addEventListener('pause', () => {
     elements.videoPlayPause.textContent = '▶';
+    reportVideoState(true);
   });
 
   v.addEventListener('ended', () => {
     elements.videoPlayPause.textContent = '↺';
+    reportVideoState(true);
+  });
+
+  v.addEventListener('seeked', () => {
+    reportVideoState(true);
   });
 
   v.addEventListener('click', () => {
@@ -1324,6 +1343,63 @@ function closeVideoPlayer() {
   elements.videoPlayerOverlay.hidden = true;
   elements.videoPlayerOverlay.classList.remove('idle');
   closeCourseware('视频播放已结束');
+}
+
+// ---- 手机端远程控制（视频播放 / 图片视口） ----
+
+function reportVideoState(force = false) {
+  if (!state.videoPlayer.active) return;
+  const v = elements.coursewareVideo;
+  const now = Date.now();
+  if (!force && now - (state.videoPlayer.lastReportAt || 0) < 500) return;
+  state.videoPlayer.lastReportAt = now;
+  sendMessage({
+    type: 'courseware.video.state',
+    playing: !v.paused && !v.ended,
+    position: Number.isFinite(v.currentTime) ? v.currentTime : 0,
+    duration: Number.isFinite(v.duration) ? v.duration : 0
+  });
+}
+
+function handleCoursewareVideoControl(message) {
+  if (!state.videoPlayer.active) return;
+  const v = elements.coursewareVideo;
+  const action = typeof message.action === 'string' ? message.action : '';
+  if (action === 'play' || action === 'toggle') {
+    if (v.paused) {
+      if (v.ended) v.currentTime = 0;
+      v.play().catch(() => {});
+    } else if (action === 'toggle') {
+      v.pause();
+    }
+  } else if (action === 'pause') {
+    v.pause();
+  } else if (action === 'seek') {
+    const position = Number(message.position);
+    if (!Number.isFinite(position) || !Number.isFinite(v.duration) || v.duration <= 0) return;
+    v.currentTime = Math.max(0, Math.min(v.duration, position));
+  }
+  reportVideoState(true);
+}
+
+// 手机端上报的是归一化视口（缩放倍数 + 视口中心在图片中的相对位置），
+// 大屏端按自身显示尺寸换算成本地像素变换，保证两端看到的区域一致。
+function handleCoursewareImageViewport(message) {
+  if (elements.imagePlayerOverlay.hidden) return;
+  const img = elements.coursewareImage;
+  const width = img.offsetWidth;
+  const height = img.offsetHeight;
+  if (!width || !height) return;
+  const rawScale = Number(message.scale);
+  const rawCenterX = Number(message.centerX);
+  const rawCenterY = Number(message.centerY);
+  const scale = Number.isFinite(rawScale) ? Math.min(8, Math.max(1, rawScale)) : 1;
+  const centerX = Number.isFinite(rawCenterX) ? Math.min(1, Math.max(0, rawCenterX)) : 0.5;
+  const centerY = Number.isFinite(rawCenterY) ? Math.min(1, Math.max(0, rawCenterY)) : 0.5;
+  const offsetX = -scale * (centerX - 0.5) * width;
+  const offsetY = -scale * (centerY - 0.5) * height;
+  img.style.transformOrigin = 'center center';
+  img.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
 }
 
 // 进度条拖拽

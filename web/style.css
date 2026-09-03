@@ -1325,6 +1325,8 @@ video {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 手机端放大图片后，超出视口的部分需要裁剪，避免溢出到屏幕外 */
+  overflow: hidden;
 }
 
 .image-player-overlay[hidden] {
