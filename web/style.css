@@ -1346,6 +1346,25 @@ video {
   background: #000;
 }
 
+/* 视频加载/解码失败时的提示层 */
+.video-player-error {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  transform: translate(-50%, -50%);
+  max-width: 86%;
+  padding: 20px 28px;
+  color: #fff;
+  font-size: 22px;
+  line-height: 1.6;
+  text-align: center;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.82);
+  z-index: 3;
+  pointer-events: none;
+  white-space: pre-line;
+}
+
 .video-controls {
   position: absolute;
   bottom: 0;

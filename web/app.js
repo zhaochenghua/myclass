@@ -197,6 +197,7 @@ const elements = {
   videoVolumeSlider: document.getElementById('videoVolumeSlider'),
   videoFullscreenBtn: document.getElementById('videoFullscreenBtn'),
   videoCloseBtn: document.getElementById('videoCloseBtn'),
+  videoPlayerError: document.getElementById('videoPlayerError'),
   // 课件连接码角标
   coursewareConnIndicator: document.getElementById('coursewareConnIndicator'),
   coursewareConnCode: document.getElementById('coursewareConnCode'),
@@ -1225,6 +1226,19 @@ function showCoursewareViewForImage(info) {
 // 浏览器对“无用户手势的有声自动播放”有拦截策略（带 room 参数自动进入的大屏页面
 // 常常没有任何点击），直接 play() 会被拒绝。此时先以静音启动拿到播放许可，
 // 播放起来后再恢复声音；用户手动点击播放则走正常有声路径。
+function showVideoPlayerError(detail) {
+  console.error('[Video] ' + detail);
+  const el = elements.videoPlayerError;
+  if (el) {
+    el.textContent = detail;
+    el.hidden = false;
+  }
+}
+
+function hideVideoPlayerError() {
+  if (elements.videoPlayerError) elements.videoPlayerError.hidden = true;
+}
+
 function startCoursewareVideo() {
   const v = elements.coursewareVideo;
   if (!v.paused && !v.ended) return;
@@ -1237,7 +1251,12 @@ function startCoursewareVideo() {
     v.muted = true;
     const retry = v.play();
     if (retry) {
-      retry.then(() => { if (!wasMuted) v.muted = false; }).catch(() => {});
+      retry.then(() => { if (!wasMuted) v.muted = false; }).catch(() => {
+        // 静音后仍无法播放：多半不是自动播放策略，而是视频格式/编码不被支持
+        // 或视频源无法访问（404/服务器未就绪），直接在屏幕上提示原因
+        hideVideoPlayerError();
+        showVideoPlayerError('无法开始播放：视频格式不被浏览器支持，或视频文件无法访问。\n建议将手机拍摄的视频转成 H.264 MP4（1080P/720P）后重新上传。');
+      });
     }
   });
 }
@@ -1258,6 +1277,7 @@ function showCoursewareViewForVideo(info) {
   if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
 
   // 先绑定事件（内部会 cloneNode 替换元素），再设置 src 避免被 cloneNode(false) 丢弃
+  hideVideoPlayerError();
   bindVideoEvents();
 
   const video = elements.coursewareVideo;
@@ -1319,6 +1339,27 @@ function bindVideoEvents() {
     reportVideoState(true);
   });
 
+  // 加载/解码错误必须上屏提示，避免“点了播放没反应”却找不到原因
+  v.addEventListener('error', () => {
+    const err = v.error;
+    let detail;
+    if (!err) {
+      detail = '视频加载失败。';
+    } else if (err.code === MediaError.MEDIA_ERR_DECODE) {
+      detail = '视频解码失败：浏览器不支持该视频的编码格式（手机拍摄的 HEVC/H.265 常见）。\n请转成 H.264 MP4 后重新上传。';
+    } else if (err.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+      detail = '视频格式或编码不被浏览器支持。\n请转成 H.264 MP4 后重新上传。';
+    } else if (err.code === MediaError.MEDIA_ERR_NETWORK) {
+      detail = '网络错误：视频加载中断，请确认视频文件仍可访问。';
+    } else {
+      detail = '视频加载失败（错误码 ' + err.code + '）。';
+    }
+    showVideoPlayerError(detail);
+    reportVideoState(true);
+  });
+  v.addEventListener('canplay', hideVideoPlayerError);
+  v.addEventListener('playing', hideVideoPlayerError);
+
   v.addEventListener('click', () => {
     if (v.paused) {
       if (v.ended) { v.currentTime = 0; }
@@ -1362,6 +1403,7 @@ function closeVideoPlayer() {
   if (state.videoPlayer.idleTimer) clearTimeout(state.videoPlayer.idleTimer);
   elements.videoPlayerOverlay.hidden = true;
   elements.videoPlayerOverlay.classList.remove('idle');
+  hideVideoPlayerError();
   closeCourseware('视频播放已结束');
 }
 
