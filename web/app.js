@@ -100,7 +100,14 @@ const state = {
     active: false,
     idleTimer: null,
     scrubbing: false,
-    lastReportAt: 0
+    lastReportAt: 0,
+    // 因浏览器自动播放策略被迫静音启动，需等用户手势后才能恢复声音
+    autoplayMuted: false,
+    // 用户主动静音（点过静音按钮或把音量拉到 0）
+    userMuted: false,
+    // 页面已拿到用户手势（点击/按键）
+    userActivated: false,
+    gestureBound: false
   }
 };
 
@@ -198,6 +205,7 @@ const elements = {
   videoFullscreenBtn: document.getElementById('videoFullscreenBtn'),
   videoCloseBtn: document.getElementById('videoCloseBtn'),
   videoPlayerError: document.getElementById('videoPlayerError'),
+  videoHint: document.getElementById('videoHint'),
   // 课件连接码角标
   coursewareConnIndicator: document.getElementById('coursewareConnIndicator'),
   coursewareConnCode: document.getElementById('coursewareConnCode'),
@@ -1224,8 +1232,9 @@ function showCoursewareViewForImage(info) {
 // ---- 视频课件播放器 ----
 
 // 浏览器对“无用户手势的有声自动播放”有拦截策略（带 room 参数自动进入的大屏页面
-// 常常没有任何点击），直接 play() 会被拒绝。此时先以静音启动拿到播放许可，
-// 播放起来后再恢复声音；用户手动点击播放则走正常有声路径。
+// 常常没有任何点击），直接 play() 会被拒绝。此时先以静音启动拿到播放许可；
+// 但取消静音必须等真实用户手势，否则浏览器会撤销播放许可、把视频直接暂停
+// （表现为：大屏刚播起来就停，手机端显示“大屏已暂停”）。
 function showVideoPlayerError(detail) {
   console.error('[Video] ' + detail);
   const el = elements.videoPlayerError;
@@ -1239,22 +1248,70 @@ function hideVideoPlayerError() {
   if (elements.videoPlayerError) elements.videoPlayerError.hidden = true;
 }
 
+function syncVideoMuteButton() {
+  elements.videoMuteBtn.textContent = elements.coursewareVideo.muted ? '🔇' : '🔊';
+}
+
+function showVideoHint(text) {
+  const el = elements.videoHint;
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = !text;
+}
+
+function hasPageUserActivation() {
+  return !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
+}
+
+function restoreAutoplayAudio() {
+  const v = elements.coursewareVideo;
+  if (!state.videoPlayer.autoplayMuted) return;
+  if (state.videoPlayer.userMuted) return;
+  if (!state.videoPlayer.userActivated && !hasPageUserActivation()) return;
+  v.muted = false;
+  state.videoPlayer.autoplayMuted = false;
+  showVideoHint('');
+  syncVideoMuteButton();
+}
+
+// 等老师在大屏上点一次（点画面/按键/拖音量都算手势），再恢复声音
+function bindGestureForAudio() {
+  if (state.videoPlayer.gestureBound) return;
+  state.videoPlayer.gestureBound = true;
+  const onGesture = () => {
+    state.videoPlayer.userActivated = true;
+    restoreAutoplayAudio();
+    document.removeEventListener('pointerdown', onGesture, true);
+    document.removeEventListener('keydown', onGesture, true);
+    document.removeEventListener('touchstart', onGesture, true);
+  };
+  document.addEventListener('pointerdown', onGesture, true);
+  document.addEventListener('keydown', onGesture, true);
+  document.addEventListener('touchstart', onGesture, true);
+}
+
 function startCoursewareVideo() {
   const v = elements.coursewareVideo;
   if (!v.paused && !v.ended) return;
-  const wasMuted = v.muted;
   const p = v.play();
   if (!p) return;
   p.then(() => {
-    if (!wasMuted) v.muted = false;
+    // 有声播放成功：若之前因策略静音过且现在已有手势，则恢复声音
+    restoreAutoplayAudio();
   }).catch(() => {
+    // 无用户手势被拒绝：先静音拿到播放许可，声音留到手势之后再恢复
     v.muted = true;
+    state.videoPlayer.autoplayMuted = true;
+    syncVideoMuteButton();
     const retry = v.play();
     if (retry) {
-      retry.then(() => { if (!wasMuted) v.muted = false; }).catch(() => {
+      retry.then(() => {
+        showVideoHint('已静音播放，点击画面即可开启声音');
+        bindGestureForAudio();
+        restoreAutoplayAudio();
+      }).catch(() => {
         // 静音后仍无法播放：多半不是自动播放策略，而是视频格式/编码不被支持
         // 或视频源无法访问（404/服务器未就绪），直接在屏幕上提示原因
-        hideVideoPlayerError();
         showVideoPlayerError('无法开始播放：视频格式不被浏览器支持，或视频文件无法访问。\n建议将手机拍摄的视频转成 H.264 MP4（1080P/720P）后重新上传。');
       });
     }
@@ -1284,6 +1341,11 @@ function showCoursewareViewForVideo(info) {
   video.src = info.url;
   video.volume = elements.videoVolumeSlider.value / 100;
   video.currentTime = 0;
+  // 沿用老师上次的静音选择；是否因策略静音需要重新判定
+  video.muted = state.videoPlayer.userMuted;
+  state.videoPlayer.autoplayMuted = false;
+  showVideoHint('');
+  syncVideoMuteButton();
 
   elements.videoPlayerOverlay.hidden = false;
   elements.videoPlayPause.textContent = '⏸';
@@ -1404,6 +1466,8 @@ function closeVideoPlayer() {
   elements.videoPlayerOverlay.hidden = true;
   elements.videoPlayerOverlay.classList.remove('idle');
   hideVideoPlayerError();
+  showVideoHint('');
+  state.videoPlayer.autoplayMuted = false;
   closeCourseware('视频播放已结束');
 }
 
@@ -1522,7 +1586,12 @@ elements.videoPlayPause.addEventListener('click', () => {
 elements.videoMuteBtn.addEventListener('click', () => {
   const v = elements.coursewareVideo;
   v.muted = !v.muted;
-  elements.videoMuteBtn.textContent = v.muted ? '🔇' : '🔊';
+  // 大屏上的点击就是用户手势，此时取消静音不会再被浏览器暂停
+  state.videoPlayer.userActivated = true;
+  state.videoPlayer.userMuted = v.muted;
+  state.videoPlayer.autoplayMuted = false;
+  showVideoHint('');
+  syncVideoMuteButton();
   if (!v.muted) elements.videoVolumeSlider.value = Math.round(v.volume * 100);
 });
 
@@ -1531,7 +1600,11 @@ elements.videoVolumeSlider.addEventListener('input', () => {
   const v = elements.coursewareVideo;
   v.volume = elements.videoVolumeSlider.value / 100;
   v.muted = v.volume === 0;
-  elements.videoMuteBtn.textContent = v.muted || v.volume === 0 ? '🔇' : '🔊';
+  state.videoPlayer.userActivated = true;
+  state.videoPlayer.userMuted = v.muted;
+  state.videoPlayer.autoplayMuted = false;
+  showVideoHint('');
+  syncVideoMuteButton();
 });
 
 // 全屏

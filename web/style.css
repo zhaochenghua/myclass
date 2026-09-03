@@ -1347,6 +1347,19 @@ video {
 }
 
 /* 视频加载/解码失败时的提示层 */
+/* 控制条内的轻量提示（例如“已静音播放”） */
+.video-hint {
+  color: #ffd76a;
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.video-hint[hidden] {
+  display: none;
+}
+
 .video-player-error {
   position: absolute;
   left: 50%;
