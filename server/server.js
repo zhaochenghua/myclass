@@ -18,7 +18,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://ai.nbsdszx.cn${PATH_PREFIX}`
 );
-const DEFAULT_APP_VERSION = process.env.APP_VERSION || '1.4.6-2026090302';
+const DEFAULT_APP_VERSION = process.env.APP_VERSION || '1.4.6-2026090303';
 const DEFAULT_WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.22';
 const DEFAULT_IOS_VERSION = process.env.IOS_VERSION || '1.0.0-20260902';
 const VERSIONS_PATH = path.join(__dirname, 'data', 'versions.json');
@@ -719,8 +719,26 @@ async function publishCourseware(file, fields = {}, userId) {
     };
     await rememberCourseware(result);
     return result;
+  } else if (ext === '.jpg' || ext === '.jpeg' || ext === '.png' || ext === '.gif' || ext === '.webp' || ext === '.bmp') {
+    // 图片：无需转换，直接保存原图并以 <img> 方式在大屏端渲染，保证清晰度
+    const imagePath = path.join(coursewareRoot, `${id}${ext}`);
+    await fs.promises.copyFile(file.path, imagePath);
+    const stat = await fs.promises.stat(imagePath);
+    const result = {
+      id,
+      userId: userId || 'legacy',
+      title: path.basename(originalName, ext),
+      fileName: originalName,
+      size: stat.size,
+      downloadOnly: false,
+      imageUrl: `${PATH_PREFIX}/public/courseware/${id}${ext}`,
+      url: `${PATH_PREFIX}/public/courseware/${id}${ext}`,
+      createdAt: new Date().toISOString()
+    };
+    await rememberCourseware(result);
+    return result;
   } else {
-    throw publicError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP、视频文件');
+    throw publicError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP、图片、视频文件');
   }
 
   const stat = await fs.promises.stat(pdfPath);

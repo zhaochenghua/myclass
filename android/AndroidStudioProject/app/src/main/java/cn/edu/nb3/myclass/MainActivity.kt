@@ -2,6 +2,7 @@ package cn.edu.nb3.myclass
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -78,6 +79,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private enum class CoursewareSubScreen {
         None,
         Source,
+        MediaSource,
         ListLoading,
         ServerList,
         Playback
@@ -123,7 +125,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var switchCameraButton: MaterialButton? = null
     private var frameLockButton: MaterialButton? = null
     private var torchButton: MaterialButton? = null
-    private var imageCastButton: MaterialButton? = null
     private var audioToggleButton: MaterialButton? = null
     private var cameraControls: LinearLayout? = null
     private var cameraVersionLabel: TextView? = null
@@ -140,8 +141,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var resumeCameraAfterJoin = false
     private var resumeLiveAfterJoin = false
     private var pendingCoursewareCloseAfterJoin = false
-    private var isPickingImageForProjection = false
-    private var openImagePickerAfterPermission = false
     private var coursewarePage = 1
     private var coursewarePageCount = 1
     private var coursewareScreen = 1
@@ -204,11 +203,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         if (result.values.all { it }) {
-            val shouldOpenImagePicker = openImagePickerAfterPermission
-            openImagePickerAfterPermission = false
-            showCameraScreen(openImagePicker = shouldOpenImagePicker)
+            showCameraScreen()
         } else {
-            openImagePickerAfterPermission = false
             toast("需要摄像头和麦克风权限才能直播")
         }
     }
@@ -287,6 +283,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 // 根据子页面类型重建课件界面
                 when (coursewareSubScreen) {
                     CoursewareSubScreen.Source -> showCoursewareSourceScreen()
+                    CoursewareSubScreen.MediaSource -> showMediaCastSourceScreen()
                     CoursewareSubScreen.ListLoading -> showCoursewareListLoadingScreen()
                     CoursewareSubScreen.ServerList -> {
                         // 服务器列表由异步数据填充，此处重建为加载中状态
@@ -332,12 +329,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    private val imagePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.GetContent()
+    // 图片/视频投屏：走课件上传链路，上传后由服务器下发 URL 播放（清晰流畅，不经过 WebRTC 编码）
+    private val mediaPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        isPickingImageForProjection = false
         uri ?: return@registerForActivityResult
-        showSelectedImage(uri)
+        uploadCourseware(uri)
     }
 
     private val coursewarePickerLauncher = registerForActivityResult(
@@ -360,10 +357,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onPause() {
         appInForeground = false
-        if (isPickingImageForProjection) {
-            super.onPause()
-            return
-        }
         if (currentScreen == Screen.Camera && !isFinishing) {
             cameraPausedForBackground = true
             restartLiveOnResume = webRtcClient?.isLive() == true
@@ -1190,7 +1183,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ensureCameraPermissions()
             }
         }
-        val imageBtn = primaryButton("图片投屏").apply {
+        val mediaBtn = primaryButton("图片视频投屏").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1198,7 +1191,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 topMargin = dp(16)
             }
             setOnClickListener {
-                ensureCameraPermissions(openImagePicker = true)
+                showMediaCastSourceScreen()
             }
         }
         val screenBtn = primaryButton("共享屏幕").apply {
@@ -1254,7 +1247,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
             rightPanel.addView(cameraBtn)
-            rightPanel.addView(imageBtn)
+            rightPanel.addView(mediaBtn)
             rightPanel.addView(screenBtn)
             rightPanel.addView(coursewareBtn)
 
@@ -1268,7 +1261,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             root.addView(titleText("功能菜单", 28f))
             root.addView(cameraBtn)
-            root.addView(imageBtn)
+            root.addView(mediaBtn)
             root.addView(screenBtn)
             root.addView(coursewareBtn)
             root.addView(statusText)
@@ -1501,6 +1494,129 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(versionLabel())
             setContentView(root)
         }
+    }
+
+    /**
+     * 图片/视频投屏来源选择页。
+     * 走课件上传链路：文件上传到服务器后由大屏端直接从服务器加载播放，
+     * 不再经过 WebRTC 编码推送，流畅度与清晰度都更好。
+     */
+    private fun showMediaCastSourceScreen() {
+        currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.MediaSource
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+        val localBtn = primaryButton("本机图片视频").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(if (isLandscape) 0 else 34)
+            }
+            setOnClickListener {
+                launchMediaPicker()
+            }
+        }
+        val linkBtn = primaryButton("剪贴板链接").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(16)
+            }
+            setOnClickListener {
+                handleClipboardLink()
+            }
+        }
+        val backBtn = secondaryButton("返回菜单").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply {
+                topMargin = dp(16)
+            }
+            setOnClickListener {
+                showMenuScreen()
+            }
+        }
+        statusText = bodyText("选择手机中的图片或视频上传到服务器播放，或使用剪贴板中的链接").apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(if (isLandscape) 12 else 24)
+            }
+        }
+
+        if (isLandscape) {
+            // 横屏：左右结构
+            val root = landscapeRoot().apply {
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                gravity = Gravity.CENTER
+            }
+            val leftPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(24)
+                }
+            }
+            leftPanel.addView(titleText("图片视频投屏", 22f))
+            leftPanel.addView(statusText)
+            leftPanel.addView(versionLabel())
+
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            rightPanel.addView(localBtn)
+            rightPanel.addView(linkBtn)
+            rightPanel.addView(backBtn)
+
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            // 竖屏：垂直结构
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("图片视频投屏", 28f))
+            root.addView(localBtn)
+            root.addView(linkBtn)
+            root.addView(backBtn)
+            root.addView(statusText)
+            root.addView(versionLabel())
+            setContentView(root)
+        }
+    }
+
+    private fun launchMediaPicker() {
+        runCatching {
+            mediaPickerLauncher.launch(arrayOf("image/*", "video/*"))
+        }.onFailure {
+            toast("无法打开文件选择器")
+        }
+    }
+
+    /** 读取剪贴板中的链接，复用分享链接的导入流程上传为链接课件 */
+    private fun handleClipboardLink() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val text = clipboard?.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.text
+            ?.toString()
+            ?.trim()
+        val link = text?.takeIf {
+            it.startsWith("http://", ignoreCase = true) ||
+                it.startsWith("https://", ignoreCase = true)
+        }
+        if (link == null) {
+            toast("剪贴板中没有可用的链接")
+            return
+        }
+        handleShareIntent(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
     }
 
     private fun loadServerCoursewareList() {
@@ -2434,6 +2550,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             imeOptions = EditorInfo.IME_ACTION_GO
             hint = "页码 1-${coursewarePageCount.coerceAtLeast(1)}"
             gravity = Gravity.CENTER
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+            setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_muted))
+            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_surface))
+            setPadding(dp(12), dp(8), dp(12), dp(8))
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                 marginEnd = dp(8)
             }
@@ -2523,8 +2644,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showCameraScreen(
-        autoStartLive: Boolean = false,
-        openImagePicker: Boolean = false
+        autoStartLive: Boolean = false
     ) {
         currentScreen = Screen.Camera
         activePresentationMode = PresentationMode.Camera
@@ -2590,7 +2710,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 webRtcClient?.setFrameLocked(false)
                 updateFrameLockButton(isLocked = false, isEnabled = true)
                 webRtcClient?.switchCamera()
-                updateImageCastButton(isProjecting = false)
             }
         }
         frameLockButton = cameraSecondaryButton("锁定画面").apply {
@@ -2614,19 +2733,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     supportsTorch = webRtcClient?.isTorchSupported() == true,
                     torchEnabled = enabled
                 )
-            }
-        }
-        imageCastButton = cameraSecondaryButton("图片投屏").apply {
-            isEnabled = true
-            setOnClickListener {
-                if (webRtcClient?.isImageProjectionActive() == true) {
-                    updateImageCastButton(isProjecting = false)
-                    audioToggleButton?.visibility = View.VISIBLE
-                    webRtcClient?.clearImageProjection()
-                    sendCurrentDeviceOrientation(force = true)
-                    return@setOnClickListener
-                }
-                launchImagePickerForProjection()
             }
         }
         audioToggleButton = MaterialButton(this).apply {
@@ -2684,15 +2790,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             webRtcClient?.startPreview()
             webRtcClient?.setDeviceRotation(rawDeviceRotationDegrees)
             updateFrameLockButton(isLocked = false, isEnabled = true)
-            updateImageCastButton(isProjecting = false)
             updateLiveControlButtons(isLive = false)
             if (autoStartLive) {
                 startLiveFromUi()
-            }
-            if (openImagePicker) {
-                renderer.post {
-                    launchImagePickerForProjection()
-                }
             }
         }.onFailure {
             updateStatus(it.message ?: "摄像头启动失败")
@@ -2836,8 +2936,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    private fun ensureCameraPermissions(openImagePicker: Boolean = false) {
-        openImagePickerAfterPermission = openImagePicker
+    private fun ensureCameraPermissions() {
         val permissions = arrayOf(
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
@@ -2846,9 +2945,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
         if (allGranted) {
-            val shouldOpenImagePicker = openImagePickerAfterPermission
-            openImagePickerAfterPermission = false
-            showCameraScreen(openImagePicker = shouldOpenImagePicker)
+            showCameraScreen()
         } else {
             permissionLauncher.launch(permissions)
         }
@@ -3027,7 +3124,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         switchCameraButton = null
         frameLockButton = null
         torchButton = null
-        imageCastButton = null
+
         audioToggleButton = null
         cameraControls = null
         cameraVersionLabel = null
@@ -3128,20 +3225,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         setCameraButtonText(frameLockButton, if (isLocked) "解除锁定" else "锁定画面")
     }
 
-    private fun launchImagePickerForProjection() {
-        isPickingImageForProjection = true
-        runCatching {
-            imagePickerLauncher.launch("image/*")
-        }.onFailure {
-            isPickingImageForProjection = false
-            toast("无法打开相册")
-        }
-    }
-
-    private fun updateImageCastButton(isProjecting: Boolean) {
-        setCameraButtonText(imageCastButton, if (isProjecting) "恢复摄像头" else "图片投屏")
-    }
-
     private fun updateAudioButton(isEnabled: Boolean) {
         audioToggleButton?.apply {
             text = if (isEnabled) "🎤" else "🔇"
@@ -3169,21 +3252,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         btn.requestLayout()
     }
 
-    private fun showSelectedImage(uri: Uri) {
-        runCatching {
-            webRtcClient?.setFrameLocked(false)
-            updateFrameLockButton(isLocked = false, isEnabled = true)
-            webRtcClient?.showImage(uri)
-        }.onSuccess {
-            updateImageCastButton(isProjecting = true)
-            audioToggleButton?.visibility = View.GONE
-            sendCurrentDeviceOrientation(force = true)
-        }.onFailure {
-            updateStatus(it.message ?: "图片投屏失败")
-            toast(it.message ?: "图片投屏失败")
-        }
-    }
-
     private fun updateCameraControlsLayout() {
         val controls = cameraControls ?: return
         val startButton = startLiveButton ?: return
@@ -3191,11 +3259,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val switchButton = switchCameraButton ?: return
         val lockButton = frameLockButton ?: return
         val lightButton = torchButton ?: return
-        val imageButton = imageCastButton ?: return
         val version = cameraVersionLabel ?: return
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton, version).forEach { view ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, version).forEach { view ->
             (view.parent as? ViewGroup)?.removeView(view)
         }
         controls.removeAllViews()
@@ -3210,7 +3277,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         )
 
         if (isLandscape) {
-            listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton).forEach { button ->
+            listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
                 setCameraButtonTextRotation(button, 0f)
                 button.ellipsize = TextUtils.TruncateAt.END
                 button.maxLines = 2
@@ -3228,7 +3295,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
 
-        listOf(startButton, stopButton, switchButton, lockButton, lightButton, imageButton).forEach { button ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
             setCameraButtonTextRotation(button, 0f)
             button.ellipsize = TextUtils.TruncateAt.END
             button.maxLines = 1
@@ -3268,14 +3335,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             marginStart = dp(6)
             marginEnd = dp(6)
         }
-        imageButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-            marginStart = dp(6)
-            marginEnd = dp(6)
-        }
         toolsRow.addView(switchButton)
         toolsRow.addView(lockButton)
         toolsRow.addView(lightButton)
-        toolsRow.addView(imageButton)
 
         version.visibility = View.VISIBLE
         controls.addView(liveRow)

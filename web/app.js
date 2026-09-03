@@ -179,6 +179,9 @@ const elements = {
   blackboardColorsDropdown: document.getElementById('blackboardColorsDropdown'),
   blackboardModeMenu: document.getElementById('blackboardModeMenu'),
   blackboardLineToggle: document.getElementById('blackboardLineToggle'),
+  // 图片投屏
+  imagePlayerOverlay: document.getElementById('imagePlayerOverlay'),
+  coursewareImage: document.getElementById('coursewareImage'),
   // 视频播放器
   videoPlayerOverlay: document.getElementById('videoPlayerOverlay'),
   coursewareVideo: document.getElementById('coursewareVideo'),
@@ -1093,6 +1096,8 @@ function openCourseware(message) {
 
   // 视频文件：直接播放
   const isVideo = /\.(mp4|mov|avi|webm|mkv|3gp)(\?|$)/i.test(url);
+  // 图片文件：原图渲染
+  const isImage = /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(url);
   // ZIP 文件：不尝试渲染，仅提供下载
   const isZip = /\.zip(\?|$)/i.test(url);
 
@@ -1102,6 +1107,17 @@ function openCourseware(message) {
     showCoursewareViewForVideo({
       url,
       title: typeof message.title === 'string' ? message.title : '视频'
+    });
+    return;
+  }
+
+  // 图片文件：直接渲染原图（不走 PDF 转换），保证清晰度
+  if (isImage) {
+    cleanupPeerConnection();
+    resetAnnotations();
+    showCoursewareViewForImage({
+      url,
+      title: typeof message.title === 'string' ? message.title : '图片'
     });
     return;
   }
@@ -1168,6 +1184,29 @@ function showCoursewareViewForZip(courseware) {
   elements.videoStatus.textContent = `${courseware.title}（压缩包，请下载后查看）`;
   elements.annotationCanvas.hidden = true;
   elements.annotationToolbar.hidden = true;
+  updateCoursewareConnectionIndicator();
+}
+
+// ---- 图片投屏 ----
+
+function showCoursewareViewForImage(info) {
+  state.presentationMode = 'courseware';
+  document.body.classList.add('is-streaming');
+  elements.joinView.hidden = true;
+  elements.videoView.hidden = true;
+  elements.remoteVideo.hidden = true;
+  elements.coursewareCanvas.hidden = true;
+  elements.annotationCanvas.hidden = true;
+  elements.annotationToolbar.hidden = true;
+  elements.videoPlayerOverlay.hidden = true;
+  elements.panToolButton.hidden = true;
+  elements.prevPageButton.hidden = true;
+  elements.nextPageButton.hidden = true;
+  if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
+
+  elements.coursewareImage.src = info.url;
+  elements.coursewareImage.alt = info.title || '图片';
+  elements.imagePlayerOverlay.hidden = false;
   updateCoursewareConnectionIndicator();
 }
 
@@ -1467,6 +1506,8 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   try { elements.videoView.hidden = true; } catch {}
   try { elements.coursewareCanvas.hidden = true; } catch {}
   try { elements.videoPlayerOverlay.hidden = true; } catch {}
+  try { elements.imagePlayerOverlay.hidden = true; } catch {}
+  try { elements.coursewareImage.src = ''; elements.coursewareImage.removeAttribute('src'); } catch {}
   if (state.videoPlayer.idleTimer) { clearTimeout(state.videoPlayer.idleTimer); state.videoPlayer.idleTimer = null; }
   try { elements.coursewareVideo.pause(); elements.coursewareVideo.src = ''; elements.coursewareVideo.removeAttribute('src'); } catch {}
   try { state.videoPlayer.active = false; } catch {}
