@@ -31,6 +31,7 @@ import android.text.InputFilter
 import android.text.InputType
 import android.util.AttributeSet
 import android.util.Base64
+import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -2574,14 +2575,23 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private val maxImagePreviewEdge = 2048
+    private val logTag = "MyClass"
 
     /** 优先用手机本地原文件做预览（省流量），取不到时再回退到服务器地址 */
     private fun loadImageCastBitmap(onLoaded: (Bitmap?) -> Unit) {
         val localUri = coursewareLocalUri
         val remoteUrl = coursewareUrl
         Thread {
-            val bitmap = localUri?.let { runCatching { decodeBitmapFromUri(it) }.getOrNull() }
-                ?: runCatching { decodeBitmapFromUrl(remoteUrl) }.getOrNull()
+            var bitmap = localUri?.let { uri ->
+                runCatching { decodeBitmapFromUri(uri) }
+                    .onFailure { Log.w(logTag, "本地图片预览解码失败", it) }
+                    .getOrNull()
+            }
+            if (bitmap == null) {
+                bitmap = runCatching { decodeBitmapFromUrl(remoteUrl) }
+                    .onFailure { Log.w(logTag, "服务器图片预览下载失败", it) }
+                    .getOrNull()
+            }
             runOnUiThread { onLoaded(bitmap) }
         }.start()
     }
@@ -2599,9 +2609,24 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    /**
+     * 课件接口返回的是站内相对地址（形如 /myclass/public/courseware/xxx.jpg），
+     * 必须补成绝对地址才能下载。注意相对地址里已包含部署前缀，
+     * 直接拼接 SERVER_BASE_URL 会得到重复前缀，因此只取 BASE_URL 的协议+主机部分。
+     */
+    private fun absoluteCoursewareUrl(url: String): String? {
+        if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
+            return url
+        }
+        val origin = Regex("^https?://[^/]+", RegexOption.IGNORE_CASE)
+            .find(BuildConfig.SERVER_BASE_URL.trim())?.value ?: return null
+        return if (url.startsWith("/")) origin + url else "$origin/$url"
+    }
+
     private fun decodeBitmapFromUrl(url: String): Bitmap? {
         if (url.isBlank()) return null
-        val request = Request.Builder().url(url).build()
+        val absolute = absoluteCoursewareUrl(url) ?: return null
+        val request = Request.Builder().url(absolute).build()
         val bytes = coursewareHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) null else response.body?.bytes()
         } ?: return null
