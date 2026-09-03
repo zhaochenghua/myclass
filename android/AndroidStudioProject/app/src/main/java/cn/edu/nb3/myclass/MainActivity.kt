@@ -164,6 +164,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var videoTimeText: TextView? = null
     private var videoCastStatusText: TextView? = null
     private var zoomableImageView: ZoomableImageView? = null
+    /** 最近一次收到大屏视频状态的时间，用于判断大屏端是否仍在播放 */
+    private var lastVideoStateAtMs = 0L
+    /** 最近一次提示“课件控制已重新连接”的时间，避免弱网反复重连时反复弹提示 */
+    private var lastCoursewareReconnectToastAtMs = 0L
+    /** 重连提示的最小间隔 */
+    private val reconnectToastIntervalMs = 15_000L
+    /** 大屏视频状态的有效期：超过该时间没收到状态，就认为大屏端已停止播放 */
+    private val videoStateFreshIntervalMs = 60_000L
     private var coursewareUploadInProgress = false
     private var coursewareFastSeekDirection = 0
     private var coursewareFastSeekTargetPage = 1
@@ -2844,6 +2852,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         videoCastStatusText = null
     }
 
+    /** 重连提示去重：弱网下连接可能反复抖动，不必每次都弹提示打扰老师 */
+    private fun showCoursewareReconnectToast() {
+        val now = System.currentTimeMillis()
+        if (now - lastCoursewareReconnectToastAtMs < reconnectToastIntervalMs) {
+            return
+        }
+        lastCoursewareReconnectToastAtMs = now
+        toast("课件控制已重新连接")
+    }
+
     /** 仅释放界面引用，保留播放进度，便于从菜单返回后继续遥控 */
     private fun releaseMediaCastViews() {
         zoomableImageView = null
@@ -3472,14 +3490,24 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             if (currentScreen == Screen.Courseware) {
                 if (!coursewareUploadInProgress && coursewareUrl.isNotBlank()) {
-                    signalingClient?.sendCoursewareOpen(
-                        coursewareUrl,
-                        coursewareTitle,
-                        coursewarePage,
-                        coursewareScreen
-                    )
+                    // 大屏端若仍在播放同一个视频，重连后不要重发 open，
+                    // 否则视频会从头开始播放，课堂上非常影响体验。
+                    val screenStillPlayingVideo =
+                        mediaKindOf(coursewareUrl) == CastMediaKind.Video &&
+                            videoDuration > 0.0 &&
+                            System.currentTimeMillis() - lastVideoStateAtMs < videoStateFreshIntervalMs
+                    if (!screenStillPlayingVideo) {
+                        signalingClient?.sendCoursewareOpen(
+                            coursewareUrl,
+                            coursewareTitle,
+                            coursewarePage,
+                            coursewareScreen
+                        )
+                    }
                     showCoursewareScreen(title = coursewareTitle, isUploading = false)
-                    toast("课件控制已重新连接")
+                    if (!screenStillPlayingVideo) {
+                        showCoursewareReconnectToast()
+                    }
                 }
                 return@runOnUiThread
             }
@@ -3540,6 +3568,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         runOnUiThread {
             videoPlaying = playing
             videoPosition = position
+            lastVideoStateAtMs = System.currentTimeMillis()
             if (duration > 0.0) {
                 videoDuration = duration
             }
