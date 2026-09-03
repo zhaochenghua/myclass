@@ -14,8 +14,14 @@ import android.graphics.Paint
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.TextUtils
 import android.text.InputFilter
@@ -153,6 +159,29 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var appInForeground = false
     private var lastCoursewareVolumeKeyAtMs = 0L
     private val volumeKeyRepeatIntervalMs = 180L
+    // -- 连接/重连状态管理（集中管理，避免状态散落导致不一致）--
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private var reconnectAttempt = 0
+    private val maxReconnectAttempts = 5
+    private val reconnectTimeoutMs = 15_000L
+    private val reconnectBaseDelayMs = 2_000L
+    private val reconnectMaxDelayMs = 30_000L
+    private var reconnectTimeoutRunnable: Runnable? = null
+    private var reconnectRetryRunnable: Runnable? = null
+    private var networkCallbackRegistered = false
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            runOnUiThread {
+                // 网络恢复且有可用连接码但未连接时，立即重连
+                if (appInForeground && activeRoomCode != null &&
+                    !roomJoined && !signalReconnectInProgress
+                ) {
+                    updateStatus("网络已恢复，正在重新连接教室端...")
+                    reconnectSignalingForCurrentRoom()
+                }
+            }
+        }
+    }
     private var coursewareSubScreen: CoursewareSubScreen = CoursewareSubScreen.None
     private var initialIntentProcessed = false
     private val coursewareHttpClient = OkHttpClient.Builder()
@@ -190,6 +219,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         currentDeviceOrientation = createDeviceOrientationPayload(rawDeviceRotationDegrees)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onBackPressedDispatcher.addCallback(this, backCallback)
+        registerNetworkCallback()
         loadAuth()
         ExternalFileReceiver.restoreQueue(this)
         UpdateManager(this).checkForUpdate()
@@ -294,6 +324,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 resumeCameraAfterJoin = true,
                 resumeLiveAfterJoin = shouldRestartLive
             )
+        } else if (activeRoomCode != null && !roomJoined && !signalReconnectInProgress) {
+            // 其它页面从后台返回时的连接健康检查：
+            // 后台期间信令可能已断开但 UI 仍显示已连接，这里主动补连
+            updateStatus("正在重新连接教室端...")
+            reconnectSignalingForCurrentRoom()
         }
     }
 
@@ -344,10 +379,35 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     override fun onDestroy() {
+        unregisterNetworkCallback()
+        cancelReconnectTimeout()
+        cancelReconnectRetry()
         orientationListener?.disable()
         releaseCamera()
         signalingClient?.close()
         super.onDestroy()
+    }
+
+    private fun registerNetworkCallback() {
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        runCatching {
+            connectivityManager.registerNetworkCallback(request, networkCallback)
+            networkCallbackRegistered = true
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        if (!networkCallbackRegistered) return
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        runCatching {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+            networkCallbackRegistered = false
+        }
     }
 
     private val backCallback = object : OnBackPressedCallback(true) {
@@ -1293,8 +1353,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun startScreenShareLive() {
         if (!roomJoined) {
-            updateStatus("正在重新连接教室端...")
-            toast("正在重新连接教室端")
+            val reconnecting = reconnectSignalingForCurrentRoom()
+            if (reconnecting) {
+                updateStatus("正在重新连接教室端，请稍后重试屏幕共享")
+                toast("正在重新连接教室端")
+            }
             return
         }
 
@@ -1339,9 +1402,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 showCoursewareScreen(title = saved.title, isUploading = false)
                 toast("已恢复课件：${saved.title}")
             } else {
-                reconnectSignalingForCurrentRoom()
-                showCoursewareScreen(title = saved.title, isUploading = false)
-                toast("正在重新连接教室端…")
+                // 连接失效时 reconnect 会引导回连接码界面，此时不应再显示课件页
+                if (reconnectSignalingForCurrentRoom()) {
+                    showCoursewareScreen(title = saved.title, isUploading = false)
+                    toast("正在重新连接教室端…")
+                }
             }
             return
         }
@@ -1439,8 +1504,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun loadServerCoursewareList() {
-        if (!roomJoined || activeRoomCode == null) {
-            toast("请先连接教室端")
+        if (!roomJoined) {
+            if (reconnectSignalingForCurrentRoom()) {
+                toast("正在重新连接教室端，请稍候")
+            }
             return
         }
         showCoursewareListLoadingScreen()
@@ -1910,11 +1977,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             coursewareScreen
                         )
                         toast("课件已打开")
-                    } else {
-                        reconnectSignalingForCurrentRoom()
+                        showCoursewareScreen(title = result.title, isUploading = false)
+                    } else if (reconnectSignalingForCurrentRoom()) {
                         toast("课件已上传，正在重新连接教室端")
+                        showCoursewareScreen(title = result.title, isUploading = false)
                     }
-                    showCoursewareScreen(title = result.title, isUploading = false)
                 }
             }.onFailure { error ->
                 runOnUiThread {
@@ -2231,8 +2298,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
         if (!roomJoined) {
-            reconnectSignalingForCurrentRoom()
-            updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            if (reconnectSignalingForCurrentRoom()) {
+                updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            }
             return
         }
         signalingClient?.sendCoursewareNavigate(delta)
@@ -2273,8 +2341,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
         if (!roomJoined) {
-            reconnectSignalingForCurrentRoom()
-            updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            if (reconnectSignalingForCurrentRoom()) {
+                updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            }
             return
         }
         cancelCoursewareFastSeek()
@@ -2317,8 +2386,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val targetPage = coursewareFastSeekTargetPage
         cancelCoursewareFastSeek()
         if (!roomJoined) {
-            reconnectSignalingForCurrentRoom()
-            updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            if (reconnectSignalingForCurrentRoom()) {
+                updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            }
             return
         }
         if (targetPage == coursewarePage) {
@@ -2343,8 +2413,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
         if (!roomJoined) {
-            reconnectSignalingForCurrentRoom()
-            updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            if (reconnectSignalingForCurrentRoom()) {
+                updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            }
             return
         }
         val pageCount = coursewarePageCount.coerceAtLeast(1)
@@ -2399,8 +2470,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
         if (!roomJoined) {
-            reconnectSignalingForCurrentRoom()
-            updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            if (reconnectSignalingForCurrentRoom()) {
+                updateStatus("$coursewareTitle\n正在重新连接教室端...")
+            }
             return
         }
         val raw = input.text.toString().trim()
@@ -2647,17 +2719,121 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         ).also { it.connect() }
     }
 
-    private fun reconnectSignalingForCurrentRoom(): Boolean {
-        val roomCode = activeRoomCode ?: return false
+    /**
+     * 重新连接当前房间（服务端在教师端断开后会保留房间与连接码，可用同一个码重连）。
+     * @return true 已发起重连；false 没有可用连接码（房间已失效，已引导回连接码界面）
+     */
+    private fun reconnectSignalingForCurrentRoom(
+        resumeCamera: Boolean = false,
+        resumeLive: Boolean = false
+    ): Boolean {
+        val roomCode = activeRoomCode
+        if (roomCode == null) {
+            // 没有可用连接码：房间已失效，必须重新输入连接码
+            handleRoomInvalid()
+            return false
+        }
         if (signalReconnectInProgress) {
+            if (resumeCamera) resumeCameraAfterJoin = true
+            if (resumeLive) resumeLiveAfterJoin = true
             return true
+        }
+        if (reconnectAttempt >= maxReconnectAttempts) {
+            updateStatus("无法连接教室端，请检查网络或重新输入连接码")
+            return false
         }
         signalReconnectInProgress = true
         roomJoined = false
         signalingClient?.close()
         signalingClient = null
-        connectToRoom(roomCode)
+        connectToRoom(
+            code = roomCode,
+            resumeCameraAfterJoin = resumeCamera,
+            resumeLiveAfterJoin = resumeLive
+        )
+        scheduleReconnectTimeout()
         return true
+    }
+
+    /**
+     * 重连超时保护：超时内既未成功也未失败时，复位 signalReconnectInProgress 并按退避重试。
+     * 没有这个保护时，网络不可用的情况下该标志会永久为 true，导致之后所有重连被跳过（死锁）。
+     */
+    private fun scheduleReconnectTimeout() {
+        cancelReconnectTimeout()
+        val runnable = Runnable {
+            reconnectTimeoutRunnable = null
+            if (!roomJoined && signalReconnectInProgress) {
+                signalReconnectInProgress = false
+                signalingClient?.close()
+                signalingClient = null
+                scheduleReconnectRetry()
+            }
+        }
+        reconnectTimeoutRunnable = runnable
+        reconnectHandler.postDelayed(runnable, reconnectTimeoutMs)
+    }
+
+    private fun cancelReconnectTimeout() {
+        reconnectTimeoutRunnable?.let { reconnectHandler.removeCallbacks(it) }
+        reconnectTimeoutRunnable = null
+    }
+
+    private fun scheduleReconnectRetry() {
+        if (reconnectAttempt >= maxReconnectAttempts) {
+            updateStatus("无法连接教室端，请检查网络或重新输入连接码")
+            toast("无法连接教室端，请检查网络")
+            return
+        }
+        reconnectAttempt += 1
+        val delay = (reconnectBaseDelayMs shl (reconnectAttempt - 1))
+            .coerceAtMost(reconnectMaxDelayMs)
+        cancelReconnectRetry()
+        val runnable = Runnable {
+            reconnectRetryRunnable = null
+            signalReconnectInProgress = false
+            reconnectSignalingForCurrentRoom()
+        }
+        reconnectRetryRunnable = runnable
+        updateStatus("连接失败，${delay / 1000} 秒后重试（第 $reconnectAttempt 次）")
+        reconnectHandler.postDelayed(runnable, delay)
+    }
+
+    private fun cancelReconnectRetry() {
+        reconnectRetryRunnable?.let { reconnectHandler.removeCallbacks(it) }
+        reconnectRetryRunnable = null
+    }
+
+    /** 连接成功：复位重连计数与所有定时器 */
+    private fun onConnectionEstablished() {
+        reconnectAttempt = 0
+        cancelReconnectTimeout()
+        cancelReconnectRetry()
+    }
+
+    /**
+     * 连接彻底失效（大屏断开/房间过期/被新设备顶替/连接码错误）：
+     * 统一清理全部会话状态并回到连接码界面，避免残留状态导致界面错乱。
+     * 注意：大屏端断开会删除房间、连接码永久失效，此时不能再用旧码重连。
+     */
+    private fun handleRoomInvalid(message: String? = null) {
+        cancelReconnectTimeout()
+        cancelReconnectRetry()
+        reconnectAttempt = 0
+        signalReconnectInProgress = false
+        roomJoined = false
+        activeRoomCode = null
+        resumeCameraAfterJoin = false
+        resumeLiveAfterJoin = false
+        pendingCoursewareCloseAfterJoin = false
+        savedCoursewareState = null
+        coursewareSubScreen = CoursewareSubScreen.None
+        signalingClient?.close()
+        signalingClient = null
+        message?.let { toast(it) }
+        if (currentScreen != Screen.Connect && currentScreen != Screen.Auth) {
+            showConnectScreen()
+        }
     }
 
     private fun ensureCameraPermissions(openImagePicker: Boolean = false) {
@@ -2682,6 +2858,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         runOnUiThread {
             roomJoined = true
             signalReconnectInProgress = false
+            onConnectionEstablished()
             val shouldResumeCamera = resumeCameraAfterJoin
             val shouldResumeLive = resumeLiveAfterJoin
             resumeCameraAfterJoin = false
@@ -2730,44 +2907,24 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onJoinRejected(message: String) {
         runOnUiThread {
-            activeRoomCode = null
-            roomJoined = false
-            signalReconnectInProgress = false
-            resumeCameraAfterJoin = false
-            resumeLiveAfterJoin = false
-            pendingCoursewareCloseAfterJoin = false
-            toast(message)
-            signalingClient?.close()
-            signalingClient = null
-            showConnectScreen()
+            // 连接码错误/房间不存在：必须重新输入连接码
+            handleRoomInvalid(message)
         }
     }
 
     override fun onKicked(message: String) {
         runOnUiThread {
             releaseCamera()
-            signalingClient?.close()
-            signalingClient = null
-            activeRoomCode = null
-            roomJoined = false
-            signalReconnectInProgress = false
-            savedCoursewareState = null
-            toast(message)
-            showConnectScreen()
+            // 被新设备顶替：当前设备下线，需重新输入连接码
+            handleRoomInvalid(message)
         }
     }
 
     override fun onServerClosed(message: String) {
         runOnUiThread {
             releaseCamera()
-            signalingClient?.close()
-            signalingClient = null
-            activeRoomCode = null
-            roomJoined = false
-            signalReconnectInProgress = false
-            savedCoursewareState = null
-            toast(message)
-            showConnectScreen()
+            // 大屏断开或房间过期：房间已被服务端删除，连接码永久失效
+            handleRoomInvalid(message)
         }
     }
 
@@ -2781,14 +2938,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onCoursewareState(state: CoursewareStatePayload) {
         runOnUiThread {
-            if (currentScreen != Screen.Courseware) {
-                return@runOnUiThread
-            }
+            // 无论当前在哪个页面都同步课件页码，
+            // 否则菜单页播放时（含音量键翻页）大屏回传的状态会被丢弃，导致手机端页码永久落后
             coursewarePage = state.page
             coursewarePageCount = state.pageCount
             coursewareScreen = state.screen
             coursewareScreenCount = state.screenCount
-            if (coursewareFastSeekDirection == 0) {
+            // 只在课件播放页刷新状态栏，避免污染其它页面
+            if (currentScreen == Screen.Courseware && coursewareFastSeekDirection == 0) {
                 updateStatus(coursewareStatusText(coursewareTitle))
             }
         }
@@ -2830,18 +2987,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onSignalError(message: String) {
         runOnUiThread {
             roomJoined = false
-            if (
-                (currentScreen == Screen.Courseware || currentScreen == Screen.Menu) &&
-                activeRoomCode != null &&
-                !signalReconnectInProgress
-            ) {
-                if (coursewareUploadInProgress) {
+            // 只要有可用连接码就自动重连，不再限定页面（此前摄像头投屏/屏幕共享页断开后不会重连）
+            val canReconnect = activeRoomCode != null &&
+                currentScreen != Screen.Connect &&
+                currentScreen != Screen.Auth
+            if (canReconnect) {
+                if (signalReconnectInProgress) {
+                    // 本次重连尝试失败：复位标志后按退避重试，避免标志位永久为 true 造成死锁
+                    signalReconnectInProgress = false
+                    signalingClient?.close()
+                    signalingClient = null
+                    scheduleReconnectRetry()
+                } else {
+                    updateStatus("连接中断，正在重新连接教室端...")
                     reconnectSignalingForCurrentRoom()
-                    return@runOnUiThread
                 }
-                updateStatus("网络连接中断，正在重新连接教室端...")
-                toast("网络连接中断，正在重新连接教室端")
-                reconnectSignalingForCurrentRoom()
                 return@runOnUiThread
             }
             updateLiveControlButtons(isLive = webRtcClient?.isLive() == true)
@@ -2887,8 +3047,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun startLiveFromUi() {
         if (!roomJoined) {
-            updateStatus("正在重新连接教室端...")
-            toast("正在重新连接教室端")
+            // 真正发起重连，并在重连成功后自动恢复直播（此前只提示却不重连）
+            val reconnecting = reconnectSignalingForCurrentRoom(resumeLive = true)
+            if (reconnecting) {
+                updateStatus("正在重新连接教室端，连接后将自动开始直播")
+                toast("正在重新连接教室端")
+            }
             updateLiveControlButtons(isLive = false)
             return
         }
