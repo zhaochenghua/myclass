@@ -18,7 +18,8 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://ai.nbsdszx.cn${PATH_PREFIX}`
 );
-const DEFAULT_APP_VERSION = process.env.APP_VERSION || '1.4.6-2026090306';
+// 版本号必须以 server/data/versions.json 为准（由 Android 构建脚本自动写入）。
+// 不要为 appVersion 在此硬编码默认值，否则容易被误认为改这里就能生效。
 const DEFAULT_WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.22';
 const DEFAULT_IOS_VERSION = process.env.IOS_VERSION || '1.0.0-20260902';
 const VERSIONS_PATH = path.join(__dirname, 'data', 'versions.json');
@@ -30,8 +31,9 @@ function readVersions() {
   try {
     stat = fs.statSync(VERSIONS_PATH);
   } catch {
+    console.warn('[versions] 未找到 server/data/versions.json，appVersion 将显示为空，请通过构建脚本生成');
     return {
-      appVersion: DEFAULT_APP_VERSION,
+      appVersion: '',
       windowsVersion: DEFAULT_WINDOWS_VERSION,
       iosVersion: DEFAULT_IOS_VERSION
     };
@@ -40,7 +42,7 @@ function readVersions() {
     return versionsCache.data;
   }
   let data = {
-    appVersion: DEFAULT_APP_VERSION,
+    appVersion: '',
     windowsVersion: DEFAULT_WINDOWS_VERSION,
     iosVersion: DEFAULT_IOS_VERSION
   };
