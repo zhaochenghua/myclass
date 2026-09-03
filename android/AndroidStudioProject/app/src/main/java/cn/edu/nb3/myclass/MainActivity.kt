@@ -246,8 +246,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun handleShareIntent(intent: Intent?) {
         if (intent?.action !in listOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) return
+        val targetIntent = intent ?: return
+        val normalizedIntent = normalizeLinkIntent(targetIntent)
         Thread {
-            val result = ExternalFileReceiver.handleIncomingIntent(this, intent)
+            val result = ExternalFileReceiver.handleIncomingIntent(this, normalizedIntent)
             runOnUiThread {
                 when (result) {
                     ExternalFileReceiver.HandleResult.DUPLICATE -> toast("该文件已在待上传列表中")
@@ -1609,6 +1611,25 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             mediaPickerLauncher.launch(arrayOf("image/*", "video/*"))
         }.onFailure {
             toast("无法打开文件选择器")
+        }
+    }
+
+    /**
+     * 把 “ACTION_VIEW + http(s) Uri” 归一化为文本分享形式。
+     *
+     * ExternalFileReceiver 依据 type=="text/plain" + EXTRA_TEXT 判断是否链接；
+     * 若直接把 http 链接作为 ACTION_VIEW 的 data 传入，会被当成文件 Uri 用
+     * ContentResolver 打开，抛出 “No content provider: https://...”。
+     * 这里统一转换，确保链接一定走链接导入流程。
+     */
+    private fun normalizeLinkIntent(intent: Intent): Intent {
+        if (intent.action != Intent.ACTION_VIEW) return intent
+        val data = intent.data ?: return intent
+        val scheme = data.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return intent
+        return Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, data.toString())
         }
     }
 
