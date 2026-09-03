@@ -20,7 +20,8 @@ android/AndroidStudioProject/app/build/
 android/AndroidStudioProject/build/
 android/AndroidStudioProject/.idea/
 android/AndroidStudioProject/*.iml
-server/data/
+server/data/*
+!server/data/versions.json
 web/vendor/
 
 windows/node_modules/
