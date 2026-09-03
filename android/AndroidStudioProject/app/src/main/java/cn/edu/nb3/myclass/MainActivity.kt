@@ -65,6 +65,7 @@ import org.json.JSONObject
 import org.webrtc.SurfaceViewRenderer
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 
 class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private enum class Screen {
@@ -182,6 +183,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
     private var coursewareSubScreen: CoursewareSubScreen = CoursewareSubScreen.None
+    private var pendingLinkSuggestedName: String? = null
+    // 与 ExternalFileReceiver.extractUrl 保持一致的提取规则（http(s):// 到空白字符为止）
+    private val urlPattern = Pattern.compile("https?://[^\\s]+")
+    // 分享文案标题，形如【浙江选考通用技术全考点精讲-哔哩哔哩】
+    private val bracketTitlePattern = Pattern.compile("【([^】]+)】")
     private var initialIntentProcessed = false
     private val coursewareHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -1117,12 +1123,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showLinkNameDialog() {
+        // 剪贴板导入时可从分享文案中解析出标题，预填以减少输入
+        val suggested = pendingLinkSuggestedName
+        pendingLinkSuggestedName = null
         val input = android.widget.EditText(this).apply {
             hint = "请输入课件名称"
             inputType = InputType.TYPE_CLASS_TEXT
             setSingleLine(true)
             filters = arrayOf(InputFilter.LengthFilter(50))
             setPadding(dp(16), dp(12), dp(16), dp(12))
+            if (!suggested.isNullOrBlank()) {
+                setText(suggested)
+                setSelection(suggested.length)
+            }
         }
         AlertDialog.Builder(this)
             .setTitle("导入链接课件")
@@ -1599,7 +1612,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    /** 读取剪贴板中的链接，复用分享链接的导入流程上传为链接课件 */
+    /**
+     * 读取剪贴板并导入为链接课件。
+     * 剪贴板内容常带分享文案（如“【标题-哔哩哔哩】 https://b23.tv/xxx”），
+     * 因此这里不要求整段文本以 http 开头，而是把原文作为分享文本交给既有导入流程，
+     * 由 ExternalFileReceiver.extractUrl 统一提取其中的 URL。
+     */
     private fun handleClipboardLink() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         val text = clipboard?.primaryClip
@@ -1608,15 +1626,35 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ?.text
             ?.toString()
             ?.trim()
-        val link = text?.takeIf {
-            it.startsWith("http://", ignoreCase = true) ||
-                it.startsWith("https://", ignoreCase = true)
+            .orEmpty()
+        if (text.isBlank()) {
+            toast("剪贴板为空")
+            return
         }
-        if (link == null) {
+        // 仅用于校验是否真的存在可导入的链接，实际解析交给既有流程保持一致
+        val matcher = urlPattern.matcher(text)
+        if (!matcher.find()) {
             toast("剪贴板中没有可用的链接")
             return
         }
-        handleShareIntent(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+        pendingLinkSuggestedName = extractShareTitle(text)
+        handleShareIntent(
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, text)
+            }
+        )
+    }
+
+    /** 从分享文案中提取标题，如“【浙江选考通用技术全考点精讲-哔哩哔哩】” */
+    private fun extractShareTitle(text: String): String? {
+        val matcher = bracketTitlePattern.matcher(text)
+        if (!matcher.find()) return null
+        return matcher.group(1)
+            ?.trim()
+            ?.removeSuffix("-哔哩哔哩")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun loadServerCoursewareList() {

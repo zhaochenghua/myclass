@@ -18,7 +18,7 @@ const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
   process.env.PUBLIC_BASE_URL || `http://ai.nbsdszx.cn${PATH_PREFIX}`
 );
-const DEFAULT_APP_VERSION = process.env.APP_VERSION || '1.4.6-2026090303';
+const DEFAULT_APP_VERSION = process.env.APP_VERSION || '1.4.6-2026090304';
 const DEFAULT_WINDOWS_VERSION = process.env.WINDOWS_VERSION || '0.1.22';
 const DEFAULT_IOS_VERSION = process.env.IOS_VERSION || '1.0.0-20260902';
 const VERSIONS_PATH = path.join(__dirname, 'data', 'versions.json');
