@@ -1189,6 +1189,7 @@ function showCoursewareViewForZip(courseware) {
   state.downloadOriginalUrl = courseware.url;
   showDownloadButtonIfAvailable();
   elements.remoteVideo.hidden = true;
+  elements.imagePlayerOverlay.hidden = true;
   elements.coursewareCanvas.hidden = true;
   elements.videoView.dataset.orientation = 'landscape';
   elements.videoView.dataset.lockedZoomed = 'false';
@@ -1211,12 +1212,18 @@ function showCoursewareViewForImage(info) {
   state.presentationMode = 'courseware';
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
-  elements.videoView.hidden = true;
+  // 图片课件与 PDF 课件共用 videoView 展示框架：图片作为内容层显示，
+  // 保留标注画布与底部画笔工具栏，便于教师在图片上圈画讲解。
+  elements.videoView.hidden = false;
+  elements.videoView.dataset.orientation = 'landscape';
+  elements.videoView.dataset.lockedZoomed = 'false';
   elements.remoteVideo.hidden = true;
   elements.coursewareCanvas.hidden = true;
-  elements.annotationCanvas.hidden = true;
-  elements.annotationToolbar.hidden = true;
+  elements.annotationCanvas.hidden = false;
+  elements.annotationToolbar.hidden = false;
+  elements.videoStatus.hidden = true;
   elements.videoPlayerOverlay.hidden = true;
+  // 图片缩放/平移由手机端控制，大屏无需手型与翻页按钮
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
@@ -1225,9 +1232,11 @@ function showCoursewareViewForImage(info) {
   // 打开新图片时复位缩放/平移，并裁剪溢出部分（避免沿用上一张的视口）
   elements.imagePlayerOverlay.style.overflow = 'hidden';
   elements.coursewareImage.style.transform = '';
+  elements.coursewareImage.style.transformOrigin = '';
   elements.coursewareImage.src = info.url;
   elements.coursewareImage.alt = info.title || '图片';
   elements.imagePlayerOverlay.hidden = false;
+  resizeAnnotationCanvas();
   updateCoursewareConnectionIndicator();
 }
 
@@ -1326,6 +1335,7 @@ function showCoursewareViewForVideo(info) {
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
   elements.videoView.hidden = true;
+  elements.imagePlayerOverlay.hidden = true;
   elements.remoteVideo.hidden = true;
   elements.coursewareCanvas.hidden = true;
   elements.annotationCanvas.hidden = true;
@@ -1611,6 +1621,9 @@ function handleCoursewareImageViewport(message) {
   const offsetY = -scale * (centerY - 0.5) * height;
   img.style.transformOrigin = 'center center';
   img.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+  // 图片的显示区域（含缩放/平移）已经变化，需要按新区域重绘笔迹，
+  // 否则已画的标注会停留在变换前的位置，不随图片移动。
+  drawAnnotations();
 }
 
 // 进度条拖拽
@@ -2654,6 +2667,14 @@ function currentFrameCrop() {
 
 function currentVideoContentRect() {
   if (state.presentationMode === 'courseware') {
+    // 图片课件：标注绑定到图片内容区域（其 transform 已随手机端视口放大/平移，
+    // getBoundingClientRect 会返回变换后的实际区域，笔迹自动跟随图片移动）
+    if (!elements.imagePlayerOverlay.hidden) {
+      const imageRect = elements.coursewareImage.getBoundingClientRect();
+      if (imageRect.width > 0 && imageRect.height > 0) {
+        return imageRect;
+      }
+    }
     return elements.coursewareCanvas.getBoundingClientRect();
   }
 
@@ -2700,6 +2721,7 @@ function showJoinView() {
   state.courseware = null;
   clearCoursewareCanvas();
   document.body.classList.remove('is-streaming');
+  elements.imagePlayerOverlay.hidden = true;
   elements.joinView.hidden = false;
   elements.videoView.hidden = true;
   elements.remoteVideo.hidden = false;
@@ -2713,6 +2735,7 @@ function showVideoView() {
   state.presentationMode = 'video';
   setAnnotationTool('pen');
   elements.coursewareCanvas.hidden = true;
+  elements.imagePlayerOverlay.hidden = true;
   elements.remoteVideo.hidden = false;
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
@@ -2728,6 +2751,7 @@ function showCoursewareView() {
   showDownloadButtonIfAvailable();
   if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
   elements.remoteVideo.hidden = true;
+  elements.imagePlayerOverlay.hidden = true;
   elements.coursewareCanvas.hidden = false;
   elements.videoView.dataset.orientation = 'landscape';
   elements.videoView.dataset.lockedZoomed = 'false';

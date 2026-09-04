@@ -1318,9 +1318,9 @@ video {
 }
 
 .image-player-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  z-index: 20;
+  z-index: 1;
   background: #000000;
   display: flex;
   align-items: center;

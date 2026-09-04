@@ -96,6 +96,10 @@
       <section class="video-view" id="videoView" hidden>
         <video id="remoteVideo" autoplay playsinline muted></video>
         <canvas class="courseware-canvas" id="coursewareCanvas" hidden></canvas>
+        <!-- 图片课件内容层：与 PDF 页同层级显示，标注画布叠放其上 -->
+        <div class="image-player-overlay" id="imagePlayerOverlay" hidden>
+          <img id="coursewareImage" alt="">
+        </div>
         <canvas class="annotation-canvas" id="annotationCanvas"></canvas>
         <div class="annotation-eraser-cursor" id="annotationEraserCursor"></div>
         <div class="annotation-toolbar" id="annotationToolbar" aria-label="画笔工具">
@@ -150,11 +154,6 @@
         <span class="relay-badge" id="relayBadge" hidden>中继模式</span>
         <div class="roll-student-big" id="rollStudentBig" aria-hidden="true"><div class="roll-student-big-bg"></div><span class="roll-student-big-num">??</span></div>
       </section>
-
-      <!-- 图片投屏覆盖层 -->
-      <div class="image-player-overlay" id="imagePlayerOverlay" hidden>
-        <img id="coursewareImage" alt="">
-      </div>
 
       <!-- 视频播放器覆盖层 -->
       <div class="video-player-overlay" id="videoPlayerOverlay" hidden>
@@ -272,6 +271,6 @@
       window.pdfjsLib = pdfjsLib;
       pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs?v=5.4.530';
     </script>
-    <script defer src="./app.js?v=20260830a"></script>
+    <script defer src="./app.js?v=20260904e"></script>
   </body>
 </html>
