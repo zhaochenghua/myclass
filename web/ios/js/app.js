@@ -800,7 +800,10 @@ async function handleMediaPicked(event) {
       url: '',
       title: '',
       id: null,
-      rotation: 0
+      rotation: 0,
+      scale: 1,
+      panX: 0,
+      panY: 0
     });
   }
   await castMediaItem(startIndex);
@@ -821,36 +824,176 @@ function rotateCurrentMedia() {
   toast(`已旋转 ${item.rotation}°，大屏同步`);
 }
 
-/** 把当前图片的角度同步给大屏（大屏按同一约定换算缩放/平移） */
+/** 把当前图片的视口（缩放/平移/旋转）同步给大屏，与大屏端约定一致：
+ *  scale 为相对适应屏幕的放大倍数，centerX/centerY 为视口中心归一化坐标 */
 function sendMediaViewport() {
   const item = state.media.queue[state.media.index];
   if (!item || item.kind === 'video') return;
   state.signaling?.sendCoursewareImageViewport({
-    scale: 1,
-    centerX: 0.5,
-    centerY: 0.5,
+    scale: item.scale || 1,
+    centerX: 0.5 + (item.panX || 0),
+    centerY: 0.5 + (item.panY || 0),
     rotation: item.rotation || 0
   });
 }
 
+const MAX_MEDIA_ZOOM = 8;
+const MIN_MEDIA_ZOOM = 1;
+
+/** 双指捏合缩放当前图片（factor 为相对上一间距的倍数） */
+function zoomByMedia(factor) {
+  const item = state.media.queue[state.media.index];
+  if (!item || item.kind !== 'image') return;
+  const next = clamp((item.scale || 1) * factor, MIN_MEDIA_ZOOM, MAX_MEDIA_ZOOM);
+  if (Math.abs(next - (item.scale || 1)) < 0.0005) return;
+  item.scale = next;
+  clampMediaPan(item);
+  applyMediaPreviewRotation();
+  updateMediaZoomStatus();
+  sendMediaViewport();
+}
+
+/** 单指拖动平移当前图片（dx/dy 为相对预览框的归一化位移，手指右移为正） */
+function panByMedia(dx, dy) {
+  const item = state.media.queue[state.media.index];
+  if (!item || item.kind !== 'image' || (item.scale || 1) <= 1.02) return;
+  item.panX = (item.panX || 0) - dx;
+  item.panY = (item.panY || 0) - dy;
+  clampMediaPan(item);
+  applyMediaPreviewRotation();
+  updateMediaZoomStatus();
+  sendMediaViewport();
+}
+
+/** 复位图片缩放与平移（放大倍数回到 1、中心回到正中） */
+function resetMediaView() {
+  const item = state.media.queue[state.media.index];
+  if (!item || item.kind !== 'image') return;
+  item.scale = 1;
+  item.panX = 0;
+  item.panY = 0;
+  applyMediaPreviewRotation();
+  updateMediaZoomStatus();
+  sendMediaViewport();
+}
+
+/** 平移范围随放大倍数收紧，避免露出图片外的黑边 */
+function clampMediaPan(item) {
+  const limit = Math.max(0, (1 - 1 / (item.scale || 1)) / 2);
+  item.panX = clamp(item.panX || 0, -limit, limit);
+  item.panY = clamp(item.panY || 0, -limit, limit);
+}
+
+/** 缩放时在状态栏临时显示倍数，复位后恢复默认提示 */
+function updateMediaZoomStatus() {
+  const item = state.media.queue[state.media.index];
+  if (!item || item.kind !== 'image') return;
+  const s = item.scale || 1;
+  $('mediaStatus').textContent =
+    s > 1.02 ? `缩放 ${s.toFixed(2)}x（双指/滚轮缩放，拖动平移）` : '大屏正在显示该图片';
+}
+
 /**
- * 预览图旋转：90/270 时画面宽高互换，需要按容器重新适应，
- * 否则旋转后会超出预览区域（与大屏端 refit 的处理思路一致）。
+ * 预览图变换：旋转 + 缩放 + 平移（与大屏端 refit 思路一致）。
+ * 90/270 时画面宽高互换，需要按容器重新适应，否则旋转后会超出预览区域。
  */
 function applyMediaPreviewRotation() {
   const img = $('mediaPreview');
-  const rotation = currentMediaRotation();
-  if (!img || img.hidden) return;
+  const item = state.media.queue[state.media.index];
+  if (!img || img.hidden || !item) return;
+  const rotation = item.rotation || 0;
+  const scale = item.scale || 1;
+  const panX = item.panX || 0;
+  const panY = item.panY || 0;
   const swapped = rotation === 90 || rotation === 270;
-  let scale = 1;
+  let adapt = 1;
   const box = $('mediaPreviewBox')?.getBoundingClientRect();
   if (swapped && img.naturalWidth && img.naturalHeight && box?.width && box?.height) {
     const fitNormal = Math.min(box.width / img.naturalWidth, box.height / img.naturalHeight);
     const fitRotated = Math.min(box.width / img.naturalHeight, box.height / img.naturalWidth);
-    if (fitNormal > 0) scale = fitRotated / fitNormal;
+    if (fitNormal > 0) adapt = fitRotated / fitNormal;
   }
   img.style.transformOrigin = 'center center';
-  img.style.transform = `rotate(${rotation}deg) scale(${scale})`;
+  // 视口中心由 (0.5,0.5) 移到 (0.5+panX, 0.5+panY)，与大屏端 translate(-panX) 方向一致：
+  // 先缩放（含旋转后的适应修正），再按归一化中心反向平移，使视口对准图片对应区域
+  img.style.transform =
+    `rotate(${rotation}deg) scale(${scale * adapt}) translate(${-panX * 100}%, ${-panY * 100}%)`;
+}
+
+/** 图片投屏页缩放手势：双指捏合 + 单指平移 + 滚轮（桌面调试），仅对图片生效 */
+function bindMediaGestures() {
+  const stage = $('mediaPreviewBox');
+  if (!stage) return;
+  let pinchActive = false;
+  let lastDist = 0;
+  let lastSingle = null;
+
+  const pointsOf = (event) => {
+    const list = event.touches ? Array.from(event.touches) : [];
+    return list.map((p) => ({ x: p.clientX, y: p.clientY }));
+  };
+  const distOf = (pts) => Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  const currentItem = () => state.media.queue[state.media.index];
+  const imageShown = () => {
+    const it = currentItem();
+    return !!it && it.kind === 'image' && !$('mediaPreview').hidden;
+  };
+
+  stage.addEventListener('touchstart', (event) => {
+    if (!imageShown()) return;
+    const pts = pointsOf(event);
+    if (pts.length >= 2) {
+      pinchActive = true;
+      lastDist = distOf(pts);
+      lastSingle = null;
+    } else if (pts.length === 1) {
+      lastSingle = { x: pts[0].x, y: pts[0].y };
+    }
+  }, { passive: true });
+
+  stage.addEventListener('touchmove', (event) => {
+    if (!imageShown()) return;
+    const pts = pointsOf(event);
+    if (pts.length >= 2 && lastDist > 0) {
+      pinchActive = true;
+      const current = distOf(pts);
+      if (current > 0) zoomByMedia(current / lastDist);
+      lastDist = current;
+      event.preventDefault();
+      return;
+    }
+    if (pts.length === 1 && lastSingle) {
+      const dx = pts[0].x - lastSingle.x;
+      const dy = pts[0].y - lastSingle.y;
+      const box = stage.getBoundingClientRect();
+      if (box.width && box.height) panByMedia(dx / box.width, dy / box.height);
+      lastSingle = { x: pts[0].x, y: pts[0].y };
+      event.preventDefault();
+    }
+  }, { passive: false });
+
+  stage.addEventListener('touchend', (event) => {
+    const remaining = pointsOf(event);
+    if (remaining.length < 2) {
+      pinchActive = false;
+      lastDist = 0;
+      lastSingle = remaining.length === 1 ? { x: remaining[0].x, y: remaining[0].y } : null;
+    }
+    if (remaining.length === 0) lastSingle = null;
+  }, { passive: true });
+
+  stage.addEventListener('touchcancel', () => {
+    pinchActive = false;
+    lastDist = 0;
+    lastSingle = null;
+  }, { passive: true });
+
+  // 桌面/触控板调试用：滚轮缩放
+  stage.addEventListener('wheel', (event) => {
+    if (!imageShown()) return;
+    event.preventDefault();
+    zoomByMedia(event.deltaY < 0 ? 1.08 : 1 / 1.08);
+  }, { passive: false });
 }
 
 /** 投屏队列中的第 index 个文件：已上传的直接切换，未上传的先上传 */
@@ -1074,7 +1217,10 @@ async function loadServerMedia() {
       url: item.url,
       title: item.title || item.fileName || 'media',
       id: item.id || null,
-      rotation: 0
+      rotation: 0,
+      scale: 1,
+      panX: 0,
+      panY: 0
     }));
     state.media.index = -1;
     renderMediaQueue();
@@ -1706,6 +1852,8 @@ function bindStaticEvents() {
   $('cwCloseButton').addEventListener('click', () => stopCourseware());
 
   bindLiveGestures();
+  bindMediaGestures();
+  $('mediaResetView').addEventListener('click', resetMediaView);
 
   window.addEventListener('orientationchange', () => {
     setTimeout(() => handleOrientationChange(), 300);
