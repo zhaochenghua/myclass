@@ -88,6 +88,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         ListLoading,
         ServerList,
         ServerMediaList,
+        MediaQueue,
         Playback
     }
 
@@ -191,6 +192,24 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareFastSeekRunnable: Runnable? = null
     private var signalReconnectInProgress = false
     private var savedCoursewareState: CoursewareState? = null
+    /** 本机图片/视频队列里单个文件的上传状态 */
+    private enum class MediaQueueState { Pending, Uploading, Ready, Failed }
+
+    private class LocalMediaItem(
+        val uri: Uri,
+        val name: String,
+        var state: MediaQueueState = MediaQueueState.Pending,
+        var remoteUrl: String = "",
+        var remoteTitle: String = ""
+    )
+
+    /** 本机图片视频投屏队列：一次可多选，投屏过程中直接切换，不必重新选择文件 */
+    private val mediaQueue = mutableListOf<LocalMediaItem>()
+    private var mediaQueueIndex = -1
+    /** 后台正在依次上传队列中剩余文件（避免重复起线程） */
+    private var mediaQueuePreloading = false
+    /** 断线重连期间用户已选好文件：连上教室端后自动投屏该序号，不必再选一次 */
+    private var pendingMediaQueueIndex: Int? = null
     private var appInForeground = false
     private var lastCoursewareVolumeKeyAtMs = 0L
     private val volumeKeyRepeatIntervalMs = 180L
@@ -334,6 +353,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         loadServerCoursewareList()
                     }
                     CoursewareSubScreen.ServerMediaList -> loadServerMediaList()
+                    CoursewareSubScreen.MediaQueue -> showMediaQueueScreen()
                     CoursewareSubScreen.Playback -> showCoursewareScreen(
                         title = coursewareTitle,
                         isUploading = coursewareUploadInProgress
@@ -374,18 +394,22 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     // 图片/视频投屏：走课件上传链路，上传后由服务器下发 URL 播放（清晰流畅，不经过 WebRTC 编码）
+    // 支持一次选择多个文件，投屏过程中通过“上一个/下一个/媒体列表”直接切换
     private val mediaPickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri ?: return@registerForActivityResult
-        // 保留读取权限，上传完成后仍可用原文件做本地预览
-        runCatching {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri>? ->
+        val picked = uris.orEmpty().filter { it != Uri.EMPTY }
+        if (picked.isEmpty()) return@registerForActivityResult
+        // 逐个保留读取权限，上传完成后仍可用原文件做本地预览
+        picked.forEach { uri ->
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
         }
-        uploadCourseware(uri)
+        startLocalMediaQueue(picked)
     }
 
     private val coursewarePickerLauncher = registerForActivityResult(
@@ -1570,7 +1594,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareSubScreen = CoursewareSubScreen.MediaSource
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        val localBtn = primaryButton("本机图片视频").apply {
+        val localBtn = primaryButton("本机图片视频（可多选）").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -1614,7 +1638,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 showMenuScreen()
             }
         }
-        statusText = bodyText("选择图片或视频投屏到大屏：本机上传、服务器暂存，或使用剪贴板链接").apply {
+        statusText = bodyText("选择图片或视频投屏到大屏：本机上传（可多选，投屏中可自由切换）、服务器暂存，或使用剪贴板链接").apply {
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1674,6 +1698,179 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }.onFailure {
             toast("无法打开文件选择器")
         }
+    }
+
+    /** 用本次选择的多个本机文件建立投屏队列，并立即投屏第一个 */
+    private fun startLocalMediaQueue(uris: List<Uri>) {
+        mediaQueue.clear()
+        mediaQueueIndex = -1
+        uris.forEach { uri ->
+            mediaQueue.add(LocalMediaItem(uri = uri, name = displayNameForUri(uri)))
+        }
+        if (activeRoomCode == null) {
+            toast("请先连接教室端")
+            return
+        }
+        // 选择文件耗时较长时可能已断线：这里不丢弃选择，改为连上后自动投屏
+        castMediaQueueItem(0)
+    }
+
+    /** 投屏队列中的第 index 个文件：已上传的直接让大屏切换，未上传的先上传再投屏 */
+    private fun castMediaQueueItem(index: Int) {
+        val item = mediaQueue.getOrNull(index) ?: return
+        if (activeRoomCode == null) {
+            toast("请先连接教室端")
+            return
+        }
+        if (!roomJoined) {
+            // 断线重连中：记住目标文件，连接恢复后自动投屏，避免老师重选一遍
+            pendingMediaQueueIndex = index
+            updateStatus("正在重新连接教室端，连上后自动投屏")
+            reconnectSignalingForCurrentRoom()
+            return
+        }
+        pendingMediaQueueIndex = null
+        when {
+            item.remoteUrl.isNotBlank() -> switchToUploadedMediaItem(index)
+            item.state == MediaQueueState.Uploading -> toast("${item.name}\n正在后台上传，请稍候")
+            else -> uploadAndCastMediaItem(index)
+        }
+    }
+
+    /** 队列内相对切换（首尾循环），供投屏界面的“上一个/下一个”使用 */
+    private fun switchMediaQueueBy(delta: Int) {
+        if (mediaQueue.size < 2) return
+        val current = mediaQueueIndex.takeIf { it in mediaQueue.indices } ?: 0
+        val target = (current + delta + mediaQueue.size) % mediaQueue.size
+        castMediaQueueItem(target)
+    }
+
+    private fun mediaQueuePositionText(): String {
+        if (mediaQueue.isEmpty()) return "媒体列表"
+        val position = (mediaQueueIndex.takeIf { it in mediaQueue.indices } ?: 0) + 1
+        return "媒体列表 $position/${mediaQueue.size}"
+    }
+
+    /** 已上传过的文件：直接通知大屏切换，本地同步显示图片/视频遥控界面 */
+    private fun switchToUploadedMediaItem(index: Int) {
+        val item = mediaQueue.getOrNull(index) ?: return
+        cancelCoursewareFastSeek()
+        mediaQueueIndex = index
+        coursewareUploadInProgress = false
+        coursewarePage = 1
+        coursewarePageCount = 1
+        coursewareScreen = 1
+        coursewareScreenCount = 1
+        coursewareTitle = item.remoteTitle.ifBlank { item.name }
+        coursewareUrl = item.remoteUrl
+        coursewareLocalUri = item.uri
+        castImageBitmap = null
+        videoPlaying = false
+        videoPosition = 0.0
+        videoDuration = 0.0
+        videoUserScrubbing = false
+        signalingClient?.sendStop()
+        signalingClient?.sendCoursewareOpen(item.remoteUrl, coursewareTitle, 1, 1)
+        showCoursewareScreen(title = coursewareTitle, isUploading = false)
+        preloadRestOfMediaQueue()
+    }
+
+    /** 上传队列中的第 index 个文件并投屏，其余文件在后台依次预上传，切换时即可秒开 */
+    private fun uploadAndCastMediaItem(index: Int) {
+        val item = mediaQueue.getOrNull(index) ?: return
+        cancelCoursewareFastSeek()
+        mediaQueueIndex = index
+        item.state = MediaQueueState.Uploading
+        coursewareTitle = item.name
+        coursewareUrl = ""
+        coursewareLocalUri = item.uri
+        castImageBitmap = null
+        coursewarePage = 1
+        coursewarePageCount = 1
+        coursewareScreen = 1
+        coursewareScreenCount = 1
+        showCoursewareScreen(title = item.name, isUploading = true)
+
+        Thread {
+            runCatching {
+                uploadCoursewareBlocking(item.uri, item.name)
+            }.onSuccess { result ->
+                runOnUiThread {
+                    item.remoteUrl = result.url
+                    item.remoteTitle = result.title
+                    item.state = MediaQueueState.Ready
+                    if (currentScreen != Screen.Courseware || mediaQueueIndex != index) {
+                        // 期间用户已切到别的文件：结果只入队，不覆盖当前界面
+                        preloadRestOfMediaQueue()
+                        return@runOnUiThread
+                    }
+                    coursewareUploadInProgress = false
+                    coursewarePage = 1
+                    coursewarePageCount = 1
+                    coursewareScreen = 1
+                    coursewareScreenCount = 1
+                    coursewareTitle = result.title
+                    coursewareUrl = result.url
+                    if (roomJoined) {
+                        signalingClient?.sendStop()
+                        signalingClient?.sendCoursewareOpen(result.url, result.title, 1, 1)
+                        toast("已投屏：${result.title}")
+                        showCoursewareScreen(title = result.title, isUploading = false)
+                    } else if (reconnectSignalingForCurrentRoom()) {
+                        toast("已上传，正在重新连接教室端")
+                        showCoursewareScreen(title = result.title, isUploading = false)
+                    }
+                    preloadRestOfMediaQueue()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    item.state = MediaQueueState.Failed
+                    coursewareUploadInProgress = false
+                    toast(coursewareUploadErrorMessage(error))
+                    if (currentScreen == Screen.Courseware && mediaQueueIndex == index) {
+                        // 当前文件失败时给出队列，便于直接改投其它文件
+                        if (mediaQueue.size > 1) {
+                            showMediaQueueScreen()
+                        } else {
+                            showMediaCastSourceScreen()
+                        }
+                    }
+                    preloadRestOfMediaQueue()
+                }
+            }
+        }.start()
+    }
+
+    /** 后台依次上传队列中尚未上传的文件（不打断当前投屏，也不刷新当前界面状态） */
+    private fun preloadRestOfMediaQueue() {
+        if (mediaQueuePreloading || mediaQueue.isEmpty()) return
+        mediaQueuePreloading = true
+        // 队列可能被用户清空或重新选择，后台只按快照顺序上传，发现队列已变化就停止
+        val snapshot = mediaQueue.toList()
+        Thread {
+            try {
+                for (index in snapshot.indices) {
+                    val item = snapshot[index]
+                    if (mediaQueue.getOrNull(index) !== item) break
+                    if (item.remoteUrl.isNotBlank() || item.state == MediaQueueState.Failed) continue
+                    if (!roomJoined) break
+                    val result = runCatching {
+                        uploadCoursewareBlocking(item.uri, item.name, reportProgress = false)
+                    }.getOrNull()
+                    runOnUiThread {
+                        if (result != null) {
+                            item.remoteUrl = result.url
+                            item.remoteTitle = result.title
+                            item.state = MediaQueueState.Ready
+                        } else {
+                            item.state = MediaQueueState.Failed
+                        }
+                    }
+                }
+            } finally {
+                mediaQueuePreloading = false
+            }
+        }.start()
     }
 
     /**
@@ -2355,6 +2552,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun openStoredCourseware(item: StoredCoursewareItem) {
         cancelCoursewareFastSeek()
+        // 服务器课件不属于本机媒体队列，清空队列避免投屏界面残留切换按钮
+        mediaQueue.clear()
+        mediaQueueIndex = -1
         coursewareUploadInProgress = false
         coursewarePage = 1
         coursewarePageCount = 1
@@ -2410,6 +2610,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
         cancelCoursewareFastSeek()
+        // 单文件上传不属于本机媒体队列，清空队列避免投屏界面残留切换按钮
+        mediaQueue.clear()
+        mediaQueueIndex = -1
         val fileName = displayNameForUri(uri)
         coursewareTitle = fileName
         coursewareUrl = ""
@@ -2471,7 +2674,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         toast("链接已投送到大屏")
     }
 
-    private fun uploadCoursewareBlocking(uri: Uri, fileName: String): CoursewareUploadResult {
+    /**
+     * @param reportProgress 是否把上传进度写到当前界面。后台预上传队列里的其它文件时
+     * 必须传 false，否则会覆盖正在投屏界面的状态文本。
+     */
+    private fun uploadCoursewareBlocking(
+        uri: Uri,
+        fileName: String,
+        reportProgress: Boolean = true
+    ): CoursewareUploadResult {
         val totalBytes = contentLengthForUri(uri)
         val requestBody = object : RequestBody() {
             override fun contentType() =
@@ -2493,6 +2704,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         }
                         sink.write(buffer, 0, read)
                         uploadedBytes += read
+                        if (!reportProgress) continue
                         val now = System.currentTimeMillis()
                         if (now - lastProgressAt > 300L || uploadedBytes == totalBytes) {
                             lastProgressAt = now
@@ -2500,7 +2712,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         }
                     }
                 }
-                updateStatus("$fileName\n上传完成，服务器正在转换/处理...")
+                if (reportProgress) {
+                    updateStatus("$fileName\n上传完成，服务器正在转换/处理...")
+                }
             }
         }
         val multipartBody = MultipartBody.Builder()
@@ -2793,25 +3007,30 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        actionRow.addView(secondaryButton("重置视图").apply {
+        actionRow.addView(compactButton(secondaryButton("重置视图"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) }
             setOnClickListener {
                 zoomable.resetViewport()
                 toast("已重置，大屏同步显示整张图片")
             }
         })
-        actionRow.addView(primaryButton("返回主菜单").apply {
+        actionRow.addView(compactButton(primaryButton("返回主菜单"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
                 marginStart = dp(6)
                 marginEnd = dp(6)
             }
             setOnClickListener { pauseCoursewareAndReturnMenu() }
         })
-        actionRow.addView(secondaryButton("结束投屏").apply {
+        actionRow.addView(compactButton(secondaryButton("结束投屏"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
             setOnClickListener { closeCoursewareAndReturnMenu() }
         })
         root.addView(actionRow)
+
+        // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
+        if (mediaQueue.size > 1) {
+            root.addView(buildMediaQueueRow())
+        }
 
         setContentView(root)
 
@@ -2954,7 +3173,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 dp(56)
             ).apply { topMargin = dp(12) }
         }
-        seekRow.addView(secondaryButton("−10 秒").apply {
+        seekRow.addView(compactButton(secondaryButton("−10 秒"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -2962,7 +3181,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ).apply { marginEnd = dp(8) }
             setOnClickListener { seekVideoBy(-10.0) }
         })
-        seekRow.addView(secondaryButton("+10 秒").apply {
+        seekRow.addView(compactButton(secondaryButton("+10 秒"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -3079,6 +3298,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         })
 
+        // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
+        if (mediaQueue.size > 1) {
+            root.addView(buildMediaQueueRow())
+        }
+
         root.addView(primaryButton("返回主菜单").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -3112,6 +3336,159 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         updateVideoCastUi()
         // 探活：大屏端即使不认识该 action 也会回传一次当前播放状态
         signalingClient?.sendCoursewareVideoControl("query")
+    }
+
+    /** 投屏中的媒体切换行：上一个 / 媒体列表 / 下一个 */
+    private fun buildMediaQueueRow(): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply { topMargin = dp(10) }
+            addView(compactButton(secondaryButton("◀ 上一个"), 13f).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    1f
+                ).apply { marginEnd = dp(6) }
+                setOnClickListener { switchMediaQueueBy(-1) }
+            })
+            addView(compactButton(primaryButton(mediaQueuePositionText()), 13f).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    1f
+                ).apply {
+                    marginStart = dp(6)
+                    marginEnd = dp(6)
+                }
+                setOnClickListener { showMediaQueueScreen() }
+            })
+            addView(compactButton(secondaryButton("下一个 ▶"), 13f).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    1f
+                ).apply { marginStart = dp(6) }
+                setOnClickListener { switchMediaQueueBy(1) }
+            })
+        }
+
+    /** 本机图片视频队列页：点按即可切换投屏内容 */
+    private fun showMediaQueueScreen() {
+        currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.MediaQueue
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+        val listColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        mediaQueue.forEachIndexed { index, item ->
+            val label = buildString {
+                append("${index + 1}. ")
+                append(item.remoteTitle.ifBlank { item.name })
+                append("  ")
+                append(
+                    when {
+                        index == mediaQueueIndex -> "● 正在投屏"
+                        item.remoteUrl.isNotBlank() -> "已就绪"
+                        item.state == MediaQueueState.Uploading -> "上传中"
+                        item.state == MediaQueueState.Failed -> "上传失败，点按重试"
+                        else -> "待上传"
+                    }
+                )
+            }
+            listColumn.addView(secondaryButton(label).apply {
+                maxLines = 2
+                setSingleLine(false)
+                ellipsize = TextUtils.TruncateAt.END
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { if (index > 0) topMargin = dp(6) }
+                setOnClickListener { castMediaQueueItem(index) }
+            })
+        }
+        if (mediaQueue.isEmpty()) {
+            listColumn.addView(bodyText("还没有选择图片或视频").apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(24) }
+            })
+        }
+
+        val scrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            ).apply { topMargin = dp(16) }
+            addView(listColumn)
+        }
+
+        val backBtn = primaryButton(if (coursewareUrl.isNotBlank()) "返回投屏" else "返回").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            )
+            setOnClickListener {
+                if (coursewareUrl.isNotBlank()) {
+                    showCoursewareScreen(title = coursewareTitle, isUploading = false)
+                } else {
+                    showMediaCastSourceScreen()
+                }
+            }
+        }
+        val reselectBtn = secondaryButton("重新选择文件").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply { topMargin = dp(12) }
+            setOnClickListener { launchMediaPicker() }
+        }
+
+        if (isLandscape) {
+            val root = landscapeRoot().apply {
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+            }
+            val leftPanel = baseColumn().apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    marginEnd = dp(20)
+                }
+            }
+            leftPanel.addView(titleText("图片视频列表", 22f))
+            leftPanel.addView(scrollView)
+            val rightPanel = baseColumn().apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = dp(20)
+                }
+            }
+            rightPanel.addView(backBtn)
+            rightPanel.addView(reselectBtn)
+            rightPanel.addView(versionLabel())
+            root.addView(leftPanel)
+            root.addView(rightPanel)
+            setContentView(root)
+        } else {
+            val root = baseColumn().apply {
+                setPadding(dp(28), dp(32), dp(28), dp(32))
+            }
+            root.addView(titleText("图片视频列表", 28f))
+            root.addView(scrollView)
+            root.addView(backBtn)
+            root.addView(reselectBtn)
+            root.addView(versionLabel())
+            setContentView(root)
+        }
     }
 
     /** 用大屏回传的状态刷新遥控器界面 */
@@ -3472,6 +3849,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareTitle = ""
         coursewareUrl = ""
         savedCoursewareState = null
+        pendingMediaQueueIndex = null
+        mediaQueue.clear()
+        mediaQueueIndex = -1
         coursewareSubScreen = CoursewareSubScreen.None
         resetMediaCastState()
         showMenuScreen()
@@ -3693,10 +4073,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (resumeLive) resumeLiveAfterJoin = true
             return true
         }
-        if (reconnectAttempt >= maxReconnectAttempts) {
-            updateStatus("无法连接教室端，请检查网络或重新输入连接码")
-            return false
-        }
+        // 不再因重连次数达到上限就彻底放弃：
+        // 课堂上弱网可能持续较久，直接停止重试会让老师必须退出重进才恢复。
+        // 退避间隔由 scheduleReconnectRetry 控制（上限 reconnectMaxDelayMs）。
         signalReconnectInProgress = true
         roomJoined = false
         signalingClient?.close()
@@ -3735,14 +4114,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun scheduleReconnectRetry() {
-        if (reconnectAttempt >= maxReconnectAttempts) {
-            updateStatus("无法连接教室端，请检查网络或重新输入连接码")
-            toast("无法连接教室端，请检查网络")
-            return
-        }
         reconnectAttempt += 1
-        val delay = (reconnectBaseDelayMs shl (reconnectAttempt - 1))
-            .coerceAtMost(reconnectMaxDelayMs)
+        // 前 maxReconnectAttempts 次按指数退避，之后固定用最长间隔持续重试
+        val delay = if (reconnectAttempt <= maxReconnectAttempts) {
+            (reconnectBaseDelayMs shl (reconnectAttempt - 1))
+                .coerceAtMost(reconnectMaxDelayMs)
+        } else {
+            reconnectMaxDelayMs
+        }
         cancelReconnectRetry()
         val runnable = Runnable {
             reconnectRetryRunnable = null
@@ -3750,7 +4129,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             reconnectSignalingForCurrentRoom()
         }
         reconnectRetryRunnable = runnable
-        updateStatus("连接失败，${delay / 1000} 秒后重试（第 $reconnectAttempt 次）")
+        updateStatus(
+            if (reconnectAttempt <= maxReconnectAttempts) {
+                "连接失败，${delay / 1000} 秒后重试（第 $reconnectAttempt 次）"
+            } else {
+                "暂未连接教室端，${delay / 1000} 秒后继续重试"
+            }
+        )
         reconnectHandler.postDelayed(runnable, delay)
     }
 
@@ -3782,6 +4167,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         resumeLiveAfterJoin = false
         pendingCoursewareCloseAfterJoin = false
         savedCoursewareState = null
+        pendingMediaQueueIndex = null
         coursewareSubScreen = CoursewareSubScreen.None
         signalingClient?.close()
         signalingClient = null
@@ -3828,6 +4214,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 showMenuScreen()
                 return@runOnUiThread
             }
+            // 断线期间已选好文件（选择较慢时常见）：连上后自动投屏，无需重新选择
+            pendingMediaQueueIndex?.let { index ->
+                pendingMediaQueueIndex = null
+                castMediaQueueItem(index)
+                return@runOnUiThread
+            }
             if (currentScreen == Screen.Courseware) {
                 if (!coursewareUploadInProgress && coursewareUrl.isNotBlank()) {
                     // 大屏端若仍在播放同一个视频，重连后不要重发 open，
@@ -3847,6 +4239,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     showCoursewareScreen(title = coursewareTitle, isUploading = false)
                     if (!screenStillPlayingVideo) {
                         showCoursewareReconnectToast()
+                    }
+                } else if (!coursewareUploadInProgress) {
+                    // 尚未开始投屏（来源页/队列页）：重建当前子页面，
+                    // 清掉断线时写入的“正在重新连接教室端...”残留提示
+                    when (coursewareSubScreen) {
+                        CoursewareSubScreen.MediaSource -> showMediaCastSourceScreen()
+                        CoursewareSubScreen.Source -> showCoursewareSourceScreen()
+                        CoursewareSubScreen.MediaQueue -> showMediaQueueScreen()
+                        else -> Unit
                     }
                 }
                 return@runOnUiThread
@@ -4009,9 +4410,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     signalingClient?.close()
                     signalingClient = null
                     scheduleReconnectRetry()
-                } else {
+                } else if (reconnectSignalingForCurrentRoom()) {
+                    // 只有真的发起了重连才提示“正在重新连接”，
+                    // 否则会一直停在“连接中断，正在重新连接”却没有任何连接动作
                     updateStatus("连接中断，正在重新连接教室端...")
-                    reconnectSignalingForCurrentRoom()
                 }
                 return@runOnUiThread
             }
@@ -4535,6 +4937,25 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             strokeWidth = dp(1)
             setStrokeColor(ColorStateList.valueOf(Color.argb(0.3f, 1f, 1f, 1f)))
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+        }
+
+    /**
+     * 一行放多个按钮时的紧凑样式。
+     * MaterialButton 默认左右内边距 16dp、上下各 6dp inset，窄按钮上的文字会被换行截断，
+     * 这里收窄内边距、去掉 inset 并强制单行，保证“返回主菜单”“结束投屏”完整显示。
+     */
+    private fun compactButton(button: MaterialButton, textSizeSp: Float): MaterialButton =
+        button.apply {
+            textSize = textSizeSp
+            setSingleLine(true)
+            maxLines = 1
+            includeFontPadding = false
+            insetTop = 0
+            insetBottom = 0
+            iconPadding = 0
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(8), 0, dp(8), 0)
         }
 
     private fun deleteButton(textValue: String): MaterialButton =

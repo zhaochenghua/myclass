@@ -504,6 +504,71 @@ input::placeholder {
   font-size: 0.9rem;
 }
 
+/* ---------- 图片视频投屏 ---------- */
+.media-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.6rem 0;
+  overflow: hidden;
+}
+
+.media-preview {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #000;
+}
+
+.media-video {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.media-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.media-row .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+  font-size: 0.86rem;
+}
+
+.media-range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.media-time {
+  margin: 0;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.media-volume-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.media-volume-row .pill {
+  flex: 0 0 auto;
+}
+
+.cw-item-main.is-current .cw-item-title {
+  color: var(--accent);
+}
+
 /* ---------- 遮罩 / 提示 ---------- */
 .overlay {
   position: fixed;

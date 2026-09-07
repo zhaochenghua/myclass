@@ -103,6 +103,19 @@ export class SignalingClient {
     return this.send({ type: 'courseware.close' });
   }
 
+  /**
+   * 遥控大屏端的视频播放（与 Android SignalingClient 完全一致）：
+   * action 为 play / pause / toggle / seek / volume / mute / query；
+   * seek 附带 position（秒），volume 附带 volume（0~100），mute 附带 muted。
+   */
+  sendCoursewareVideoControl(action, { position = null, volume = null, muted = null } = {}) {
+    const message = { type: 'courseware.video.control', action };
+    if (position !== null) message.position = position;
+    if (volume !== null) message.volume = volume;
+    if (muted !== null) message.muted = muted;
+    return this.send(message);
+  }
+
   // ---- 内部实现 ----
   #open() {
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
@@ -156,6 +169,9 @@ export class SignalingClient {
           break;
         case 'courseware.state':
           this.handlers.onCoursewareState?.(message);
+          break;
+        case 'courseware.video.state':
+          this.handlers.onCoursewareVideoState?.(message);
           break;
         case 'viewer.courseware.open':
           this.handlers.onViewerCoursewareOpen?.(message);

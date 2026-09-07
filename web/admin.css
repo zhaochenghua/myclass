@@ -271,6 +271,34 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
+/* 表格滚动容器：课件/用户数量多时表格内部滚动，表头固定，避免页面被撑爆 */
+.table-scroll {
+  max-height: 62vh;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.table-scroll .data-table {
+  /* 列数较多，窄屏时横向滚动，避免内容挤在一起 */
+  min-width: 720px;
+}
+
+.table-scroll .data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* 表头必须不透明，否则滚动时行内容会透出来 */
+  background: #0c1a1f;
+}
+
+/* 管理后台内容较多，允许整页滚动（style.css 为投屏页禁用了滚动） */
+html,
+body {
+  overflow: auto;
+}
+
 .btn-sm {
   padding: 0.3rem 0.7rem;
   font-size: 0.8rem;

@@ -75,7 +75,18 @@ export function hideOverlay() {
 }
 
 export function showView(name) {
-  const views = ['Auth', 'Connect', 'Menu', 'Live', 'CoursewareSource', 'CoursewareList', 'CoursewarePlay'];
+  const views = [
+    'Auth',
+    'Connect',
+    'Menu',
+    'Live',
+    'MediaSource',
+    'MediaCast',
+    'MediaQueue',
+    'CoursewareSource',
+    'CoursewareList',
+    'CoursewarePlay'
+  ];
   for (const viewName of views) {
     const node = $(`view${viewName}`);
     if (node) node.hidden = viewName !== name;

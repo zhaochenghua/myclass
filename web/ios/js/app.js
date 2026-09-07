@@ -12,6 +12,7 @@ import {
   setOverlayText,
   setOverlayProgress,
   formatBytes,
+  clamp,
   deviceAngle,
   isStandalone,
   isIos
@@ -44,6 +45,10 @@ const state = {
   quality: storage.get('quality', 'standard'),
   torchOn: false,
   courseware: null,
+  // 图片视频投屏队列（与 Android 一致：上传后由大屏加载，投屏中可直接切换）
+  media: { queue: [], index: -1, preloading: false, uploading: false },
+  // 大屏端视频播放状态（遥控器界面用）
+  video: { playing: false, position: 0, duration: 0, muted: false, volume: 100 },
   resumeLiveAfterJoin: false,
   pendingCoursewareClose: false,
   uploadAbort: null,
@@ -218,6 +223,7 @@ function ensureSignaling() {
         await state.publisher?.addIceCandidate(candidate).catch(() => {});
       },
       onCoursewareState: handleCoursewareState,
+      onCoursewareVideoState: handleCoursewareVideoState,
       onViewerCoursewareOpen: handleViewerCoursewareOpen,
       onViewerCoursewareClose: handleViewerCoursewareClose,
       onSignalError: (message) => toast(message, { warn: true }),
@@ -252,6 +258,9 @@ function handleJoinAccepted() {
       return;
     }
   }
+
+  // 图片视频投屏中断线重连：重新把当前文件推给大屏（视频不重发 open，避免从头播放）
+  if (resumeMediaCast()) return;
 
   // iOS 选图后若发生页面重载，已选图片（压缩后）已存入 sessionStorage，
   // 加入房间后自动恢复图片直播，避免“退回菜单、无任何提示”。
@@ -299,6 +308,7 @@ function leaveRoom() {
 function disconnectAndBack() {
   stopLive({ notify: true });
   stopCourseware({ silent: true });
+  resetMediaCastState();
   leaveRoom();
   showConnect();
 }
@@ -388,6 +398,8 @@ function sendOrientationNow() {
 // ---------------------------------------------------------------- 直播页
 
 async function openCameraLive() {
+  // 正在投屏图片/视频时改开摄像头：先结束投屏，避免大屏停留在旧内容
+  if (state.media.index >= 0) stopMediaCast();
   const preset = QUALITY_PRESETS[state.quality] || QUALITY_PRESETS.standard;
   state.liveMode = 'camera';
   state.screen = 'Live';
@@ -722,6 +734,474 @@ function showFocusRing(x, y) {
   }, 700);
 }
 
+// ---------------------------------------------------------------- 图片视频投屏
+// 与 Android 端一致：本机文件先上传到服务器，再由大屏端直接加载播放（不经 WebRTC 编码），
+// 一次可多选，投屏过程中用“上一个/下一个/列表”切换，无需重新选择文件。
+
+const VIDEO_PATTERN = /\.(mp4|mov|avi|webm|mkv|3gp)(\?|$)/i;
+const IMAGE_PATTERN = /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i;
+
+function mediaKindOf(nameOrUrl) {
+  const value = String(nameOrUrl || '');
+  if (VIDEO_PATTERN.test(value)) return 'video';
+  if (IMAGE_PATTERN.test(value)) return 'image';
+  return 'other';
+}
+
+// iOS（尤其主屏 PWA）对临时创建、未挂载到 DOM 的 <input type=file> 行为异常，
+// 因此与单图投屏一样把 input 持久挂到 DOM。
+let mediaFileInput = null;
+let mediaPreviewUrl = null;
+
+function showMediaSource() {
+  state.screen = 'MediaSource';
+  showView('MediaSource');
+}
+
+function openMediaPicker() {
+  if (!mediaFileInput) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*,video/*';
+    input.multiple = true;
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.top = '0';
+    input.style.opacity = '0';
+    input.style.width = '1px';
+    input.style.height = '1px';
+    input.addEventListener('change', handleMediaPicked);
+    document.body.appendChild(input);
+    mediaFileInput = input;
+  }
+  mediaFileInput.value = '';
+  mediaFileInput.click();
+}
+
+async function handleMediaPicked(event) {
+  const files = Array.from(event.currentTarget.files || []);
+  if (files.length === 0) {
+    toast('未选择到文件，请重试', { warn: true });
+    return;
+  }
+  if (!state.joined) {
+    toast('请先连接教室端', { warn: true });
+    return;
+  }
+
+  // 连续多次选择时追加到已有队列后面，已投屏的内容不受影响
+  const startIndex = state.media.queue.length;
+  for (const file of files) {
+    state.media.queue.push({
+      file,
+      name: file.name || 'media',
+      kind: mediaKindOf(file.name),
+      status: 'pending',
+      url: '',
+      title: '',
+      id: null
+    });
+  }
+  await castMediaItem(startIndex);
+}
+
+/** 投屏队列中的第 index 个文件：已上传的直接切换，未上传的先上传 */
+async function castMediaItem(index) {
+  const item = state.media.queue[index];
+  if (!item) return;
+  if (!state.joined) {
+    toast('请先连接教室端', { warn: true });
+    return;
+  }
+  if (item.status === 'uploading') {
+    toast('该文件正在上传，请稍候');
+    return;
+  }
+  if (item.url) {
+    switchToReadyMediaItem(index);
+    return;
+  }
+  await uploadAndCastMediaItem(index);
+}
+
+function switchMediaBy(delta) {
+  const total = state.media.queue.length;
+  if (total < 2) return;
+  const current = state.media.index >= 0 && state.media.index < total ? state.media.index : 0;
+  castMediaItem((current + delta + total) % total);
+}
+
+/** 已上传过的文件：直接通知大屏切换，本地同步显示预览或视频遥控器 */
+function switchToReadyMediaItem(index) {
+  const item = state.media.queue[index];
+  if (!item) return;
+  state.media.index = index;
+  state.courseware = null;
+
+  stopLive({ notify: false });
+  state.signaling?.sendStop();
+  state.signaling?.sendCoursewareOpen({
+    url: item.url,
+    title: item.title || item.name,
+    page: 1,
+    screen: 1
+  });
+  resetVideoState();
+
+  state.screen = 'MediaCast';
+  showView('MediaCast');
+  updateMediaCastUI();
+  // 探活：让大屏回传一次当前播放状态
+  if (item.kind === 'video') state.signaling?.sendCoursewareVideoControl('query');
+  preloadRestOfMediaQueue();
+}
+
+async function uploadAndCastMediaItem(index) {
+  const item = state.media.queue[index];
+  if (!item) return;
+  state.media.index = index;
+  item.status = 'uploading';
+  state.media.uploading = true;
+  state.courseware = null;
+  stopLive({ notify: false });
+
+  state.screen = 'MediaCast';
+  showView('MediaCast');
+  updateMediaCastUI(`正在上传：${item.name}`);
+
+  const controller = new AbortController();
+  state.uploadAbort = controller;
+  showOverlay(`正在上传：${item.name}`, {
+    progress: true,
+    onCancel: () => controller.abort()
+  });
+
+  try {
+    const file = item.kind === 'image' ? await compressImageFile(item.file) : item.file;
+    const result = await state.coursewareClient.upload(
+      file,
+      (ratio) => {
+        setOverlayProgress(ratio);
+        setOverlayText(`正在上传：${item.name}\n${Math.round(ratio * 100)}%`);
+      },
+      controller.signal
+    );
+    hideOverlay();
+    item.status = 'ready';
+    item.url = result.url;
+    item.title = result.title || item.name;
+    item.id = result.id || null;
+    state.media.uploading = false;
+    if (state.media.index !== index) {
+      // 期间用户已切到别的文件：结果只入队，不覆盖当前界面
+      preloadRestOfMediaQueue();
+      return;
+    }
+    switchToReadyMediaItem(index);
+  } catch (error) {
+    hideOverlay();
+    state.media.uploading = false;
+    item.status = 'failed';
+    if (error.message !== '__ABORTED__') {
+      toast(error.message || '文件上传失败', { warn: true, duration: 3500 });
+    }
+    updateMediaCastUI(`上传失败：${item.name}`);
+    preloadRestOfMediaQueue();
+  } finally {
+    state.uploadAbort = null;
+  }
+}
+
+/** 后台依次上传队列中尚未上传的文件，切换时即可秒开（不弹遮罩、不打断当前投屏） */
+async function preloadRestOfMediaQueue() {
+  if (state.media.preloading) return;
+  state.media.preloading = true;
+  try {
+    for (let index = 0; index < state.media.queue.length; index += 1) {
+      const item = state.media.queue[index];
+      if (!item || item.url || item.status === 'failed') continue;
+      if (!state.joined) break;
+      item.status = 'uploading';
+      try {
+        const file = item.kind === 'image' ? await compressImageFile(item.file) : item.file;
+        const result = await state.coursewareClient.upload(file, null, null);
+        item.status = 'ready';
+        item.url = result.url;
+        item.title = result.title || item.name;
+        item.id = result.id || null;
+      } catch {
+        item.status = 'failed';
+      }
+      if (state.screen === 'MediaQueue') renderMediaQueue();
+    }
+  } finally {
+    state.media.preloading = false;
+  }
+}
+
+async function compressImageFile(file) {
+  const dataUrl = await fileToResizedDataUrl(file, 1920);
+  const blob = await (await fetch(dataUrl)).blob();
+  return new File([blob], file.name || 'image.jpg', { type: 'image/jpeg' });
+}
+
+function showMediaQueue() {
+  state.screen = 'MediaQueue';
+  showView('MediaQueue');
+  renderMediaQueue();
+}
+
+function renderMediaQueue() {
+  const body = $('mediaQueueBody');
+  body.innerHTML = '';
+  if (state.media.queue.length === 0) {
+    body.innerHTML = '<p class="list-empty">还没有选择图片或视频</p>';
+    return;
+  }
+
+  state.media.queue.forEach((item, index) => {
+    const row = document.createElement('div');
+    row.className = 'cw-item';
+
+    const main = document.createElement('button');
+    main.type = 'button';
+    main.className = 'cw-item-main';
+    if (index === state.media.index) main.classList.add('is-current');
+
+    const title = document.createElement('span');
+    title.className = 'cw-item-title';
+    title.textContent = `${index + 1}. ${item.title || item.name}`;
+
+    const meta = document.createElement('span');
+    meta.className = 'cw-item-meta';
+    meta.textContent = mediaStatusText(item, index);
+
+    main.append(title, meta);
+    main.addEventListener('click', () => castMediaItem(index));
+    row.appendChild(main);
+    body.appendChild(row);
+  });
+}
+
+function mediaStatusText(item, index) {
+  if (index === state.media.index) return '● 正在投屏';
+  switch (item.status) {
+    case 'ready':
+      return '已就绪';
+    case 'uploading':
+      return '上传中...';
+    case 'failed':
+      return '上传失败，点按重试';
+    default:
+      return '待上传';
+  }
+}
+
+function backFromMediaQueue() {
+  if (state.media.index >= 0 && state.media.queue[state.media.index]) {
+    state.screen = 'MediaCast';
+    showView('MediaCast');
+    updateMediaCastUI();
+    return;
+  }
+  showMediaSource();
+}
+
+/** 服务器已暂存的图片/视频：直接作为可切换队列展示，点按即投 */
+async function loadServerMedia() {
+  state.screen = 'MediaQueue';
+  showView('MediaQueue');
+  $('mediaQueueBody').innerHTML = '<p class="list-empty">正在加载服务器图片视频...</p>';
+
+  try {
+    const items = await state.coursewareClient.list();
+    const media = items.filter((item) => mediaKindOf(item.url || item.originalUrl) !== 'other');
+    state.media.queue = media.map((item) => ({
+      file: null,
+      name: item.title || 'media',
+      kind: mediaKindOf(item.url || item.originalUrl),
+      status: 'ready',
+      url: item.url,
+      title: item.title || item.fileName || 'media',
+      id: item.id || null
+    }));
+    state.media.index = -1;
+    renderMediaQueue();
+  } catch (error) {
+    $('mediaQueueBody').innerHTML = `<p class="list-empty">${error.message || '加载失败'}</p>`;
+  }
+}
+
+function updateMediaCastUI(statusOverride) {
+  const item = state.media.queue[state.media.index];
+  const total = state.media.queue.length;
+  $('mediaTitle').textContent = item ? (item.title || item.name) : '图片视频投屏';
+
+  const count = $('mediaCount');
+  count.hidden = total < 2;
+  if (total >= 2) count.textContent = `${state.media.index + 1}/${total}`;
+
+  const isVideo = item?.kind === 'video';
+  $('mediaVideoPanel').hidden = !isVideo;
+  updateMediaPreview(item, isVideo);
+
+  const switchRow = $('mediaSwitchRow');
+  switchRow.hidden = total < 2;
+  if (total >= 2) $('mediaListButton').textContent = `列表 ${state.media.index + 1}/${total}`;
+
+  if (statusOverride) {
+    $('mediaStatus').textContent = statusOverride;
+  } else if (!item) {
+    $('mediaStatus').textContent = '尚未选择文件';
+  } else if (isVideo) {
+    updateVideoPanelUI();
+  } else {
+    $('mediaStatus').textContent = state.joined ? '大屏正在显示该图片' : '正在重新连接教室端...';
+  }
+}
+
+function updateMediaPreview(item, isVideo) {
+  const img = $('mediaPreview');
+  if (mediaPreviewUrl) {
+    URL.revokeObjectURL(mediaPreviewUrl);
+    mediaPreviewUrl = null;
+  }
+  if (!item || isVideo) {
+    img.hidden = true;
+    img.removeAttribute('src');
+    return;
+  }
+  // 本机文件用本地 blob 预览（省流量），服务器文件用远程地址
+  if (item.file) {
+    mediaPreviewUrl = URL.createObjectURL(item.file);
+    img.src = mediaPreviewUrl;
+  } else {
+    img.src = item.url;
+  }
+  img.hidden = false;
+}
+
+function updateVideoPanelUI() {
+  const video = state.video;
+  $('mediaPlayToggle').textContent = video.playing ? '暂停' : '播放';
+  const total = video.duration > 0 ? formatMediaTime(video.duration) : '--:--';
+  $('mediaTime').textContent = `${formatMediaTime(video.position)} / ${total}`;
+  $('mediaSeek').value = String(
+    video.duration > 0 ? Math.round((video.position / video.duration) * 1000) : 0
+  );
+  $('mediaMute').textContent = video.muted ? '🔇' : '🔊';
+  $('mediaVolume').value = String(video.volume);
+
+  if (!state.joined) {
+    $('mediaStatus').textContent = '正在重新连接教室端...';
+  } else if (video.duration <= 0) {
+    $('mediaStatus').textContent = '大屏正在加载视频...';
+  } else if (video.playing) {
+    $('mediaStatus').textContent = video.muted ? '大屏正在播放（已静音）' : '大屏正在播放';
+  } else {
+    $('mediaStatus').textContent = '大屏已暂停';
+  }
+}
+
+function handleCoursewareVideoState(message) {
+  state.video.playing = message?.playing === true;
+  state.video.position = Math.max(0, Number(message?.position) || 0);
+  const duration = Number(message?.duration) || 0;
+  if (duration > 0) state.video.duration = duration;
+  state.video.muted = message?.muted === true;
+  const volume = Number(message?.volume);
+  if (Number.isFinite(volume)) state.video.volume = clamp(Math.round(volume), 0, 100);
+  if (state.screen === 'MediaCast') updateMediaCastUI();
+}
+
+function sendVideoControl(action, options = {}) {
+  if (!state.joined) {
+    toast('请先连接教室端', { warn: true });
+    return;
+  }
+  state.signaling?.sendCoursewareVideoControl(action, options);
+}
+
+function seekVideoBy(deltaSeconds) {
+  const video = state.video;
+  if (video.duration <= 0) {
+    toast('暂未获取到视频时长');
+    return;
+  }
+  const target = clamp(video.position + deltaSeconds, 0, video.duration);
+  video.position = target;
+  sendVideoControl('seek', { position: target });
+  updateMediaCastUI();
+}
+
+function seekVideoToRatio(ratio) {
+  const video = state.video;
+  if (video.duration <= 0) return;
+  const target = clamp(ratio * video.duration, 0, video.duration);
+  video.position = target;
+  sendVideoControl('seek', { position: target });
+  updateMediaCastUI();
+}
+
+function formatMediaTime(seconds) {
+  const total = Math.max(0, Math.round(seconds || 0));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  if (minutes >= 60) {
+    return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+function resetVideoState() {
+  state.video.playing = false;
+  state.video.position = 0;
+  state.video.duration = 0;
+}
+
+function stopMediaCast() {
+  const stopSent = state.signaling?.sendStop() === true;
+  const closeSent = state.signaling?.sendCoursewareClose() === true;
+  if (!stopSent && !closeSent && state.roomCode) {
+    state.pendingCoursewareClose = true;
+    ensureSignaling().join(state.roomCode, state.token);
+  }
+  resetMediaCastState();
+  showMenu();
+}
+
+function resetMediaCastState() {
+  if (mediaPreviewUrl) {
+    URL.revokeObjectURL(mediaPreviewUrl);
+    mediaPreviewUrl = null;
+  }
+  state.media.queue = [];
+  state.media.index = -1;
+  resetVideoState();
+}
+
+/** 断线重连成功后：把当前文件重新推给大屏（视频不重发 open，避免从头播放） */
+function resumeMediaCast() {
+  const item = state.media.queue[state.media.index];
+  if (!item?.url) return false;
+  if (item.kind === 'video' && state.video.duration > 0) {
+    state.signaling?.sendCoursewareVideoControl('query');
+  } else {
+    state.signaling?.sendCoursewareOpen({
+      url: item.url,
+      title: item.title || item.name,
+      page: 1,
+      screen: 1
+    });
+  }
+  if (state.screen === 'MediaCast' || state.screen === 'MediaQueue') {
+    state.screen = 'MediaCast';
+    showView('MediaCast');
+    updateMediaCastUI();
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------- 课件
 
 function showCoursewareSource() {
@@ -859,6 +1339,8 @@ function openCourseware(item) {
     return;
   }
 
+  // 改播课件时清掉图片视频队列，避免投屏界面残留切换按钮
+  resetMediaCastState();
   stopLive({ notify: false });
   state.signaling?.sendStop();
 
@@ -927,6 +1409,12 @@ function handleViewerCoursewareOpen(message) {
 }
 
 function handleViewerCoursewareClose() {
+  if (state.screen === 'MediaCast' || state.screen === 'MediaQueue') {
+    // 大屏端关闭了正在投屏的图片/视频：不回发关闭信号，避免循环
+    resetMediaCastState();
+    showMenu();
+    return;
+  }
   if (state.screen !== 'CoursewarePlay') return;
   // 不回发关闭信号，避免与大屏端形成循环
   state.courseware = null;
@@ -1042,7 +1530,7 @@ function bindStaticEvents() {
   $('manageCoursewareButton').addEventListener('click', () => loadServerCourseware({ forManage: true }));
 
   $('menuCamera').addEventListener('click', () => openCameraLive());
-  $('menuImage').addEventListener('click', () => openImagePicker());
+  $('menuMedia').addEventListener('click', () => showMediaSource());
   $('menuCourseware').addEventListener('click', () => showCoursewareSource());
   $('menuDisconnect').addEventListener('click', () => disconnectAndBack());
   $('qualitySelect').addEventListener('change', (event) => {
@@ -1102,6 +1590,44 @@ function bindStaticEvents() {
     state.pipeline.resetView();
     updateZoomBadge();
   });
+
+  $('mediaLocalButton').addEventListener('click', () => openMediaPicker());
+  $('mediaServerButton').addEventListener('click', () => loadServerMedia());
+  $('mediaSourceBack').addEventListener('click', () => showMenu());
+
+  $('mediaBack').addEventListener('click', () => showMenu());
+  $('mediaPrev').addEventListener('click', () => switchMediaBy(-1));
+  $('mediaNext').addEventListener('click', () => switchMediaBy(1));
+  $('mediaListButton').addEventListener('click', () => showMediaQueue());
+  $('mediaEndButton').addEventListener('click', () => stopMediaCast());
+
+  $('mediaPlayToggle').addEventListener('click', () => sendVideoControl('toggle'));
+  $('mediaSeekBack').addEventListener('click', () => seekVideoBy(-10));
+  $('mediaSeekForward').addEventListener('click', () => seekVideoBy(10));
+  $('mediaSeek').addEventListener('input', (event) => {
+    const ratio = Number(event.target.value) / 1000;
+    if (state.video.duration > 0) {
+      $('mediaTime').textContent =
+        `${formatMediaTime(ratio * state.video.duration)} / ${formatMediaTime(state.video.duration)}`;
+    }
+  });
+  $('mediaSeek').addEventListener('change', (event) => seekVideoToRatio(Number(event.target.value) / 1000));
+  $('mediaMute').addEventListener('click', () => {
+    const next = !state.video.muted;
+    state.video.muted = next;
+    sendVideoControl('mute', { muted: next });
+    updateMediaCastUI();
+  });
+  $('mediaVolume').addEventListener('change', (event) => {
+    const volume = clamp(Number(event.target.value), 0, 100);
+    state.video.volume = volume;
+    if (volume <= 0) state.video.muted = true;
+    sendVideoControl('volume', { volume });
+    updateMediaCastUI();
+  });
+
+  $('mediaQueueBack').addEventListener('click', () => backFromMediaQueue());
+  $('mediaQueueAdd').addEventListener('click', () => openMediaPicker());
 
   $('cwServerButton').addEventListener('click', () => loadServerCourseware());
   $('cwUploadButton').addEventListener('click', () => pickCoursewareFile());
