@@ -90,6 +90,30 @@ const state = {
       startOffsetY: 0
     }
   },
+  // 投屏图片在大屏端的本地视口，与手机端同一套归一化语义：
+  // scale = 相对“适应屏幕”的放大倍数，centerX/centerY = 视口中心在图片中的相对位置。
+  // 手机端上报与大屏端本地手势共用这一份状态，保证两端换算口径一致。
+  imageView: {
+    scale: 1,
+    centerX: 0.5,
+    centerY: 0.5,
+    rotation: 0,
+    MIN_SCALE: 1,
+    MAX_SCALE: 8,
+    // 单指/鼠标拖动平移
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startCenterX: 0.5,
+    startCenterY: 0.5,
+    _activePointers: new Map(),
+    _pinch: {
+      active: false,
+      startDist: 0,
+      startScale: 1
+    }
+  },
   downloadOriginalUrl: null,
   teacherToken: null,
   syncedFromTeacher: false,
@@ -379,6 +403,9 @@ async function bootstrap() {
     elements.annotationCanvas.addEventListener('pointermove', continueAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointerup', finishAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointercancel', finishAnnotationStroke);
+    // 投屏图片的滚轮缩放与双击复位
+    elements.annotationCanvas.addEventListener('wheel', handleImageWheel, { passive: false });
+    elements.annotationCanvas.addEventListener('dblclick', handleImageDoubleClick);
     // 黑板事件
     elements.blackboardCanvas.addEventListener('pointerdown', beginBlackboardStroke);
     elements.blackboardCanvas.addEventListener('pointermove', continueBlackboardStroke);
@@ -1223,14 +1250,15 @@ function showCoursewareViewForImage(info) {
   elements.annotationToolbar.hidden = false;
   elements.videoStatus.hidden = true;
   elements.videoPlayerOverlay.hidden = true;
-  // 图片缩放/平移由手机端控制，大屏无需手型与翻页按钮
-  elements.panToolButton.hidden = true;
+  // 图片缩放/平移：手机端可控制，大屏端切到手型工具也能拖动（滚轮缩放、双击复位）
+  elements.panToolButton.hidden = false;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
 
   // 打开新图片时复位缩放/平移，并裁剪溢出部分（避免沿用上一张的视口）
   elements.imagePlayerOverlay.style.overflow = 'hidden';
+  resetImageViewState();
   elements.coursewareImage.style.transform = '';
   elements.coursewareImage.style.transformOrigin = '';
   elements.coursewareImage.src = info.url;
@@ -1607,31 +1635,16 @@ function requestSound() {
 // 大屏端按自身显示尺寸换算成本地像素变换，保证两端看到的区域一致。
 function handleCoursewareImageViewport(message) {
   if (elements.imagePlayerOverlay.hidden) return;
-  const img = elements.coursewareImage;
-  const width = img.offsetWidth;
-  const height = img.offsetHeight;
-  if (!width || !height) return;
+  const view = state.imageView;
   const rawScale = Number(message.scale);
   const rawCenterX = Number(message.centerX);
   const rawCenterY = Number(message.centerY);
-  const scale = Number.isFinite(rawScale) ? Math.min(8, Math.max(1, rawScale)) : 1;
-  const centerX = Number.isFinite(rawCenterX) ? Math.min(1, Math.max(0, rawCenterX)) : 0.5;
-  const centerY = Number.isFinite(rawCenterY) ? Math.min(1, Math.max(0, rawCenterY)) : 0.5;
-  const rotation = normalizeImageRotation(message.rotation);
-  // 旋转 90/270 后画面宽高互换，手机端会按互换后的尺寸重新适应屏幕，
-  // 大屏端必须用同一比例换算，否则两端看到的区域会错开。
-  const refit = imageRotationRefitFactor(img, rotation);
-  const swapped = rotation === 90 || rotation === 270;
-  const baseWidth = (swapped ? height : width) * refit;
-  const baseHeight = (swapped ? width : height) * refit;
-  const offsetX = -scale * (centerX - 0.5) * baseWidth;
-  const offsetY = -scale * (centerY - 0.5) * baseHeight;
-  img.style.transformOrigin = 'center center';
-  img.style.transform =
-    `translate(${offsetX}px, ${offsetY}px) rotate(${rotation}deg) scale(${scale * refit})`;
-  // 图片的显示区域（含缩放/平移/旋转）已经变化，需要按新区域重绘笔迹，
-  // 否则已画的标注会停留在变换前的位置，不随图片移动。
-  drawAnnotations();
+  view.scale = Number.isFinite(rawScale) ? clamp(rawScale, view.MIN_SCALE, view.MAX_SCALE) : 1;
+  view.centerX = Number.isFinite(rawCenterX) ? clamp(rawCenterX, 0, 1) : 0.5;
+  view.centerY = Number.isFinite(rawCenterY) ? clamp(rawCenterY, 0, 1) : 0.5;
+  view.rotation = normalizeImageRotation(message.rotation);
+  clampImageViewCenter();
+  applyCoursewareImageViewTransform();
 }
 
 /** 旋转角度归一到 0 / 90 / 180 / 270（旧版手机端不下发该字段时为 0） */
@@ -1661,6 +1674,292 @@ function imageRotationRefitFactor(img, rotation) {
   const fitAfter = Math.min(containerWidth / rotatedWidth, containerHeight / rotatedHeight);
   if (!fitBefore) return 1;
   return fitAfter / fitBefore;
+}
+
+// ---- 投屏图片：大屏端本地缩放/平移 ----
+// 手机端上报的视口与大屏端本地手势都写入 state.imageView，
+// 再由 applyCoursewareImageViewTransform 统一渲染，保证两端换算口径一致。
+
+/** 图片当前是否处于投屏显示状态 */
+function isImageViewVisible() {
+  return !elements.imagePlayerOverlay.hidden;
+}
+
+/** 手型工具 + 图片投屏：此时指针事件用于图片平移/捏合，而不是画笔 */
+function isImageViewPanMode() {
+  return isImageViewVisible() && state.annotations.tool === 'pan';
+}
+
+/**
+ * 图片在本端的显示基准尺寸（未放大、已按旋转换算到屏幕方向）。
+ * baseWidth/baseHeight 与 centerX/centerY 同为屏幕方向的量，
+ * 因此平移换算不需要再按旋转角度分支。
+ */
+function imageViewBaseSize() {
+  const img = elements.coursewareImage;
+  const width = img.offsetWidth;
+  const height = img.offsetHeight;
+  if (!width || !height) return { baseWidth: 0, baseHeight: 0, refit: 1 };
+  const rotation = state.imageView.rotation;
+  const refit = imageRotationRefitFactor(img, rotation);
+  const swapped = rotation === 90 || rotation === 270;
+  return {
+    baseWidth: (swapped ? height : width) * refit,
+    baseHeight: (swapped ? width : height) * refit,
+    refit
+  };
+}
+
+/** 放大倍数越小可平移的范围越小，未放大时视口固定居中 */
+function clampImageViewCenter() {
+  const view = state.imageView;
+  const limit = Math.max(0, (1 - 1 / (view.scale || 1)) / 2);
+  view.centerX = clamp(view.centerX, 0.5 - limit, 0.5 + limit);
+  view.centerY = clamp(view.centerY, 0.5 - limit, 0.5 + limit);
+}
+
+/** 把 state.imageView 渲染成图片的实际 transform */
+function applyCoursewareImageViewTransform() {
+  if (!isImageViewVisible()) return;
+  const img = elements.coursewareImage;
+  const { baseWidth, baseHeight, refit } = imageViewBaseSize();
+  if (!baseWidth || !baseHeight) return;
+  const view = state.imageView;
+  const offsetX = -view.scale * (view.centerX - 0.5) * baseWidth;
+  const offsetY = -view.scale * (view.centerY - 0.5) * baseHeight;
+  img.style.transformOrigin = 'center center';
+  img.style.transform =
+    `translate(${offsetX}px, ${offsetY}px) rotate(${view.rotation}deg) scale(${view.scale * refit})`;
+  // 图片的显示区域（含缩放/平移/旋转）已经变化，需要按新区域重绘笔迹，
+  // 否则已画的标注会停留在变换前的位置，不随图片移动。
+  drawAnnotations();
+}
+
+/** 仅复位状态（不渲染），用于打开新图片、关闭课件等场景 */
+function resetImageViewState() {
+  const view = state.imageView;
+  view.scale = 1;
+  view.centerX = 0.5;
+  view.centerY = 0.5;
+  view.rotation = 0;
+  view.active = false;
+  view.pointerId = null;
+  view._activePointers.clear();
+  view._pinch.active = false;
+  view._pinch.startDist = 0;
+  elements.annotationCanvas.classList.remove('is-panning', 'is-pinching');
+}
+
+/** 复位视图并立即生效 */
+function resetImageView() {
+  if (!isImageViewVisible()) return;
+  resetImageViewState();
+  applyCoursewareImageViewTransform();
+}
+
+/**
+ * 缩放到指定倍数。传入 focusX/focusY（屏幕坐标）时保持该点下的图片内容不动，
+ * 不传则以图片中心为焦点。
+ */
+function zoomImageViewAt(nextScale, focusX, focusY) {
+  const view = state.imageView;
+  const { baseWidth, baseHeight } = imageViewBaseSize();
+  if (!baseWidth || !baseHeight) return;
+  const next = clamp(Number(nextScale) || 1, view.MIN_SCALE, view.MAX_SCALE);
+  const prev = view.scale || 1;
+  if (Math.abs(next - prev) < 0.0005) return;
+  const ratio = next / prev;
+  const offsetX0 = -prev * (view.centerX - 0.5) * baseWidth;
+  const offsetY0 = -prev * (view.centerY - 0.5) * baseHeight;
+  let offsetX1 = ratio * offsetX0;
+  let offsetY1 = ratio * offsetY0;
+  if (Number.isFinite(focusX) && Number.isFinite(focusY)) {
+    const rect = elements.imagePlayerOverlay.getBoundingClientRect();
+    // 图片居中于 overlay，overlay 中心即图片布局中心
+    const ex = focusX - (rect.left + rect.width / 2);
+    const ey = focusY - (rect.top + rect.height / 2);
+    offsetX1 = ex * (1 - ratio) + ratio * offsetX0;
+    offsetY1 = ey * (1 - ratio) + ratio * offsetY0;
+  }
+  view.scale = next;
+  view.centerX = 0.5 - offsetX1 / (next * baseWidth);
+  view.centerY = 0.5 - offsetY1 / (next * baseHeight);
+  clampImageViewCenter();
+  applyCoursewareImageViewTransform();
+}
+
+/** 按屏幕位移平移视口（dx/dy 为屏幕像素，右/下为正） */
+function panImageViewTo(startCenterX, startCenterY, dx, dy) {
+  const view = state.imageView;
+  const { baseWidth, baseHeight } = imageViewBaseSize();
+  if (!baseWidth || !baseHeight) return;
+  const scale = Math.max(view.scale || 1, view.MIN_SCALE);
+  view.centerX = startCenterX - dx / (scale * baseWidth);
+  view.centerY = startCenterY - dy / (scale * baseHeight);
+  clampImageViewCenter();
+  applyCoursewareImageViewTransform();
+}
+
+// ---- 投屏图片：指针手势（拖动平移 / 双指捏合）----
+
+function beginImagePan(event) {
+  const view = state.imageView;
+  // 未放大时没有可平移的范围，留给双指缩放等手势处理
+  if ((view.scale || 1) <= 1.0001) return;
+  event.preventDefault();
+  runCatching(() => elements.annotationCanvas.setPointerCapture(event.pointerId));
+  view.active = true;
+  view.pointerId = event.pointerId;
+  view.startX = event.clientX;
+  view.startY = event.clientY;
+  view.startCenterX = view.centerX;
+  view.startCenterY = view.centerY;
+  elements.annotationCanvas.classList.add('is-panning');
+}
+
+function continueImagePan(event) {
+  const view = state.imageView;
+  event.preventDefault();
+  panImageViewTo(
+    view.startCenterX,
+    view.startCenterY,
+    event.clientX - view.startX,
+    event.clientY - view.startY
+  );
+}
+
+function finishImagePan(event) {
+  const view = state.imageView;
+  view.active = false;
+  view.pointerId = null;
+  elements.annotationCanvas.classList.remove('is-panning');
+  runCatching(() => elements.annotationCanvas.releasePointerCapture(event.pointerId));
+}
+
+function abortImagePan() {
+  const view = state.imageView;
+  if (!view.active) return;
+  view.active = false;
+  view.pointerId = null;
+  elements.annotationCanvas.classList.remove('is-panning');
+}
+
+function startImagePinch() {
+  const view = state.imageView;
+  const pointers = [...view._activePointers.values()];
+  if (pointers.length < 2) return;
+  const dist = pointerDist(pointers[0], pointers[1]);
+  view._pinch.active = true;
+  view._pinch.startDist = dist > 0 ? dist : 1;
+  view._pinch.startScale = view.scale || 1;
+  elements.annotationCanvas.classList.add('is-pinching');
+}
+
+function continueImagePinch() {
+  const view = state.imageView;
+  const pointers = [...view._activePointers.values()];
+  if (pointers.length < 2 || !view._pinch.startDist) {
+    endImagePinch();
+    return;
+  }
+  const dist = pointerDist(pointers[0], pointers[1]);
+  if (dist < 0.5) return;
+  const center = pinchCenter(pointers[0], pointers[1]);
+  zoomImageViewAt(view._pinch.startScale * (dist / view._pinch.startDist), center.x, center.y);
+}
+
+function endImagePinch() {
+  const view = state.imageView;
+  const wasActive = view._pinch.active;
+  view._pinch.active = false;
+  view._pinch.startDist = 0;
+  elements.annotationCanvas.classList.remove('is-pinching');
+  if (!wasActive) return;
+  clampImageViewCenter();
+  applyCoursewareImageViewTransform();
+  // 松开一指后仍有手指时接续为平移
+  if (view._activePointers.size === 1) {
+    const [pointerId, point] = [...view._activePointers][0];
+    runCatching(() => elements.annotationCanvas.setPointerCapture(pointerId));
+    view.active = true;
+    view.pointerId = pointerId;
+    view.startX = point.x;
+    view.startY = point.y;
+    view.startCenterX = view.centerX;
+    view.startCenterY = view.centerY;
+    if ((view.scale || 1) > 1.0001) elements.annotationCanvas.classList.add('is-panning');
+  }
+}
+
+/**
+ * 三个入口统一判断是否由图片手势消费事件，
+ * 返回 true 表示不应再走画笔或 PDF 课件平移逻辑。
+ */
+function beginImageGesture(event) {
+  if (!isImageViewPanMode()) return false;
+  const view = state.imageView;
+  view._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (view._activePointers.size >= 2) {
+    abortImagePan();
+    startImagePinch();
+    return true;
+  }
+  if (event.isPrimary) beginImagePan(event);
+  return true;
+}
+
+function continueImageGesture(event) {
+  const view = state.imageView;
+  const handling = view.active || view._pinch.active || view._activePointers.size > 0;
+  if (!handling) return false;
+  view._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (view._pinch.active) {
+    continueImagePinch();
+    return true;
+  }
+  if (view.active && view.pointerId === event.pointerId) {
+    if (view._activePointers.size >= 2) {
+      abortImagePan();
+      startImagePinch();
+      return true;
+    }
+    continueImagePan(event);
+    return true;
+  }
+  // 其余指针（例如尚未触发捏合的第二指）不参与画笔绘制
+  return true;
+}
+
+function finishImageGesture(event) {
+  const view = state.imageView;
+  if (!view.active && !view._pinch.active && !view._activePointers.has(event.pointerId)) {
+    return false;
+  }
+  view._activePointers.delete(event.pointerId);
+  if (view._pinch.active) {
+    endImagePinch();
+    return true;
+  }
+  if (view.active && view.pointerId === event.pointerId) {
+    finishImagePan(event);
+    return true;
+  }
+  return true;
+}
+
+/** 图片投屏时滚轮缩放（不受工具限制，方便讲解时快速放大局部） */
+function handleImageWheel(event) {
+  if (!isImageViewVisible()) return;
+  event.preventDefault();
+  const view = state.imageView;
+  zoomImageViewAt(view.scale * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
+}
+
+/** 手型工具下双击复位视图 */
+function handleImageDoubleClick(event) {
+  if (!isImageViewPanMode()) return;
+  event.preventDefault();
+  resetImageView();
 }
 
 // 进度条拖拽
@@ -1839,6 +2138,7 @@ function closeCourseware(statusText = '课件播放已结束，等待教师连�
   try { elements.videoPlayerOverlay.hidden = true; } catch {}
   try { elements.imagePlayerOverlay.hidden = true; } catch {}
   try { elements.coursewareImage.src = ''; elements.coursewareImage.removeAttribute('src'); } catch {}
+  resetImageViewState();
   if (state.videoPlayer.idleTimer) { clearTimeout(state.videoPlayer.idleTimer); state.videoPlayer.idleTimer = null; }
   try { elements.coursewareVideo.pause(); elements.coursewareVideo.src = ''; elements.coursewareVideo.removeAttribute('src'); } catch {}
   try { state.videoPlayer.active = false; } catch {}
@@ -2164,6 +2464,11 @@ function handleViewportResize() {
   if (state.presentationMode === 'courseware') {
     renderCoursewarePage();
     resizeAnnotationCanvas();
+    // 图片尺寸随窗口变化，需按新尺寸重算缩放/平移（内部会重绘笔迹）
+    if (isImageViewVisible()) {
+      applyCoursewareImageViewTransform();
+      return;
+    }
     drawAnnotations();
     return;
   }
@@ -2222,6 +2527,8 @@ function resizeAnnotationCanvas() {
 }
 
 function beginAnnotationStroke(event) {
+  // 投屏图片 + 手型工具：走图片自身的平移/捏合，与 PDF 课件的 coursewarePan 分开
+  if (beginImageGesture(event)) return;
   // 课件模式 + 手型工具：记录指针位置供捏合检测
   if (state.presentationMode === 'courseware' && state.annotations.tool === 'pan') {
     state.coursewarePan._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -2255,6 +2562,8 @@ function beginAnnotationStroke(event) {
 }
 
 function continueAnnotationStroke(event) {
+  // 投屏图片：正在平移/捏合时优先处理，避免中途切工具导致手势错乱
+  if (continueImageGesture(event)) return;
   // 课件模式 + 手型工具：持续更新指针位置，处理捏合/平移
   if (state.presentationMode === 'courseware' && state.annotations.tool === 'pan') {
     state.coursewarePan._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -2298,6 +2607,8 @@ function continueAnnotationStroke(event) {
 }
 
 function finishAnnotationStroke(event) {
+  // 投屏图片：清理本次手势的指针缓存，结束平移或捏合
+  if (finishImageGesture(event)) return;
   // 课件模式 + 手型工具：清理指针并处理捏合结束
   if (state.presentationMode === 'courseware' && state.annotations.tool === 'pan') {
     state.coursewarePan._activePointers.delete(event.pointerId);
@@ -2537,6 +2848,14 @@ function updateLineToggleButtons() {
 
 function setAnnotationTool(tool) {
   state.annotations.tool = (tool === 'pan' || tool === 'eraser') ? tool : 'pen';
+  // 离开手型工具时清理可能残留的图片平移/捏合，避免指针缓存影响后续画笔
+  if (state.annotations.tool !== 'pan') {
+    abortImagePan();
+    state.imageView._activePointers.clear();
+    state.imageView._pinch.active = false;
+    state.imageView._pinch.startDist = 0;
+    elements.annotationCanvas.classList.remove('is-panning', 'is-pinching');
+  }
   updateAnnotationToolButtons();
 }
 
