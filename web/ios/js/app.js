@@ -799,10 +799,58 @@ async function handleMediaPicked(event) {
       status: 'pending',
       url: '',
       title: '',
-      id: null
+      id: null,
+      rotation: 0
     });
   }
   await castMediaItem(startIndex);
+}
+
+/** 当前文件的旋转角度（0 / 90 / 180 / 270），修正拍照方向不对的图片 */
+function currentMediaRotation() {
+  return state.media.queue[state.media.index]?.rotation || 0;
+}
+
+/** 旋转当前图片 90°：本地预览与大屏同步旋转 */
+function rotateCurrentMedia() {
+  const item = state.media.queue[state.media.index];
+  if (!item || item.kind === 'video') return;
+  item.rotation = ((item.rotation || 0) + 90) % 360;
+  applyMediaPreviewRotation();
+  sendMediaViewport();
+  toast(`已旋转 ${item.rotation}°，大屏同步`);
+}
+
+/** 把当前图片的角度同步给大屏（大屏按同一约定换算缩放/平移） */
+function sendMediaViewport() {
+  const item = state.media.queue[state.media.index];
+  if (!item || item.kind === 'video') return;
+  state.signaling?.sendCoursewareImageViewport({
+    scale: 1,
+    centerX: 0.5,
+    centerY: 0.5,
+    rotation: item.rotation || 0
+  });
+}
+
+/**
+ * 预览图旋转：90/270 时画面宽高互换，需要按容器重新适应，
+ * 否则旋转后会超出预览区域（与大屏端 refit 的处理思路一致）。
+ */
+function applyMediaPreviewRotation() {
+  const img = $('mediaPreview');
+  const rotation = currentMediaRotation();
+  if (!img || img.hidden) return;
+  const swapped = rotation === 90 || rotation === 270;
+  let scale = 1;
+  const box = $('mediaPreviewBox')?.getBoundingClientRect();
+  if (swapped && img.naturalWidth && img.naturalHeight && box?.width && box?.height) {
+    const fitNormal = Math.min(box.width / img.naturalWidth, box.height / img.naturalHeight);
+    const fitRotated = Math.min(box.width / img.naturalHeight, box.height / img.naturalWidth);
+    if (fitNormal > 0) scale = fitRotated / fitNormal;
+  }
+  img.style.transformOrigin = 'center center';
+  img.style.transform = `rotate(${rotation}deg) scale(${scale})`;
 }
 
 /** 投屏队列中的第 index 个文件：已上传的直接切换，未上传的先上传 */
@@ -846,6 +894,8 @@ function switchToReadyMediaItem(index) {
     page: 1,
     screen: 1
   });
+  // 大屏打开新图时会复位变换，这里把当前角度补发一次，避免手机端已旋转而大屏回到 0°
+  sendMediaViewport();
   resetVideoState();
 
   state.screen = 'MediaCast';
@@ -1023,7 +1073,8 @@ async function loadServerMedia() {
       status: 'ready',
       url: item.url,
       title: item.title || item.fileName || 'media',
-      id: item.id || null
+      id: item.id || null,
+      rotation: 0
     }));
     state.media.index = -1;
     renderMediaQueue();
@@ -1043,6 +1094,11 @@ function updateMediaCastUI(statusOverride) {
 
   const isVideo = item?.kind === 'video';
   $('mediaVideoPanel').hidden = !isVideo;
+  // 旋转只对图片有意义（视频自带方向信息）
+  $('mediaImageActions').hidden = isVideo || !item;
+  if (!isVideo && item) {
+    $('mediaRotate').textContent = `旋转 90°（${item.rotation || 0}°）`;
+  }
   updateMediaPreview(item, isVideo);
 
   const switchRow = $('mediaSwitchRow');
@@ -1069,8 +1125,11 @@ function updateMediaPreview(item, isVideo) {
   if (!item || isVideo) {
     img.hidden = true;
     img.removeAttribute('src');
+    img.style.transform = '';
     return;
   }
+  // 图片尺寸要等加载完才知道，旋转后的自适应缩放必须在 onload 里再算一次
+  img.onload = () => applyMediaPreviewRotation();
   // 本机文件用本地 blob 预览（省流量），服务器文件用远程地址
   if (item.file) {
     mediaPreviewUrl = URL.createObjectURL(item.file);
@@ -1079,6 +1138,7 @@ function updateMediaPreview(item, isVideo) {
     img.src = item.url;
   }
   img.hidden = false;
+  applyMediaPreviewRotation();
 }
 
 function updateVideoPanelUI() {
@@ -1596,6 +1656,7 @@ function bindStaticEvents() {
   $('mediaSourceBack').addEventListener('click', () => showMenu());
 
   $('mediaBack').addEventListener('click', () => showMenu());
+  $('mediaRotate').addEventListener('click', () => rotateCurrentMedia());
   $('mediaPrev').addEventListener('click', () => switchMediaBy(-1));
   $('mediaNext').addEventListener('click', () => switchMediaBy(1));
   $('mediaListButton').addEventListener('click', () => showMediaQueue());

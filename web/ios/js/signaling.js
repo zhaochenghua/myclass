@@ -104,6 +104,21 @@ export class SignalingClient {
   }
 
   /**
+   * 同步图片视口/旋转到大屏（与 Android SignalingClient 完全一致）：
+   * scale 为相对适应屏幕的放大倍数，centerX / centerY 为视口中心归一化坐标，
+   * rotation 为旋转角度（0 / 90 / 180 / 270）。
+   */
+  sendCoursewareImageViewport({ scale = 1, centerX = 0.5, centerY = 0.5, rotation = 0 }) {
+    return this.send({
+      type: 'courseware.image.viewport',
+      scale,
+      centerX,
+      centerY,
+      rotation
+    });
+  }
+
+  /**
    * 遥控大屏端的视频播放（与 Android SignalingClient 完全一致）：
    * action 为 play / pause / toggle / seek / volume / mute / query；
    * seek 附带 position（秒），volume 附带 volume（0~100），mute 附带 muted。

@@ -153,7 +153,7 @@
           <span class="pill pill-flat" id="mediaCount" hidden></span>
         </header>
 
-        <div class="media-body">
+        <div class="media-body" id="mediaPreviewBox">
           <img class="media-preview" id="mediaPreview" alt="" hidden />
           <div class="media-video" id="mediaVideoPanel" hidden>
             <button class="btn btn-primary" id="mediaPlayToggle" type="button">播放</button>
@@ -172,6 +172,9 @@
 
         <footer class="list-footer">
           <p class="subtitle" id="mediaStatus">正在准备...</p>
+          <div class="media-row" id="mediaImageActions" hidden>
+            <button class="btn btn-nav" id="mediaRotate" type="button">旋转 90°</button>
+          </div>
           <div class="media-row" id="mediaSwitchRow" hidden>
             <button class="btn btn-nav" id="mediaPrev" type="button">◀ 上一个</button>
             <button class="btn btn-nav" id="mediaListButton" type="button">列表</button>
