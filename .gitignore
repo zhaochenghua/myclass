@@ -34,3 +34,10 @@ windows/package-lock.json
 .vscode/
 .claude/
 .codebuddy/
+
+# 凭据文件（禁止提交）
+github令牌.txt
+*令牌*.txt
+*_token*.txt
+.env
+.env.*
