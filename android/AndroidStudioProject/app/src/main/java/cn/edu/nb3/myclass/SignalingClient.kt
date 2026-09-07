@@ -150,15 +150,22 @@ class SignalingClient(
 
     /**
      * 同步图片视口到大屏：scale 为相对适应屏幕的放大倍数，
-     * centerX / centerY 为视口中心在图片中的归一化坐标（0~1）。
+     * centerX / centerY 为视口中心在图片中的归一化坐标（0~1，按旋转后的画面计算），
+     * rotationDegrees 为手机端旋转角度（0/90/180/270），缺省 0 以兼容旧版大屏。
      */
-    fun sendCoursewareImageViewport(scale: Float, centerX: Float, centerY: Float): Boolean =
+    fun sendCoursewareImageViewport(
+        scale: Float,
+        centerX: Float,
+        centerY: Float,
+        rotationDegrees: Int = 0
+    ): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.image.viewport")
                 .put("scale", scale.toDouble())
                 .put("centerX", centerX.toDouble())
                 .put("centerY", centerY.toDouble())
+                .put("rotation", rotationDegrees)
         )
 
     fun sendOrientation(orientation: DeviceOrientationPayload) {

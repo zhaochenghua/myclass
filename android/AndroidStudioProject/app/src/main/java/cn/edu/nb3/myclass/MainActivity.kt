@@ -3007,11 +3007,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        actionRow.addView(compactButton(secondaryButton("重置视图"), 14f).apply {
+        actionRow.addView(compactButton(secondaryButton("旋转"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) }
             setOnClickListener {
-                zoomable.resetViewport()
-                toast("已重置，大屏同步显示整张图片")
+                val degrees = zoomable.rotateBy(90)
+                toast("已旋转 ${degrees}°，大屏同步")
             }
         })
         actionRow.addView(compactButton(primaryButton("返回主菜单"), 14f).apply {
@@ -3035,8 +3035,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         setContentView(root)
 
         zoomableImageView = zoomable
-        zoomable.onViewportChanged = { scale, centerX, centerY ->
-            signalingClient?.sendCoursewareImageViewport(scale, centerX, centerY)
+        zoomable.onViewportChanged = { scale, centerX, centerY, rotation ->
+            signalingClient?.sendCoursewareImageViewport(scale, centerX, centerY, rotation)
         }
 
         val cached = castImageBitmap

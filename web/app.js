@@ -1603,7 +1603,7 @@ function requestSound() {
   }, 300);
 }
 
-// 手机端上报的是归一化视口（缩放倍数 + 视口中心在图片中的相对位置），
+// 手机端上报的是归一化视口（缩放倍数 + 视口中心在图片中的相对位置 + 旋转角度），
 // 大屏端按自身显示尺寸换算成本地像素变换，保证两端看到的区域一致。
 function handleCoursewareImageViewport(message) {
   if (elements.imagePlayerOverlay.hidden) return;
@@ -1617,13 +1617,50 @@ function handleCoursewareImageViewport(message) {
   const scale = Number.isFinite(rawScale) ? Math.min(8, Math.max(1, rawScale)) : 1;
   const centerX = Number.isFinite(rawCenterX) ? Math.min(1, Math.max(0, rawCenterX)) : 0.5;
   const centerY = Number.isFinite(rawCenterY) ? Math.min(1, Math.max(0, rawCenterY)) : 0.5;
-  const offsetX = -scale * (centerX - 0.5) * width;
-  const offsetY = -scale * (centerY - 0.5) * height;
+  const rotation = normalizeImageRotation(message.rotation);
+  // 旋转 90/270 后画面宽高互换，手机端会按互换后的尺寸重新适应屏幕，
+  // 大屏端必须用同一比例换算，否则两端看到的区域会错开。
+  const refit = imageRotationRefitFactor(img, rotation);
+  const swapped = rotation === 90 || rotation === 270;
+  const baseWidth = (swapped ? height : width) * refit;
+  const baseHeight = (swapped ? width : height) * refit;
+  const offsetX = -scale * (centerX - 0.5) * baseWidth;
+  const offsetY = -scale * (centerY - 0.5) * baseHeight;
   img.style.transformOrigin = 'center center';
-  img.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-  // 图片的显示区域（含缩放/平移）已经变化，需要按新区域重绘笔迹，
+  img.style.transform =
+    `translate(${offsetX}px, ${offsetY}px) rotate(${rotation}deg) scale(${scale * refit})`;
+  // 图片的显示区域（含缩放/平移/旋转）已经变化，需要按新区域重绘笔迹，
   // 否则已画的标注会停留在变换前的位置，不随图片移动。
   drawAnnotations();
+}
+
+/** 旋转角度归一到 0 / 90 / 180 / 270（旧版手机端不下发该字段时为 0） */
+function normalizeImageRotation(value) {
+  const raw = Math.round(Number(value) || 0);
+  const modulo = ((raw % 360) + 360) % 360;
+  return Math.round(modulo / 90) * 90 % 360;
+}
+
+/**
+ * 旋转后需要重新适应屏幕：未旋转时 CSS 已按 min(容器宽/图宽, 容器高/图高) 缩放，
+ * 旋转后的适应比例不同，两者相除得到补偿系数，再乘到大屏的 scale 上。
+ * 图片尚未加载（取不到原始尺寸）时按 1 处理，退化为原来的行为。
+ */
+function imageRotationRefitFactor(img, rotation) {
+  if (rotation === 0) return 1;
+  const intrinsicWidth = img.naturalWidth;
+  const intrinsicHeight = img.naturalHeight;
+  const overlay = elements.imagePlayerOverlay;
+  const containerWidth = overlay?.clientWidth || 0;
+  const containerHeight = overlay?.clientHeight || 0;
+  if (!intrinsicWidth || !intrinsicHeight || !containerWidth || !containerHeight) return 1;
+  const swapped = rotation === 90 || rotation === 270;
+  const rotatedWidth = swapped ? intrinsicHeight : intrinsicWidth;
+  const rotatedHeight = swapped ? intrinsicWidth : intrinsicHeight;
+  const fitBefore = Math.min(containerWidth / intrinsicWidth, containerHeight / intrinsicHeight);
+  const fitAfter = Math.min(containerWidth / rotatedWidth, containerHeight / rotatedHeight);
+  if (!fitBefore) return 1;
+  return fitAfter / fitBefore;
 }
 
 // 进度条拖拽
