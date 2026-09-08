@@ -240,6 +240,7 @@ const elements = {
   iosModal: document.getElementById('iosModal'),
   iosQr: document.getElementById('iosQr'),
   iosUrlText: document.getElementById('iosUrlText'),
+  iosCaQr: document.getElementById('iosCaQr'),
   iosModalClose: document.getElementById('iosModalClose'),
 };
 
@@ -255,6 +256,8 @@ function setupIosWebAppEntry() {
   }
   elements.iosQr.src = `./api/ios-qrcode.svg?v=${encodeURIComponent(iosVersion)}`;
   elements.iosUrlText.textContent = iosUrl.replace(/\?v=.*$/, '');
+  // 第 1 步：证书安装引导二维码（指向服务器 http://<host>/ca/，扫码即开无需手输）
+  elements.iosCaQr.src = './ios-ca-qr.svg';
   elements.iosWebAppButton.addEventListener('click', () => {
     elements.iosModal.hidden = false;
   });
@@ -2545,6 +2548,8 @@ function beginAnnotationStroke(event) {
     return;
   }
   event.preventDefault();
+  // 开始画图的瞬间立即收起线型选择下拉，避免遮挡投屏画面
+  elements.annotationModeMenu.classList.remove('is-open');
   elements.annotationCanvas.setPointerCapture(event.pointerId);
   const isEraser = state.annotations.tool === 'eraser';
   const isLine = !isEraser && state.annotations.lineMode;

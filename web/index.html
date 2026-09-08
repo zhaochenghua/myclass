@@ -52,18 +52,38 @@
         </div>
       </div>
 
-      <!-- iPhone 网页版二维码 -->
+      <!-- iPhone 网页版引导：第 1 步安装信任证书（每台 iPhone 首次一次），第 2 步扫码进网页版 -->
       <div class="modal-overlay" id="iosModal" hidden>
         <div class="modal-card ios-modal-card">
           <h3>iPhone 网页版</h3>
-          <img class="ios-qr" id="iosQr" alt="iPhone 网页版二维码">
-          <p class="ios-url" id="iosUrlText"></p>
-          <ol class="ios-steps">
-            <li>用 iPhone 相机或 Safari 扫描上方二维码。</li>
-            <li>Safari 提示证书不受信任时，选择“显示详细信息”→“访问此网站”。</li>
-            <li>点击底部分享按钮 → “添加到主屏幕”，即可像 App 一样全屏使用。</li>
-            <li>打开后输入大屏上的 4 位连接码即可投屏。</li>
-          </ol>
+          <p class="ios-subtitle">全程扫码即可，无需手动输网址；第 1 步每台手机只需做一次。</p>
+          <div class="ios-phases">
+            <section class="ios-phase ios-phase-cert">
+              <div class="ios-phase-title"><span class="ios-phase-num">1</span>安装信任证书<span class="ios-once">仅首次</span></div>
+              <div class="ios-phase-body">
+                <img class="ios-qr ios-qr-sm" id="iosCaQr" alt="安装证书二维码">
+                <ol class="ios-steps">
+                  <li>用 iPhone 相机扫<b>第 1 步二维码</b>，点提示条用 Safari 打开。</li>
+                  <li>在打开的页面点“下载描述文件”→ 允许。</li>
+                  <li>去“设置 → 通用 → VPN 与设备管理”安装它。</li>
+                  <li>再打开“设置 → 通用 → 关于本机 → 证书信任设置”里 1Panel-CA 的<b>“完全信任”</b>。</li>
+                  <li>之后不再弹“无法验证服务器身份”，可继续第 2 步。</li>
+                </ol>
+              </div>
+            </section>
+            <section class="ios-phase ios-phase-app">
+              <div class="ios-phase-title"><span class="ios-phase-num">2</span>打开网页版并添加主屏幕</div>
+              <div class="ios-phase-body">
+                <img class="ios-qr" id="iosQr" alt="iPhone 网页版二维码">
+                <p class="ios-url" id="iosUrlText"></p>
+                <ol class="ios-steps">
+                  <li>用 iPhone 相机扫<b>第 2 步二维码</b>，用 Safari 打开。</li>
+                  <li>点底部分享按钮 → “添加到主屏幕”，即可像 App 一样全屏使用。</li>
+                  <li>从主屏幕打开，输入大屏上的 4 位连接码即可投屏。</li>
+                </ol>
+              </div>
+            </section>
+          </div>
           <div class="modal-actions">
             <button type="button" class="btn-secondary" id="iosModalClose">关闭</button>
           </div>
