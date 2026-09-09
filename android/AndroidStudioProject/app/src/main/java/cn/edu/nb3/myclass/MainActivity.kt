@@ -56,6 +56,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
@@ -3000,18 +3002,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareSubScreen = CoursewareSubScreen.Playback
         coursewareUploadInProgress = false
 
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            // 横屏改为左右布局：预览占满左侧，控制栏收进右侧竖栏
+            orientation = if (isLandscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
         }
 
         val imageHost = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
+            layoutParams = if (isLandscape) {
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            } else {
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
         }
         val zoomable = ZoomableImageView(this)
         imageHost.addView(
@@ -3033,7 +3037,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             )
         }
         imageHost.addView(hintText)
-        root.addView(imageHost)
 
         // 模式提示 + 切换按钮：常驻显示，是手势 / 画笔两种模式的唯一入口
         var refreshAnnotationBar: (() -> Unit)? = null
@@ -3060,37 +3063,52 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             layoutParams = LinearLayout.LayoutParams(dp(96), dp(40))
         }
         modeBar.addView(modeButton)
-        root.addView(modeBar)
 
-        // 手势模式工具栏：保持原有的旋转 / 返回主菜单 / 结束投屏
+        // 手势模式工具栏：旋转 / 返回主菜单 / 结束投屏
         val gestureBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(4), dp(12), dp(10))
+            orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        gestureBar.addView(compactButton(secondaryButton("旋转"), 14f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) }
+
+        /** 一行等宽按钮 */
+        fun buildGestureRow(buttons: List<MaterialButton>): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            buttons.forEachIndexed { index, button ->
+                button.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                    marginStart = if (index == 0) 0 else dp(6)
+                    marginEnd = if (index == buttons.lastIndex) 0 else dp(6)
+                }
+                addView(button)
+            }
+        }
+        val rotateButton = compactButton(secondaryButton("旋转"), 14f).apply {
             setOnClickListener {
                 val degrees = zoomable.rotateBy(90)
                 toast("已旋转 ${degrees}°，大屏同步")
             }
-        })
-        gestureBar.addView(compactButton(primaryButton("返回主菜单"), 14f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
-                marginStart = dp(6)
-                marginEnd = dp(6)
-            }
+        }
+        val gestureBackButton = compactButton(primaryButton("返回主菜单"), 14f).apply {
             setOnClickListener { pauseCoursewareAndReturnMenu() }
-        })
-        gestureBar.addView(compactButton(secondaryButton("结束投屏"), 14f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
+        }
+        val gestureEndButton = compactButton(secondaryButton("结束投屏"), 14f).apply {
             setOnClickListener { closeCoursewareAndReturnMenu() }
-        })
-        root.addView(gestureBar)
+        }
+        if (isLandscape) {
+            // 横屏面板较窄：拆成两行，避免"返回主菜单"这类长文字被截断
+            gestureBar.addView(buildGestureRow(listOf(rotateButton)))
+            gestureBar.addView(buildGestureRow(listOf(gestureBackButton, gestureEndButton)))
+        } else {
+            gestureBar.addView(buildGestureRow(listOf(rotateButton, gestureBackButton, gestureEndButton)))
+        }
 
         // 画笔模式工具栏：颜色 / 板擦 + 撤销 / 清空，按钮状态随笔迹数量变化
         val penBar = LinearLayout(this).apply {
@@ -3109,11 +3127,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
+        // 横屏右侧面板较窄，缩小色点并收紧间距，保证 5 个颜色都完整显示
+        val dotSize = if (isLandscape) dp(34) else dp(40)
+        val dotMargin = if (isLandscape) dp(4) else dp(6)
         val colorDots = mutableListOf<MaterialButton>()
         AnnotationPalette.COLORS.forEach { colorHex ->
             val dot = MaterialButton(this).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(6) }
-                cornerRadius = dp(20)
+                layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply { marginEnd = dotMargin }
+                cornerRadius = dotSize / 2
                 insetTop = 0
                 insetBottom = 0
                 minWidth = 0
@@ -3135,27 +3156,22 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             paletteRow.addView(dot)
         }
         val eraserButton = annotationToolButton("板擦").apply {
-            layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
             setOnClickListener {
                 zoomable.penEraser = !zoomable.penEraser
                 imageCastPenEraser = zoomable.penEraser
                 refreshAnnotationBar?.invoke()
             }
         }
-        paletteRow.addView(eraserButton)
-        penBar.addView(paletteRow)
-
-        val penActionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(4), dp(12), dp(10))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+        if (isLandscape) {
+            // 横屏把板擦移到下一行，否则颜色按钮会被挤出屏幕
+            penBar.addView(paletteRow)
+        } else {
+            eraserButton.layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
+            paletteRow.addView(eraserButton)
+            penBar.addView(paletteRow)
         }
+
         val undoButton = annotationToolButton("撤销").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(4) }
             setOnClickListener {
                 if (zoomable.undoAnnotation()) {
                     signalingClient?.sendAnnotationUndo()
@@ -3163,10 +3179,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         val clearButton = annotationToolButton("清空").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                marginStart = dp(4)
-                marginEnd = dp(4)
-            }
             setOnClickListener {
                 if (zoomable.clearAnnotations()) {
                     signalingClient?.sendAnnotationClear()
@@ -3174,22 +3186,36 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         val penBackButton = annotationToolButton("返回主菜单").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                marginStart = dp(4)
-                marginEnd = dp(4)
-            }
             setOnClickListener { pauseCoursewareAndReturnMenu() }
         }
         val penEndButton = annotationToolButton("结束投屏").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(4) }
             setOnClickListener { closeCoursewareAndReturnMenu() }
         }
-        penActionRow.addView(undoButton)
-        penActionRow.addView(clearButton)
-        penActionRow.addView(penBackButton)
-        penActionRow.addView(penEndButton)
-        penBar.addView(penActionRow)
-        root.addView(penBar)
+
+        /** 一行等宽按钮 */
+        fun buildActionRow(buttons: List<MaterialButton>): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), if (isLandscape) dp(4) else dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            buttons.forEachIndexed { index, button ->
+                button.layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                    marginStart = if (index == 0) 0 else dp(4)
+                    marginEnd = if (index == buttons.lastIndex) 0 else dp(4)
+                }
+                addView(button)
+            }
+        }
+
+        if (isLandscape) {
+            penBar.addView(buildActionRow(listOf(eraserButton, undoButton, clearButton)))
+            penBar.addView(buildActionRow(listOf(penBackButton, penEndButton)))
+        } else {
+            penBar.addView(buildActionRow(listOf(undoButton, clearButton, penBackButton, penEndButton)))
+        }
 
         refreshAnnotationBar = {
             colorDots.forEachIndexed { index, dot ->
@@ -3247,12 +3273,49 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         applyImageCastMode?.invoke()
 
-        // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
-        if (mediaQueue.size > 1) {
-            root.addView(buildMediaQueueRow())
+        if (isLandscape) {
+            // 右侧竖栏自上而下排布，左侧空间全部留给图片预览
+            val sidePanel = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                setPadding(0, dp(2), 0, dp(2))
+            }
+            sidePanel.addView(modeBar)
+            sidePanel.addView(gestureBar)
+            sidePanel.addView(penBar)
+            // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
+            if (mediaQueue.size > 1) {
+                sidePanel.addView(buildMediaQueueRow())
+            }
+            val scroller = ScrollView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(240), ViewGroup.LayoutParams.MATCH_PARENT)
+            }
+            scroller.addView(sidePanel)
+            root.addView(imageHost)
+            root.addView(scroller)
+        } else {
+            root.addView(imageHost)
+            root.addView(modeBar)
+            root.addView(gestureBar)
+            root.addView(penBar)
+            // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
+            if (mediaQueue.size > 1) {
+                root.addView(buildMediaQueueRow())
+            }
         }
 
         setContentView(root)
+        // Android 15+ 默认边到边绘制，按系统栏留出安全边距，
+        // 否则横屏时右侧竖栏顶部的按钮会被状态栏挡住
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
 
         zoomableImageView = zoomable
         zoomable.onViewportChanged = { scale, centerX, centerY, rotation ->
@@ -3307,19 +3370,25 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareSubScreen = CoursewareSubScreen.Playback
         coursewareUploadInProgress = false
 
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            // 横屏改为左右布局：预览占满左侧剩余空间，控制栏收进右侧竖栏，
+            // 避免多条横向工具条吃掉横屏本就有限的高度
+            orientation = if (isLandscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
         }
         val imageHost = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
+            layoutParams = if (isLandscape) {
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            } else {
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
         }
-        val zoomable = ZoomableImageView(this)
+        val zoomable = ZoomableImageView(this).apply {
+            // 课件默认宽度充满：两侧不留黑边，长页上下拖动查看
+            fitMode = ImageFitMode.FitWidth
+        }
         imageHost.addView(
             zoomable,
             FrameLayout.LayoutParams(
@@ -3339,7 +3408,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             )
         }
         imageHost.addView(hintText)
-        root.addView(imageHost)
 
         var refreshAnnotationBar: (() -> Unit)? = null
         var applyCastMode: (() -> Unit)? = null
@@ -3363,7 +3431,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             layoutParams = LinearLayout.LayoutParams(dp(96), dp(40))
         }
         modeBar.addView(modeButton)
-        root.addView(modeBar)
 
         // 翻页栏：手势与画笔模式下都常驻，翻页同时更新手机预览与大屏
         val pageBar = LinearLayout(this).apply {
@@ -3372,23 +3439,58 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setPadding(dp(12), dp(4), dp(12), dp(4))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52))
         }
-        val prevButton = compactButton(secondaryButton("上一页"), 14f).apply {
+        val pageFont = if (isLandscape) 13f else 14f
+        val prevButton = compactButton(secondaryButton("上一页"), pageFont).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) }
         }
         val pageLabel = TextView(this).apply {
-            textSize = 14f
+            textSize = pageFont
             setSingleLine(true)
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#CCDDEE"))
-            layoutParams = LinearLayout.LayoutParams(dp(112), ViewGroup.LayoutParams.WRAP_CONTENT)
+            layoutParams = LinearLayout.LayoutParams(
+                dp(if (isLandscape) 88 else 112),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
         }
-        val nextButton = compactButton(secondaryButton("下一页"), 14f).apply {
+        val nextButton = compactButton(secondaryButton("下一页"), pageFont).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(6) }
         }
         pageBar.addView(prevButton)
         pageBar.addView(pageLabel)
         pageBar.addView(nextButton)
-        root.addView(pageBar)
+
+        // 跳页行：左侧输入页码、右侧跳转按钮，做成显性入口，不再藏在页码里
+        val jumpRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(2), dp(12), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(if (isLandscape) 48 else 56)
+            )
+        }
+        val pageInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            imeOptions = EditorInfo.IME_ACTION_GO
+            hint = "页码"
+            gravity = Gravity.CENTER
+            textSize = 16f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+            setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_muted))
+            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_surface))
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                marginEnd = dp(8)
+            }
+        }
+        val jumpButton = primaryButton("跳转").apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                marginStart = dp(8)
+            }
+        }
+        jumpRow.addView(pageInput)
+        jumpRow.addView(jumpButton)
 
         // 手势模式工具栏（课件页方向固定，不提供旋转）
         val gestureBar = LinearLayout(this).apply {
@@ -3408,8 +3510,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
             setOnClickListener { closeCoursewareAndReturnMenu() }
         })
-        root.addView(gestureBar)
-
         // 画笔模式工具栏：颜色 / 板擦 + 撤销 / 清空
         val penBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -3427,11 +3527,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
+        // 横屏右侧面板较窄，缩小色点并收紧间距，保证 5 个颜色都完整显示
+        val dotSize = if (isLandscape) dp(34) else dp(40)
+        val dotMargin = if (isLandscape) dp(4) else dp(6)
         val colorDots = mutableListOf<MaterialButton>()
         AnnotationPalette.COLORS.forEach { colorHex ->
             val dot = MaterialButton(this).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(6) }
-                cornerRadius = dp(20)
+                layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply { marginEnd = dotMargin }
+                cornerRadius = dotSize / 2
                 insetTop = 0
                 insetBottom = 0
                 minWidth = 0
@@ -3453,27 +3556,22 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             paletteRow.addView(dot)
         }
         val eraserButton = annotationToolButton("板擦").apply {
-            layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
             setOnClickListener {
                 zoomable.penEraser = !zoomable.penEraser
                 imageCastPenEraser = zoomable.penEraser
                 refreshAnnotationBar?.invoke()
             }
         }
-        paletteRow.addView(eraserButton)
-        penBar.addView(paletteRow)
-
-        val penActionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(4), dp(12), dp(10))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+        if (isLandscape) {
+            // 横屏把板擦移到下一行，否则颜色按钮会被挤出屏幕
+            penBar.addView(paletteRow)
+        } else {
+            eraserButton.layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
+            paletteRow.addView(eraserButton)
+            penBar.addView(paletteRow)
         }
+
         val undoButton = annotationToolButton("撤销").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(4) }
             setOnClickListener {
                 if (zoomable.undoAnnotation()) {
                     signalingClient?.sendAnnotationUndo(coursewarePage)
@@ -3481,10 +3579,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         val clearButton = annotationToolButton("清空").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                marginStart = dp(4)
-                marginEnd = dp(4)
-            }
             setOnClickListener {
                 if (zoomable.clearAnnotations()) {
                     signalingClient?.sendAnnotationClear(coursewarePage)
@@ -3492,22 +3586,37 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         val penBackButton = annotationToolButton("返回主菜单").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                marginStart = dp(4)
-                marginEnd = dp(4)
-            }
             setOnClickListener { pauseCoursewareAndReturnMenu() }
         }
         val penEndButton = annotationToolButton("结束投屏").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(4) }
             setOnClickListener { closeCoursewareAndReturnMenu() }
         }
-        penActionRow.addView(undoButton)
-        penActionRow.addView(clearButton)
-        penActionRow.addView(penBackButton)
-        penActionRow.addView(penEndButton)
-        penBar.addView(penActionRow)
-        root.addView(penBar)
+
+        /** 一行等宽按钮 */
+        fun buildActionRow(buttons: List<MaterialButton>): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), if (isLandscape) dp(4) else dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            buttons.forEachIndexed { index, button ->
+                button.layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                    marginStart = if (index == 0) 0 else dp(4)
+                    marginEnd = if (index == buttons.lastIndex) 0 else dp(4)
+                }
+                addView(button)
+            }
+        }
+
+        if (isLandscape) {
+            // 横屏右侧面板较窄：拆成两行，避免"返回主菜单"这类长文字被截断
+            penBar.addView(buildActionRow(listOf(eraserButton, undoButton, clearButton)))
+            penBar.addView(buildActionRow(listOf(penBackButton, penEndButton)))
+        } else {
+            penBar.addView(buildActionRow(listOf(undoButton, clearButton, penBackButton, penEndButton)))
+        }
 
         refreshAnnotationBar = {
             colorDots.forEachIndexed { index, dot ->
@@ -3560,6 +3669,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         fun updatePageBar() {
             val total = coursewarePdf?.pageCount?.takeIf { it > 0 } ?: coursewarePageCount
             pageLabel.text = "第 $coursewarePage / $total 页"
+            pageInput.hint = "页码 1-$total"
             val canPrev = coursewarePage > 1
             val canNext = coursewarePage < total
             prevButton.isEnabled = canPrev
@@ -3672,8 +3782,29 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }.start()
         }
 
+        /** 读取输入框里的页码并跳转：本地换页 + 同步大屏 */
+        fun jumpToInputPage() {
+            val total = coursewarePdf?.pageCount?.takeIf { it > 0 } ?: coursewarePageCount
+            val target = pageInput.text.toString().trim().toIntOrNull()
+            if (target == null || target < 1 || target > total) {
+                toast("请输入 1 - $total 之间的页码")
+                return
+            }
+            pageInput.text?.clear()
+            showPage(target, notifyRemote = true)
+        }
+
         prevButton.setOnClickListener { showPage(coursewarePage - 1, notifyRemote = true) }
         nextButton.setOnClickListener { showPage(coursewarePage + 1, notifyRemote = true) }
+        jumpButton.setOnClickListener { jumpToInputPage() }
+        pageInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
+                jumpToInputPage()
+                true
+            } else {
+                false
+            }
+        }
 
         zoomable.penColorHex = imageCastPenColor
         zoomable.penEraser = imageCastPenEraser
@@ -3684,7 +3815,46 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         applyCastMode?.invoke()
 
+        if (isLandscape) {
+            // 右侧竖栏自上而下排布：模式 / 翻页 / 跳页 / 工具栏，左侧空间全部留给课件预览
+            val sidePanel = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                setPadding(0, dp(2), 0, dp(2))
+            }
+            sidePanel.addView(modeBar)
+            sidePanel.addView(pageBar)
+            sidePanel.addView(jumpRow)
+            sidePanel.addView(gestureBar)
+            sidePanel.addView(penBar)
+            // 竖栏控件较多，包一层滚动容器，避免小屏横屏时底部按钮被挤出屏幕
+            val scroller = ScrollView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(240), ViewGroup.LayoutParams.MATCH_PARENT)
+            }
+            scroller.addView(sidePanel)
+            root.addView(imageHost)
+            root.addView(scroller)
+        } else {
+            root.addView(imageHost)
+            root.addView(modeBar)
+            root.addView(pageBar)
+            root.addView(jumpRow)
+            root.addView(gestureBar)
+            root.addView(penBar)
+        }
+
         setContentView(root)
+        // Android 15+（targetSdk 35）默认边到边绘制，内容会延伸到系统栏下方。
+        // 这里按系统栏给根布局留出安全边距，否则横屏时右侧竖栏顶部的按钮会被状态栏压住。
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
 
         zoomableImageView = zoomable
         // 视口与笔迹都带页码，大屏端按页处理；课件页方向固定，旋转恒为 0

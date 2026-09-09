@@ -21,6 +21,13 @@ import kotlin.math.min
 enum class ImageCastMode { Gesture, Pen }
 
 /**
+ * 内容适配方式。
+ * - Contain：整页完整显示（图片投屏用）
+ * - FitWidth：宽度充满，长内容上下拖动查看（课件用，避免左右留黑边）
+ */
+enum class ImageFitMode { Contain, FitWidth }
+
+/**
  * 经典图片查看控件：双指缩放、拖动平移、双击放大/还原、90° 步进旋转，
  * 并支持切换到画笔模式做标注。
  *
@@ -62,6 +69,22 @@ class ZoomableImageView(context: Context) : View(context) {
             if (field == value) return
             finishActiveStroke(notify = false)
             field = value
+            invalidate()
+        }
+
+    /**
+     * 内容适配方式。
+     * 课件用 FitWidth：宽度充满屏幕，两侧不留黑边，长页上下拖动查看；
+     * 图片用 Contain：整图完整显示。
+     */
+    var fitMode: ImageFitMode = ImageFitMode.Contain
+        set(value) {
+            if (field == value) return
+            field = value
+            measureFit()
+            clampTranslation()
+            markAnnotationDirty()
+            notifyViewport(force = true)
             invalidate()
         }
 
@@ -142,6 +165,11 @@ class ZoomableImageView(context: Context) : View(context) {
         translateX = 0f
         translateY = 0f
         measureFit()
+        if (fitMode == ImageFitMode.FitWidth) {
+            // 宽度充满后页面可能高于屏幕：从顶部开始显示，符合阅读顺序
+            translateY = max(0f, (fitHeight - height) / 2f)
+        }
+        clampTranslation()
         markAnnotationDirty()
         notifyViewport(force = true)
         invalidate()
@@ -343,7 +371,11 @@ class ZoomableImageView(context: Context) : View(context) {
             return
         }
         val (imageWidth, imageHeight) = rotatedSize(image)
-        fitScale = min(viewWidth / imageWidth, viewHeight / imageHeight)
+        fitScale = if (fitMode == ImageFitMode.FitWidth) {
+            viewWidth / imageWidth
+        } else {
+            min(viewWidth / imageWidth, viewHeight / imageHeight)
+        }
         fitWidth = imageWidth * fitScale
         fitHeight = imageHeight * fitScale
     }

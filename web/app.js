@@ -1983,12 +1983,21 @@ function imageViewBaseSize() {
   };
 }
 
-/** 放大倍数越小可平移的范围越小，未放大时视口固定居中 */
+/**
+ * 限制视口中心，保证内容不会被拖出黑边：
+ * 内容比视口小（或刚好铺满）的方向不允许平移，只有内容超出视口的方向才留出可平移范围。
+ * 图片与 PDF 通用——课件宽度充满时横向可平移范围自然为 0，两侧不会露黑边。
+ */
 function clampImageViewCenter() {
   const view = state.imageView;
-  const limit = Math.max(0, (1 - 1 / (view.scale || 1)) / 2);
-  view.centerX = clamp(view.centerX, 0.5 - limit, 0.5 + limit);
-  view.centerY = clamp(view.centerY, 0.5 - limit, 0.5 + limit);
+  const { baseWidth, baseHeight } = imageViewBaseSize();
+  if (!baseWidth || !baseHeight) return;
+  const rect = elements.videoView.getBoundingClientRect();
+  const scale = view.scale || 1;
+  const limitX = Math.max(0, (1 - rect.width / (baseWidth * scale)) / 2);
+  const limitY = Math.max(0, (1 - rect.height / (baseHeight * scale)) / 2);
+  view.centerX = clamp(view.centerX, 0.5 - limitX, 0.5 + limitX);
+  view.centerY = clamp(view.centerY, 0.5 - limitY, 0.5 + limitY);
 }
 
 /** 把 state.imageView 渲染成实际 transform（图片与 PDF 课件共用同一套换算） */
@@ -2528,12 +2537,9 @@ async function renderCoursewarePage() {
     const canvas = elements.coursewareCanvas;
     const containerRect = elements.videoView.getBoundingClientRect();
     const baseViewport = page.getViewport({ scale: 1 });
-    // 统一视口模型：整页适应容器（contain），与手机端预览、图片投屏的口径一致。
-    // 这样 scale=1 时两端看到的都是整页，centerX / centerY 的 0~1 语义才能对齐。
-    const fitScale = Math.min(
-      containerRect.width / baseViewport.width,
-      containerRect.height / baseViewport.height
-    );
+    // 宽度充满：课件默认铺满容器宽度，两侧不留黑边；
+    // 页面高于屏幕时上下拖动查看（与手机端 FitWidth 的口径一致）。
+    const fitScale = containerRect.width / baseViewport.width;
     const cssViewport = page.getViewport({ scale: fitScale });
     const outputScale = Math.min(window.devicePixelRatio || 1, 2);
     let renderScale = fitScale * outputScale * COURSEWARE_RENDER_OVERSAMPLE;
@@ -2545,7 +2551,7 @@ async function renderCoursewarePage() {
 
     canvas.width = Math.max(1, Math.round(renderViewport.width));
     canvas.height = Math.max(1, Math.round(renderViewport.height));
-    courseware.fitMode = 'fit-page';
+    courseware.fitMode = 'width-fill';
     courseware.cssWidth = Math.round(cssViewport.width);
     courseware.cssHeight = Math.round(cssViewport.height);
     // 分屏字段保留（状态上报与旧端兼容），但不再参与定位：
@@ -2650,9 +2656,16 @@ function updateCoursewareCanvasPlacement() {
   canvas.style.top = `${Math.round((containerRect.height - courseware.cssHeight) / 2)}px`;
 }
 
-/** 课件换页 / 尺寸变化后复位视口：整页居中显示，缩放回到 1 倍 */
+/** 课件换页 / 尺寸变化后复位视口：缩放回到 1 倍，宽度充满后从页面顶部开始显示 */
 function resetCoursewareViewport() {
   resetImageViewState();
+  const courseware = state.courseware;
+  if (courseware && courseware.cssHeight > 0) {
+    const rect = elements.videoView.getBoundingClientRect();
+    const limitY = Math.max(0, (1 - rect.height / courseware.cssHeight) / 2);
+    // 页面高于屏幕时从顶部开始，符合阅读顺序（与手机端 FitWidth 的复位行为一致）
+    state.imageView.centerY = 0.5 - limitY;
+  }
   applyCoursewareImageViewTransform();
 }
 
