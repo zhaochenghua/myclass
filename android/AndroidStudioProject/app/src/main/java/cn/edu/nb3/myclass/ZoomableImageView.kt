@@ -512,9 +512,12 @@ class ZoomableImageView(context: Context) : View(context) {
         if ((direction > 0 && bigProgressY >= 1f - 1e-4f) ||
             (direction < 0 && bigProgressY <= 1e-4f)
         ) {
+            // 已到边界：本次翻页。
+            // 注意此处不能上报视口：此时当前页尚未换掉，上报 progress=0 会把大屏拉回
+            // "本页顶部"，造成翻页前闪一下本页顶部的画面。新页视口由 showPage 换图时
+            // 的 resetViewport 统一上报。
             bigScrollActive = false
             bigProgressY = 0f
-            notifyViewport(force = true)
             return true
         }
         // 大屏一屏（占屏高 92%）对应的进度增量
