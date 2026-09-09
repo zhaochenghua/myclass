@@ -45,5 +45,7 @@ data class RemoteAnnotationPayload(
     val width: Float = AnnotationPalette.PEN_WIDTH,
     val isEraser: Boolean = false,
     val mode: String = "solid",
-    val points: List<AnnotationPoint> = emptyList()
+    val points: List<AnnotationPoint> = emptyList(),
+    /** 所属页码（1 基）；0 表示不区分页（图片投屏等单页场景） */
+    val page: Int = 0
 )

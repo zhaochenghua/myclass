@@ -1186,8 +1186,9 @@ function openCourseware(message) {
     scale: 1,
     pageStepY: 0,
     fitMode: 'fit-page',
-    cssWidth: 1,
-    cssHeight: 1,
+    // 渲染完成后才有真实尺寸；在此之前 pdf 不参与视口变换，避免用占位尺寸算错变换
+    cssWidth: 0,
+    cssHeight: 0,
     pageCount: isZip ? 0 : 0,
     pdfDocument: null,
     loadingTask: null,
@@ -1640,7 +1641,8 @@ function requestSound() {
 // 手机端上报的是归一化视口（缩放倍数 + 视口中心在图片中的相对位置 + 旋转角度），
 // 大屏端按自身显示尺寸换算成本地像素变换，保证两端看到的区域一致。
 function handleCoursewareImageViewport(message) {
-  if (elements.imagePlayerOverlay.hidden) return;
+  // 图片与 PDF 课件都接受手机端视口：统一写入 state.imageView 后按内容层渲染
+  if (currentContentKind() === 'none') return;
   const view = state.imageView;
   const rawScale = Number(message.scale);
   const rawCenterX = Number(message.centerX);
@@ -1694,16 +1696,55 @@ function flushTeacherActiveStrokes() {
         isEraser: !!stroke.isEraser,
         mode: stroke.mode,
         lineMode: !!stroke.lineMode,
-        points: stroke.points
+        points: stroke.points,
+        page: stroke.page || currentCoursewarePage()
       });
     }
     state.annotations.activeStrokes.delete(key);
   }
 }
 
+// ---- 笔迹按页：课件每一页的标注独立保存 ----
+// 课件翻页时笔迹不再清空，翻回来还在；撤销与清空只作用于当前页。
+
+/** 当前课件页码；非课件场景返回 0，表示不区分页 */
+function currentCoursewarePage() {
+  return state.courseware ? state.courseware.page : 0;
+}
+
+/** 当前页的笔迹（page 为 0 的旧笔迹按当前页处理，兼容旧端） */
+function strokesForCurrentPage() {
+  const page = currentCoursewarePage();
+  return state.annotations.strokes.filter((stroke) => !stroke.page || stroke.page === page);
+}
+
+/**
+ * 移除当前页的笔迹。
+ * @param {boolean} all true 清空当前页全部，false 只撤销最后一笔
+ * @returns 是否真的移除了内容
+ */
+function removeStrokesForCurrentPage(all) {
+  const page = currentCoursewarePage();
+  const strokes = state.annotations.strokes;
+  if (all) {
+    const kept = strokes.filter((stroke) => stroke.page && stroke.page !== page);
+    if (kept.length === strokes.length) return false;
+    state.annotations.strokes = kept;
+    return true;
+  }
+  for (let index = strokes.length - 1; index >= 0; index -= 1) {
+    const stroke = strokes[index];
+    if (!stroke.page || stroke.page === page) {
+      strokes.splice(index, 1);
+      return true;
+    }
+  }
+  return false;
+}
+
 function handleTeacherAnnotation(message) {
-  // 手机端只在图片投屏界面发笔迹，其他场景（直播 / PDF / 黑板）忽略，避免误画
-  if (!isImageViewVisible()) return;
+  // 图片投屏与 PDF 课件都接受手机端笔迹；直播 / 黑板场景忽略，避免误画
+  if (currentContentKind() === 'none') return;
   const action = message && message.action;
   const key = teacherStrokeKey(typeof message.strokeId === 'string' ? message.strokeId : '');
 
@@ -1719,7 +1760,8 @@ function handleTeacherAnnotation(message) {
       mode: isEraser ? null : (typeof message.mode === 'string' ? message.mode : 'solid'),
       lineMode: false,
       points,
-      startScreen: null
+      startScreen: null,
+      page: Number(message.page) || currentCoursewarePage()
     });
     scheduleAnnotationRedraw();
     return;
@@ -1745,7 +1787,8 @@ function handleTeacherAnnotation(message) {
         isEraser: !!stroke.isEraser,
         mode: stroke.mode,
         lineMode: !!stroke.lineMode,
-        points: stroke.points
+        points: stroke.points,
+        page: stroke.page || currentCoursewarePage()
       });
     }
     drawAnnotations();
@@ -1762,7 +1805,8 @@ function handleTeacherAnnotation(message) {
   }
 
   if (action === 'clear') {
-    withSuppressedViewerSync(() => resetAnnotations());
+    // 按页清空：只清当前页，其它页的标注保留
+    withSuppressedViewerSync(() => clearAnnotations());
   }
 }
 
@@ -1778,9 +1822,9 @@ let viewerLastSyncAt = 0;
 const VIEWER_ANNOTATION_SYNC_INTERVAL_MS = 60;
 const VIEWER_ANNOTATION_MAX_PENDING = 12;
 
-/** 只有图片投屏场景手机端才有画板，直播 / PDF / 黑板场景回传没有意义 */
+/** 只有图片投屏与 PDF 课件场景手机端才有画板，直播 / 黑板场景回传没有意义 */
 function viewerAnnotationEnabled() {
-  return !suppressViewerAnnotationSync && isImageViewVisible();
+  return !suppressViewerAnnotationSync && currentContentKind() !== 'none';
 }
 
 function sendViewerAnnotation(payload) {
@@ -1802,6 +1846,7 @@ function syncViewerAnnotationBegin(pointerId) {
     width: stroke.width,
     isEraser: !!stroke.isEraser,
     mode: stroke.mode || 'solid',
+    page: currentCoursewarePage(),
     points: [stroke.points[0]]
   });
 }
@@ -1831,17 +1876,17 @@ function syncViewerAnnotationEnd(pointerId) {
   if (buffer.length > 0) {
     sendViewerAnnotation({ action: 'points', strokeId, points: buffer });
   }
-  sendViewerAnnotation({ action: 'end', strokeId });
+  sendViewerAnnotation({ action: 'end', strokeId, page: currentCoursewarePage() });
 }
 
 function syncViewerAnnotationUndo() {
   if (!viewerAnnotationEnabled()) return;
-  sendViewerAnnotation({ action: 'undo' });
+  sendViewerAnnotation({ action: 'undo', page: currentCoursewarePage() });
 }
 
 function syncViewerAnnotationClear() {
   if (!viewerAnnotationEnabled()) return;
-  sendViewerAnnotation({ action: 'clear' });
+  sendViewerAnnotation({ action: 'clear', page: currentCoursewarePage() });
 }
 
 /** 处理来自手机端的 undo / clear 时抑制回传，避免两端互相撤销形成回环 */
@@ -1892,9 +1937,25 @@ function isImageViewVisible() {
   return !elements.imagePlayerOverlay.hidden;
 }
 
-/** 手型工具 + 图片投屏：此时指针事件用于图片平移/捏合，而不是画笔 */
+/** PDF 课件画布当前是否处于显示状态 */
+function isCoursewarePdfVisible() {
+  return !elements.coursewareCanvas.hidden && !!state.courseware && state.courseware.cssWidth > 0;
+}
+
+/**
+ * 当前参与视口变换的内容层：图片投屏 / PDF 课件 / 无。
+ * 两者共用 state.imageView 与同一套归一化换算（缩放倍数 + 视口中心 0~1），
+ * 因此手机端上报的视口与大屏本地手势口径完全一致。
+ */
+function currentContentKind() {
+  if (isImageViewVisible()) return 'image';
+  if (isCoursewarePdfVisible()) return 'pdf';
+  return 'none';
+}
+
+/** 手型工具 + 内容层（图片或 PDF）：此时指针事件用于平移/捏合，而不是画笔 */
 function isImageViewPanMode() {
-  return isImageViewVisible() && state.annotations.tool === 'pan';
+  return currentContentKind() !== 'none' && state.annotations.tool === 'pan';
 }
 
 /**
@@ -1903,6 +1964,11 @@ function isImageViewPanMode() {
  * 因此平移换算不需要再按旋转角度分支。
  */
 function imageViewBaseSize() {
+  // PDF 课件：基准尺寸即整页适应后的 CSS 尺寸，页面方向固定不参与旋转换算
+  if (currentContentKind() === 'pdf') {
+    const courseware = state.courseware;
+    return { baseWidth: courseware.cssWidth, baseHeight: courseware.cssHeight, refit: 1 };
+  }
   const img = elements.coursewareImage;
   const width = img.offsetWidth;
   const height = img.offsetHeight;
@@ -1925,20 +1991,29 @@ function clampImageViewCenter() {
   view.centerY = clamp(view.centerY, 0.5 - limit, 0.5 + limit);
 }
 
-/** 把 state.imageView 渲染成图片的实际 transform */
+/** 把 state.imageView 渲染成实际 transform（图片与 PDF 课件共用同一套换算） */
 function applyCoursewareImageViewTransform() {
-  if (!isImageViewVisible()) return;
-  const img = elements.coursewareImage;
+  const kind = currentContentKind();
+  if (kind === 'none') return;
   const { baseWidth, baseHeight, refit } = imageViewBaseSize();
   if (!baseWidth || !baseHeight) return;
   const view = state.imageView;
   const offsetX = -view.scale * (view.centerX - 0.5) * baseWidth;
   const offsetY = -view.scale * (view.centerY - 0.5) * baseHeight;
+  if (kind === 'pdf') {
+    // PDF 页：画布已居中，只需表达缩放与平移（课件页方向固定，不参与旋转）
+    const canvas = elements.coursewareCanvas;
+    canvas.style.transformOrigin = 'center center';
+    canvas.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${view.scale})`;
+    drawAnnotations();
+    return;
+  }
+  const img = elements.coursewareImage;
   img.style.transformOrigin = 'center center';
   img.style.transform =
     `translate(${offsetX}px, ${offsetY}px) rotate(${view.rotation}deg) scale(${view.scale * refit})`;
-  // 图片的显示区域（含缩放/平移/旋转）已经变化，需要按新区域重绘笔迹，
-  // 否则已画的标注会停留在变换前的位置，不随图片移动。
+  // 显示区域（含缩放/平移/旋转）已经变化，需要按新区域重绘笔迹，
+  // 否则已画的标注会停留在变换前的位置，不随内容移动。
   drawAnnotations();
 }
 
@@ -1957,9 +2032,9 @@ function resetImageViewState() {
   elements.annotationCanvas.classList.remove('is-panning', 'is-pinching');
 }
 
-/** 复位视图并立即生效 */
+/** 复位视图并立即生效（图片与 PDF 课件通用） */
 function resetImageView() {
-  if (!isImageViewVisible()) return;
+  if (currentContentKind() === 'none') return;
   resetImageViewState();
   applyCoursewareImageViewTransform();
 }
@@ -2258,7 +2333,8 @@ function showCoursewarePage(page) {
   state.courseware.page = nextPage;
   state.courseware.screen = 1;
   state.courseware.offsetY = 0;
-  resetAnnotations();
+  // 笔迹按页保留：翻页只丢弃未结束的笔画，翻回来时本页标注还在
+  state.annotations.activeStrokes.clear();
   renderCoursewarePage();
 }
 
@@ -2286,7 +2362,8 @@ function navigateCourseware(deltaValue) {
   courseware.page = nextPage;
   courseware.screen = delta > 0 ? 1 : Number.MAX_SAFE_INTEGER;
   courseware.offsetY = 0;
-  resetAnnotations();
+  // 笔迹按页保留：翻页只丢弃未结束的笔画，翻回来时本页标注还在
+  state.annotations.activeStrokes.clear();
   renderCoursewarePage();
 }
 
@@ -2308,7 +2385,8 @@ function navigatePage(delta) {
   courseware.scale = 1;
   state.coursewarePan._activePointers.clear();
   state.coursewarePan._pinch.active = false;
-  resetAnnotations();
+  // 笔迹按页保留：翻页只丢弃未结束的笔画，翻回来时本页标注还在
+  state.annotations.activeStrokes.clear();
   renderCoursewarePage();
 }
 
@@ -2420,6 +2498,11 @@ async function loadCoursewareDocument(courseware) {
   }
 }
 
+/** 课件页渲染的超采样倍率：整页适应后显示尺寸偏小，多渲染一些像素保证放大后依然清晰 */
+const COURSEWARE_RENDER_OVERSAMPLE = 1.5;
+/** 课件页渲染的最长边上限，避免超大页面占用过多显存 */
+const COURSEWARE_MAX_RENDER_EDGE = 4096;
+
 async function renderCoursewarePage() {
   const courseware = state.courseware;
   if (!courseware) {
@@ -2445,34 +2528,38 @@ async function renderCoursewarePage() {
     const canvas = elements.coursewareCanvas;
     const containerRect = elements.videoView.getBoundingClientRect();
     const baseViewport = page.getViewport({ scale: 1 });
-    const isPortraitDocumentPage = baseViewport.height > baseViewport.width * 1.15;
-    const fitScale = isPortraitDocumentPage
-      ? containerRect.width / baseViewport.width
-      : Math.min(
-          containerRect.width / baseViewport.width,
-          containerRect.height / baseViewport.height
-        );
+    // 统一视口模型：整页适应容器（contain），与手机端预览、图片投屏的口径一致。
+    // 这样 scale=1 时两端看到的都是整页，centerX / centerY 的 0~1 语义才能对齐。
+    const fitScale = Math.min(
+      containerRect.width / baseViewport.width,
+      containerRect.height / baseViewport.height
+    );
     const cssViewport = page.getViewport({ scale: fitScale });
     const outputScale = Math.min(window.devicePixelRatio || 1, 2);
-    const renderViewport = page.getViewport({ scale: fitScale * outputScale });
+    let renderScale = fitScale * outputScale * COURSEWARE_RENDER_OVERSAMPLE;
+    const longestEdge = Math.max(baseViewport.width, baseViewport.height) * renderScale;
+    if (longestEdge > COURSEWARE_MAX_RENDER_EDGE) {
+      renderScale *= COURSEWARE_MAX_RENDER_EDGE / longestEdge;
+    }
+    const renderViewport = page.getViewport({ scale: renderScale });
 
     canvas.width = Math.max(1, Math.round(renderViewport.width));
     canvas.height = Math.max(1, Math.round(renderViewport.height));
-    courseware.fitMode = isPortraitDocumentPage ? 'width-fill' : 'fit-page';
+    courseware.fitMode = 'fit-page';
     courseware.cssWidth = Math.round(cssViewport.width);
     courseware.cssHeight = Math.round(cssViewport.height);
-    courseware.maxOffsetX = Math.max(0, courseware.cssWidth - containerRect.width);
-    // 至少超出10px才算需要翻屏，避免取整误差导致多出一屏
-    courseware.maxOffsetY = Math.max(0, courseware.cssHeight - containerRect.height - 10);
-    if (courseware.maxOffsetY < 0) courseware.maxOffsetY = 0;
+    // 分屏字段保留（状态上报与旧端兼容），但不再参与定位：
+    // 整页适应后页面不会超出容器，需要看细节时缩放平移即可。
+    courseware.maxOffsetX = 0;
+    courseware.maxOffsetY = 0;
     courseware.pageStepY = Math.max(1, Math.round(containerRect.height * 0.9));
-    courseware.screenCount = courseware.maxOffsetY > 0
-      ? Math.ceil(courseware.maxOffsetY / courseware.pageStepY) + 1
-      : 1;
-    courseware.screen = clamp(courseware.screen || 1, 1, courseware.screenCount);
-    courseware.offsetX = clamp(courseware.offsetX || 0, 0, courseware.maxOffsetX);
-    courseware.offsetY = offsetYForCoursewareScreen(courseware, courseware.screen);
+    courseware.screenCount = 1;
+    courseware.screen = 1;
+    courseware.offsetX = 0;
+    courseware.offsetY = 0;
+    courseware.scale = 1;
     updateCoursewareCanvasPlacement();
+    resetCoursewareViewport();
 
     const context = canvas.getContext('2d', { alpha: false });
     context.fillStyle = '#fff';
@@ -2555,19 +2642,18 @@ function updateCoursewareCanvasPlacement() {
 
   const canvas = elements.coursewareCanvas;
   const containerRect = elements.videoView.getBoundingClientRect();
-  const scale = courseware.scale || 1;
-  const left = courseware.maxOffsetX > 0 || scale > 1
-    ? -courseware.offsetX
-    : (containerRect.width - courseware.cssWidth) / 2;
-  const top = courseware.maxOffsetY > 0 || scale > 1
-    ? -courseware.offsetY
-    : (containerRect.height - courseware.cssHeight) / 2;
   canvas.style.width = `${courseware.cssWidth}px`;
   canvas.style.height = `${courseware.cssHeight}px`;
-  canvas.style.left = `${Math.round(left)}px`;
-  canvas.style.top = `${Math.round(top)}px`;
-  canvas.style.transform = `scale(${scale})`;
-  canvas.style.transformOrigin = '0 0';
+  // 统一视口模型：画布先居中，缩放与平移统一由 transform 表达，
+  // 换算方式与图片投屏完全一致，保证手机端与大屏看到同一区域。
+  canvas.style.left = `${Math.round((containerRect.width - courseware.cssWidth) / 2)}px`;
+  canvas.style.top = `${Math.round((containerRect.height - courseware.cssHeight) / 2)}px`;
+}
+
+/** 课件换页 / 尺寸变化后复位视口：整页居中显示，缩放回到 1 倍 */
+function resetCoursewareViewport() {
+  resetImageViewState();
+  applyCoursewareImageViewTransform();
 }
 
 function updateCoursewareStatus() {
@@ -2765,7 +2851,8 @@ function beginAnnotationStroke(event) {
     mode: isEraser ? null : state.annotations.mode,
     lineMode: isLine,
     points: [point],
-    startScreen: isLine ? { x: event.clientX, y: event.clientY } : null
+    startScreen: isLine ? { x: event.clientX, y: event.clientY } : null,
+    page: currentCoursewarePage()
   });
   syncViewerAnnotationBegin(event.pointerId);
   drawAnnotations();
@@ -2844,7 +2931,8 @@ function finishAnnotationStroke(event) {
       isEraser: !!stroke.isEraser,
       mode: stroke.mode,
       lineMode: !!stroke.lineMode,
-      points: stroke.points
+      points: stroke.points,
+      page: stroke.page || currentCoursewarePage()
     });
   }
   state.annotations.activeStrokes.delete(event.pointerId);
@@ -3010,14 +3098,19 @@ function endCoursewarePinch() {
 }
 
 function undoAnnotationStroke() {
-  state.annotations.strokes.pop();
+  // 只撤销当前页的最后一笔，其它页的标注不受影响
+  if (!removeStrokesForCurrentPage(false)) return;
   drawAnnotations();
   updateAnnotationButtons();
   syncViewerAnnotationUndo();
 }
 
 function clearAnnotations() {
-  resetAnnotations();
+  // 只清空当前页，其它页的标注保留（关闭课件时用 resetAnnotations 全清）
+  if (!removeStrokesForCurrentPage(true)) return;
+  state.annotations.activeStrokes.clear();
+  drawAnnotations();
+  updateAnnotationButtons();
   syncViewerAnnotationClear();
 }
 
@@ -3096,7 +3189,7 @@ function updateAnnotationToolButtons() {
 }
 
 function updateAnnotationButtons() {
-  const hasStrokes = state.annotations.strokes.length > 0;
+  const hasStrokes = strokesForCurrentPage().length > 0;
   elements.undoAnnotationButton.disabled = !hasStrokes;
   elements.clearAnnotationButton.disabled = !hasStrokes;
 }
@@ -3139,7 +3232,10 @@ function drawAnnotations() {
   }
 
   const crop = currentFrameCrop();
+  // 课件按页保存笔迹：只绘制属于当前页的标注，翻页后自动切换
+  const page = currentCoursewarePage();
   for (const stroke of state.annotations.strokes) {
+    if (stroke.page && stroke.page !== page) continue;
     drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop);
   }
   for (const stroke of state.annotations.activeStrokes.values()) {

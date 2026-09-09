@@ -178,6 +178,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     /** 画笔模式下的当前颜色与是否板擦，跟随 ZoomableImageView 但需在重建后恢复 */
     private var imageCastPenColor = AnnotationPalette.DEFAULT_COLOR
     private var imageCastPenEraser = false
+
+    // ---- 课件（PDF）本地渲染投屏 ----
+    private var coursewarePdfRenderer: CoursewarePdfRenderer? = null
+    private var coursewarePdf: CoursewarePdfRenderer.OpenedPdf? = null
+    /** 课件渲染失败时降级为遥控页，避免"下载失败 → 重建 → 再失败"形成死循环 */
+    private var coursewarePdfFailed = false
+    /** 课件播放页的翻页动作，由界面注册，供音量键等外部入口复用 */
+    private var coursewarePdfPaging: ((delta: Int) -> Unit)? = null
+    /** 已渲染的页位图缓存（页码 → 位图），只保留当前页与相邻页，避免内存堆积 */
+    private val coursewarePdfBitmaps = LinkedHashMap<Int, Bitmap>()
+    /** 按页保存的笔迹：翻页不丢，"撤销 / 清空"只作用于当前页 */
+    private val coursewarePdfStrokes = LinkedHashMap<Int, List<AnnotationStroke>>()
+    /** 当前已打开课件的缓存键，用于识别切换课件并清理上一份课件的笔迹与位图 */
+    private var coursewarePdfOpenedKey = ""
     /** 最近一次收到大屏视频状态的时间，用于判断大屏端是否仍在播放 */
     private var lastVideoStateAtMs = 0L
     /** 最近一次提示“课件控制已重新连接”的时间，避免弱网反复重连时反复弹提示 */
@@ -2797,9 +2811,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showCoursewareScreen(title: String, isUploading: Boolean) {
-        // 图片/视频课件改用专用界面：
-        // 图片可缩放平移并同步大屏视口，视频以遥控器方式控制大屏播放
-        if (!isUploading) {
+        // 图片/视频/PDF 课件改用专用界面：
+        // 图片与 PDF 可在手机上缩放平移并同步大屏视口，视频以遥控器方式控制大屏播放
+        if (!isUploading && !coursewarePdfFailed) {
             when (mediaKindOf(coursewareUrl)) {
                 CastMediaKind.Image -> {
                     showImageCastScreen(title)
@@ -2807,6 +2821,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
                 CastMediaKind.Video -> {
                     showVideoCastScreen(title)
+                    return
+                }
+                CastMediaKind.Pdf -> {
+                    showPdfCastScreen(title)
                     return
                 }
                 CastMediaKind.None -> Unit
@@ -2949,18 +2967,31 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    private enum class CastMediaKind { None, Image, Video }
+    private enum class CastMediaKind { None, Image, Video, Pdf }
 
     private val videoExtensionPattern =
         Pattern.compile("\\.(mp4|mov|avi|webm|mkv|3gp)(\\?|$)", Pattern.CASE_INSENSITIVE)
     private val imageExtensionPattern =
         Pattern.compile("\\.(jpe?g|png|gif|webp|bmp)(\\?|$)", Pattern.CASE_INSENSITIVE)
+    private val pdfExtensionPattern =
+        Pattern.compile("\\.pdf(\\?|$)", Pattern.CASE_INSENSITIVE)
 
     /** 与大屏端 openCourseware 的类型判断保持一致 */
     private fun mediaKindOf(url: String): CastMediaKind = when {
         videoExtensionPattern.matcher(url).find() -> CastMediaKind.Video
         imageExtensionPattern.matcher(url).find() -> CastMediaKind.Image
+        pdfExtensionPattern.matcher(url).find() -> CastMediaKind.Pdf
         else -> CastMediaKind.None
+    }
+
+    /** 课件缓存文件名：取服务端文件名主体，去掉扩展名与查询串，仅保留安全字符 */
+    private fun coursewareCacheKey(): String {
+        val raw = coursewareUrl
+            .substringBefore('?')
+            .substringAfterLast('/')
+            .substringBeforeLast('.')
+        val safe = raw.filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+        return safe.ifBlank { "cw${coursewareUrl.hashCode().toString().replace('-', 'n')}" }
     }
 
     /** 图片投屏界面：手机端用经典图片控件查看（双指缩放/拖动/双击），并把视口同步到大屏 */
@@ -3259,6 +3290,465 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
         }
+    }
+
+    /**
+     * 课件（PDF）播放页：把当前页渲染成位图后交给 ZoomableImageView，
+     * 从而完整复用图片投屏的缩放 / 平移 / 画笔能力，并把视口与笔迹按页同步到大屏。
+     *
+     * 与图片投屏的差异：
+     * - 内容来自本地渲染的 PDF 页，翻页时先保存旧页笔迹、再载入新页笔迹；
+     * - 视口与画笔消息带页码，大屏端按页处理；
+     * - 课件页方向固定，不提供旋转；
+     * - 下载或渲染失败时降级为遥控式播放页，保证课堂不中断。
+     */
+    private fun showPdfCastScreen(title: String) {
+        currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.Playback
+        coursewareUploadInProgress = false
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.BLACK)
+        }
+        val imageHost = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+        val zoomable = ZoomableImageView(this)
+        imageHost.addView(
+            zoomable,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        val hintText = TextView(this).apply {
+            text = "正在打开课件…"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            )
+        }
+        imageHost.addView(hintText)
+        root.addView(imageHost)
+
+        var refreshAnnotationBar: (() -> Unit)? = null
+        var applyCastMode: (() -> Unit)? = null
+
+        // 模式栏：手势 / 画笔切换，常驻显示
+        val modeBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(2), dp(12), dp(2))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+        }
+        val modeHint = TextView(this).apply {
+            textSize = 12f
+            setSingleLine(true)
+            ellipsize = TextUtils.TruncateAt.END
+            setTextColor(Color.parseColor("#8899AA"))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        modeBar.addView(modeHint)
+        val modeButton = compactButton(secondaryButton("画笔"), 13f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(96), dp(40))
+        }
+        modeBar.addView(modeButton)
+        root.addView(modeBar)
+
+        // 翻页栏：手势与画笔模式下都常驻，翻页同时更新手机预览与大屏
+        val pageBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52))
+        }
+        val prevButton = compactButton(secondaryButton("上一页"), 14f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) }
+        }
+        val pageLabel = TextView(this).apply {
+            textSize = 14f
+            setSingleLine(true)
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#CCDDEE"))
+            layoutParams = LinearLayout.LayoutParams(dp(112), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val nextButton = compactButton(secondaryButton("下一页"), 14f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(6) }
+        }
+        pageBar.addView(prevButton)
+        pageBar.addView(pageLabel)
+        pageBar.addView(nextButton)
+        root.addView(pageBar)
+
+        // 手势模式工具栏（课件页方向固定，不提供旋转）
+        val gestureBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        gestureBar.addView(compactButton(primaryButton("返回主菜单"), 14f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) }
+            setOnClickListener { pauseCoursewareAndReturnMenu() }
+        })
+        gestureBar.addView(compactButton(secondaryButton("结束投屏"), 14f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
+            setOnClickListener { closeCoursewareAndReturnMenu() }
+        })
+        root.addView(gestureBar)
+
+        // 画笔模式工具栏：颜色 / 板擦 + 撤销 / 清空
+        val penBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val paletteRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val colorDots = mutableListOf<MaterialButton>()
+        AnnotationPalette.COLORS.forEach { colorHex ->
+            val dot = MaterialButton(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(6) }
+                cornerRadius = dp(20)
+                insetTop = 0
+                insetBottom = 0
+                minWidth = 0
+                minimumWidth = 0
+                minHeight = 0
+                minimumHeight = 0
+                setPadding(0, 0, 0, 0)
+                backgroundTintList = ColorStateList.valueOf(Color.parseColor(colorHex))
+                strokeColor = ColorStateList.valueOf(Color.WHITE)
+                setOnClickListener {
+                    zoomable.penColorHex = colorHex
+                    zoomable.penEraser = false
+                    imageCastPenColor = colorHex
+                    imageCastPenEraser = false
+                    refreshAnnotationBar?.invoke()
+                }
+            }
+            colorDots.add(dot)
+            paletteRow.addView(dot)
+        }
+        val eraserButton = annotationToolButton("板擦").apply {
+            layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
+            setOnClickListener {
+                zoomable.penEraser = !zoomable.penEraser
+                imageCastPenEraser = zoomable.penEraser
+                refreshAnnotationBar?.invoke()
+            }
+        }
+        paletteRow.addView(eraserButton)
+        penBar.addView(paletteRow)
+
+        val penActionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val undoButton = annotationToolButton("撤销").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(4) }
+            setOnClickListener {
+                if (zoomable.undoAnnotation()) {
+                    signalingClient?.sendAnnotationUndo(coursewarePage)
+                }
+            }
+        }
+        val clearButton = annotationToolButton("清空").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                marginStart = dp(4)
+                marginEnd = dp(4)
+            }
+            setOnClickListener {
+                if (zoomable.clearAnnotations()) {
+                    signalingClient?.sendAnnotationClear(coursewarePage)
+                }
+            }
+        }
+        val penBackButton = annotationToolButton("返回主菜单").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                marginStart = dp(4)
+                marginEnd = dp(4)
+            }
+            setOnClickListener { pauseCoursewareAndReturnMenu() }
+        }
+        val penEndButton = annotationToolButton("结束投屏").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(4) }
+            setOnClickListener { closeCoursewareAndReturnMenu() }
+        }
+        penActionRow.addView(undoButton)
+        penActionRow.addView(clearButton)
+        penActionRow.addView(penBackButton)
+        penActionRow.addView(penEndButton)
+        penBar.addView(penActionRow)
+        root.addView(penBar)
+
+        refreshAnnotationBar = {
+            colorDots.forEachIndexed { index, dot ->
+                val selected = !zoomable.penEraser && zoomable.penColorHex == AnnotationPalette.COLORS[index]
+                dot.strokeWidth = if (selected) dp(2) else 0
+                dot.scaleX = if (selected) 1.12f else 1f
+                dot.scaleY = if (selected) 1.12f else 1f
+            }
+            eraserButton.backgroundTintList = ColorStateList.valueOf(
+                if (zoomable.penEraser) Color.argb(0.22f, 1f, 1f, 1f) else Color.TRANSPARENT
+            )
+            val hasStrokes = zoomable.annotationCount > 0
+            undoButton.isEnabled = hasStrokes
+            clearButton.isEnabled = hasStrokes
+            undoButton.alpha = if (hasStrokes) 1f else 0.4f
+            clearButton.alpha = if (hasStrokes) 1f else 0.4f
+        }
+
+        applyCastMode = {
+            val penMode = imageCastPenMode
+            zoomable.mode = if (penMode) ImageCastMode.Pen else ImageCastMode.Gesture
+            modeHint.text = if (penMode) {
+                "画笔模式：单指绘制，双指缩放拖动"
+            } else {
+                "手势模式：双指缩放 / 拖动，双击放大"
+            }
+            modeButton.text = if (penMode) "手势" else "画笔"
+            modeButton.backgroundTintList = ColorStateList.valueOf(
+                if (penMode) Color.parseColor("#4DA6FF") else Color.TRANSPARENT
+            )
+            modeButton.setTextColor(
+                if (penMode) {
+                    Color.WHITE
+                } else {
+                    ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface)
+                }
+            )
+            val showBar = if (penMode) penBar else gestureBar
+            val hideBar = if (penMode) gestureBar else penBar
+            hideBar.animate().cancel()
+            hideBar.visibility = View.GONE
+            showBar.visibility = View.VISIBLE
+            showBar.alpha = 0f
+            showBar.animate().alpha(1f).setDuration(150).start()
+            refreshAnnotationBar?.invoke()
+        }
+
+        // ---- 翻页与内容加载 ----
+
+        fun updatePageBar() {
+            val total = coursewarePdf?.pageCount?.takeIf { it > 0 } ?: coursewarePageCount
+            pageLabel.text = "第 $coursewarePage / $total 页"
+            val canPrev = coursewarePage > 1
+            val canNext = coursewarePage < total
+            prevButton.isEnabled = canPrev
+            nextButton.isEnabled = canNext
+            prevButton.alpha = if (canPrev) 1f else 0.4f
+            nextButton.alpha = if (canNext) 1f else 0.4f
+        }
+
+        fun degradeToRemoteControl(message: String) {
+            coursewarePdfFailed = true
+            toast(message)
+            showCoursewareScreen(title, isUploading = false)
+        }
+
+        fun showPage(target: Int, notifyRemote: Boolean) {
+            val total = coursewarePdf?.pageCount ?: 0
+            if (total <= 0) return
+            val page = target.coerceIn(1, total)
+            if (page != coursewarePage) {
+                // 翻页前保存当前页笔迹，翻回来时还在
+                val saved = zoomable.currentStrokes()
+                if (saved.isNotEmpty()) {
+                    coursewarePdfStrokes[coursewarePage] = saved
+                } else {
+                    coursewarePdfStrokes.remove(coursewarePage)
+                }
+                coursewarePage = page
+            }
+            coursewarePageCount = total
+            updatePageBar()
+            if (notifyRemote) {
+                signalingClient?.sendCoursewarePage(page)
+            }
+
+            val cached = coursewarePdfBitmaps[page]
+            if (cached != null) {
+                zoomable.setImage(cached)
+                zoomable.replaceStrokes(coursewarePdfStrokes[page].orEmpty())
+                hintText.visibility = View.GONE
+                return
+            }
+            hintText.visibility = View.VISIBLE
+            hintText.text = "正在渲染第 $page 页…"
+            renderPdfPageAsync(page) { bitmap ->
+                // 渲染完成前老师可能已经翻走或退出，此时直接丢弃结果
+                if (currentScreen != Screen.Courseware ||
+                    coursewareSubScreen != CoursewareSubScreen.Playback ||
+                    coursewarePage != page
+                ) {
+                    return@renderPdfPageAsync
+                }
+                if (bitmap == null) {
+                    hintText.text = "第 $page 页渲染失败，可重新翻页重试"
+                    return@renderPdfPageAsync
+                }
+                rememberPdfBitmap(page, bitmap)
+                zoomable.setImage(bitmap)
+                zoomable.replaceStrokes(coursewarePdfStrokes[page].orEmpty())
+                hintText.visibility = View.GONE
+            }
+        }
+
+        fun openAndShow() {
+            val absolute = absoluteCoursewareUrl(coursewareUrl)
+            if (absolute.isNullOrBlank()) {
+                degradeToRemoteControl("课件地址无效，已切换为遥控模式")
+                return
+            }
+            val renderer = coursewarePdfRenderer
+                ?: CoursewarePdfRenderer(this, coursewareHttpClient).also { coursewarePdfRenderer = it }
+            val cacheKey = coursewareCacheKey()
+            hintText.visibility = View.VISIBLE
+            hintText.text = if (renderer.isCached(cacheKey)) "正在打开课件…" else "正在下载课件…"
+            Thread {
+                val opened = runCatching {
+                    renderer.openBlocking(absolute, cacheKey) { percent ->
+                        runOnUiThread {
+                            if (currentScreen == Screen.Courseware &&
+                                coursewareSubScreen == CoursewareSubScreen.Playback
+                            ) {
+                                hintText.text = "正在下载课件… $percent%"
+                            }
+                        }
+                    }
+                }.onFailure { Log.w(logTag, "课件打开失败", it) }.getOrNull()
+                runOnUiThread {
+                    if (currentScreen != Screen.Courseware ||
+                        coursewareSubScreen != CoursewareSubScreen.Playback
+                    ) {
+                        return@runOnUiThread
+                    }
+                    if (opened == null || opened.pageCount <= 0) {
+                        opened?.close()
+                        degradeToRemoteControl("课件打开失败，已切换为遥控模式")
+                        return@runOnUiThread
+                    }
+                    if (coursewarePdfOpenedKey != cacheKey) {
+                        // 换了课件：旧课件的笔迹与页位图全部失效
+                        coursewarePdfStrokes.clear()
+                        coursewarePdfBitmaps.values.forEach { runCatching { it.recycle() } }
+                        coursewarePdfBitmaps.clear()
+                        coursewarePdfOpenedKey = cacheKey
+                        coursewarePage = 1
+                    }
+                    coursewarePdf?.close()
+                    coursewarePdf = opened
+                    coursewarePage = coursewarePage.coerceIn(1, opened.pageCount)
+                    showPage(coursewarePage, notifyRemote = false)
+                }
+            }.start()
+        }
+
+        prevButton.setOnClickListener { showPage(coursewarePage - 1, notifyRemote = true) }
+        nextButton.setOnClickListener { showPage(coursewarePage + 1, notifyRemote = true) }
+
+        zoomable.penColorHex = imageCastPenColor
+        zoomable.penEraser = imageCastPenEraser
+        modeButton.setOnClickListener {
+            imageCastPenMode = !imageCastPenMode
+            applyCastMode?.invoke()
+            toast(if (imageCastPenMode) "画笔模式：单指绘制，实时同步大屏" else "已回到手势模式")
+        }
+        applyCastMode?.invoke()
+
+        setContentView(root)
+
+        zoomableImageView = zoomable
+        // 视口与笔迹都带页码，大屏端按页处理；课件页方向固定，旋转恒为 0
+        zoomable.onViewportChanged = { scale, centerX, centerY, _ ->
+            signalingClient?.sendCoursewareImageViewport(scale, centerX, centerY, 0, coursewarePage)
+        }
+        zoomable.onStrokeBegin = { strokeId, colorHex, width, isEraser, first ->
+            signalingClient?.sendAnnotationBegin(strokeId, colorHex, width, isEraser, first, coursewarePage)
+        }
+        zoomable.onStrokePoints = { strokeId, points ->
+            signalingClient?.sendAnnotationPoints(strokeId, points, coursewarePage)
+        }
+        zoomable.onStrokeEnd = { strokeId ->
+            signalingClient?.sendAnnotationEnd(strokeId, coursewarePage)
+        }
+        zoomable.onAnnotationCountChanged = { refreshAnnotationBar?.invoke() }
+        coursewarePdfPaging = { delta -> showPage(coursewarePage + delta, notifyRemote = true) }
+
+        if ((coursewarePdf?.pageCount ?: 0) > 0) {
+            showPage(coursewarePage, notifyRemote = false)
+        } else {
+            openAndShow()
+        }
+    }
+
+    /** 后台渲染指定页（1 基），结果在主线程回调；失败回调 null */
+    private fun renderPdfPageAsync(page: Int, onDone: (Bitmap?) -> Unit) {
+        val pdf = coursewarePdf
+        if (pdf == null) {
+            onDone(null)
+            return
+        }
+        Thread {
+            val bitmap = runCatching { pdf.renderPage(page - 1, CoursewarePdfRenderer.DEFAULT_MAX_EDGE) }
+                .onFailure { Log.w(logTag, "课件第 $page 页渲染失败", it) }
+                .getOrNull()
+            runOnUiThread { onDone(bitmap) }
+        }.start()
+    }
+
+    /** 记住刚渲染的页位图，并回收远离当前页的位图，避免多页堆积造成内存压力 */
+    private fun rememberPdfBitmap(page: Int, bitmap: Bitmap) {
+        val previous = coursewarePdfBitmaps.put(page, bitmap)
+        if (previous != null && previous != bitmap) {
+            runCatching { previous.recycle() }
+        }
+        val keep = setOf(page - 1, page, page + 1)
+        val iterator = coursewarePdfBitmaps.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.key !in keep) {
+                runCatching { entry.value.recycle() }
+                iterator.remove()
+            }
+        }
+    }
+
+    /** 释放课件渲染资源：关闭 PDF 句柄并回收全部页位图 */
+    private fun releaseCoursewarePdf() {
+        coursewarePdfPaging = null
+        coursewarePdf?.close()
+        coursewarePdf = null
+        coursewarePdfBitmaps.values.forEach { runCatching { it.recycle() } }
+        coursewarePdfBitmaps.clear()
     }
 
     private val maxImagePreviewEdge = 2048
@@ -3756,6 +4246,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomableImageView = null
         imageCastPenMode = false
         imageCastPenEraser = false
+        releaseCoursewarePdf()
+        coursewarePdfStrokes.clear()
+        coursewarePdfOpenedKey = ""
+        coursewarePdfFailed = false
         videoPlaying = false
         videoPosition = 0.0
         videoDuration = 0.0
@@ -3782,6 +4276,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomableImageView = null
         imageCastPenMode = false
         imageCastPenEraser = false
+        // 返回菜单后保留按页笔迹，再次进入课件时接着用
+        releaseCoursewarePdf()
         videoPlayPauseButton = null
         videoSeekBar = null
         videoTimeText = null
@@ -3853,6 +4349,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (reconnectSignalingForCurrentRoom()) {
                 updateStatus("$coursewareTitle\n正在重新连接教室端...")
             }
+            return
+        }
+        // 课件（PDF）播放页：本地翻页并同步大屏页码。
+        // 不能走 courseware.navigate —— 大屏会优先把它解释成"翻屏"而不是"翻页"。
+        val paging = coursewarePdfPaging
+        if (paging != null) {
+            paging.invoke(delta)
             return
         }
         signalingClient?.sendCoursewareNavigate(delta)
@@ -4541,12 +5044,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onCoursewareState(state: CoursewareStatePayload) {
         runOnUiThread {
-            // 无论当前在哪个页面都同步课件页码，
-            // 否则菜单页播放时（含音量键翻页）大屏回传的状态会被丢弃，导致手机端页码永久落后
-            coursewarePage = state.page
             coursewarePageCount = state.pageCount
             coursewareScreen = state.screen
             coursewareScreenCount = state.screenCount
+            // 课件（PDF）播放页由手机端主导翻页：忽略大屏回传的页码。
+            // 否则大屏在渲染完成前回传的旧页码会把手机端页码改回去，导致来回跳页。
+            if (coursewarePdfPaging != null) return@runOnUiThread
+            // 无论当前在哪个页面都同步课件页码，
+            // 否则菜单页播放时（含音量键翻页）大屏回传的状态会被丢弃，导致手机端页码永久落后
+            coursewarePage = state.page
             // 只在课件播放页刷新状态栏，避免污染其它页面
             if (currentScreen == Screen.Courseware && coursewareFastSeekDirection == 0) {
                 updateStatus(coursewareStatusText(coursewareTitle))
@@ -4606,7 +5112,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onViewerAnnotation(payload: RemoteAnnotationPayload) {
         // 信令回调在 OkHttp 线程，必须切回主线程再触碰 View
         runOnUiThread {
-            zoomableImageView?.applyRemoteAnnotation(payload)
+            val view = zoomableImageView ?: return@runOnUiThread
+            // 课件按页保存笔迹：只把属于当前页的动作应用到预览。
+            // page=0 表示旧版大屏或未分页场景，按当前页处理。
+            if (payload.page > 0 && payload.page != coursewarePage) {
+                return@runOnUiThread
+            }
+            view.applyRemoteAnnotation(payload)
         }
     }
 

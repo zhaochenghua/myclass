@@ -152,15 +152,17 @@ class SignalingClient(
         )
 
     /**
-     * 同步图片视口到大屏：scale 为相对适应屏幕的放大倍数，
-     * centerX / centerY 为视口中心在图片中的归一化坐标（0~1，按旋转后的画面计算），
+     * 同步视口到大屏：scale 为相对适应屏幕的放大倍数，
+     * centerX / centerY 为视口中心在内容中的归一化坐标（0~1，按旋转后的画面计算），
      * rotationDegrees 为手机端旋转角度（0/90/180/270），缺省 0 以兼容旧版大屏。
+     * page 为课件页码（1 基），0 表示不区分页（图片投屏等单页场景）。
      */
     fun sendCoursewareImageViewport(
         scale: Float,
         centerX: Float,
         centerY: Float,
-        rotationDegrees: Int = 0
+        rotationDegrees: Int = 0,
+        page: Int = 0
     ): Boolean =
         sendJson(
             JSONObject()
@@ -169,19 +171,21 @@ class SignalingClient(
                 .put("centerX", centerX.toDouble())
                 .put("centerY", centerY.toDouble())
                 .put("rotation", rotationDegrees)
+                .put("page", page)
         )
 
     /**
      * 手机端画笔标注同步到大屏。同一笔画用 strokeId 串联 begin → points（可多次，节流增量）→ end，
-     * 坐标口径与大屏端画笔一致（0~1 归一化，基准为图片变换后的 AABB）。
-     * undo / clear 直接作用于大屏端当前的标注栈，与大屏端本地画笔共用一份笔迹。
+     * 坐标口径与大屏端画笔一致（0~1 归一化，基准为内容变换后的 AABB）。
+     * undo / clear 只作用于 page 指定的那一页；page=0 时由大屏端按当前页处理。
      */
     fun sendAnnotationBegin(
         strokeId: String,
         colorHex: String,
         width: Float,
         isEraser: Boolean,
-        firstPoint: AnnotationPoint
+        firstPoint: AnnotationPoint,
+        page: Int = 0
     ): Boolean =
         sendJson(
             JSONObject()
@@ -193,40 +197,45 @@ class SignalingClient(
                 .put("isEraser", isEraser)
                 .put("mode", "solid")
                 .put("lineMode", false)
+                .put("page", page)
                 .put("points", pointsArray(listOf(firstPoint)))
         )
 
-    fun sendAnnotationPoints(strokeId: String, points: List<AnnotationPoint>): Boolean {
+    fun sendAnnotationPoints(strokeId: String, points: List<AnnotationPoint>, page: Int = 0): Boolean {
         if (points.isEmpty()) return false
         return sendJson(
             JSONObject()
                 .put("type", "courseware.annotation")
                 .put("action", "points")
                 .put("strokeId", strokeId)
+                .put("page", page)
                 .put("points", pointsArray(points))
         )
     }
 
-    fun sendAnnotationEnd(strokeId: String): Boolean =
+    fun sendAnnotationEnd(strokeId: String, page: Int = 0): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.annotation")
                 .put("action", "end")
                 .put("strokeId", strokeId)
+                .put("page", page)
         )
 
-    fun sendAnnotationUndo(): Boolean =
+    fun sendAnnotationUndo(page: Int = 0): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.annotation")
                 .put("action", "undo")
+                .put("page", page)
         )
 
-    fun sendAnnotationClear(): Boolean =
+    fun sendAnnotationClear(page: Int = 0): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.annotation")
                 .put("action", "clear")
+                .put("page", page)
         )
 
     private fun pointsArray(points: List<AnnotationPoint>) = JSONArray().apply {
@@ -379,7 +388,8 @@ class SignalingClient(
             width = message.optDouble("width", AnnotationPalette.PEN_WIDTH.toDouble()).toFloat(),
             isEraser = message.optBoolean("isEraser", false),
             mode = message.optString("mode", "solid"),
-            points = points
+            points = points,
+            page = message.optInt("page", 0)
         )
     }
 
