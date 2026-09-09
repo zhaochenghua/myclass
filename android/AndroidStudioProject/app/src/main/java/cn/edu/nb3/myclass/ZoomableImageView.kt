@@ -147,11 +147,11 @@ class ZoomableImageView(context: Context) : View(context) {
 
     private val gestureDetector = GestureDetector(context, GestureListener())
 
-    fun setImage(next: Bitmap?) {
+    fun setImage(next: Bitmap?, atBottom: Boolean = false) {
         bitmap = next
         // 换图后旧笔迹失去意义（大屏端打开新图片时也会清空标注），仅本地清理
         resetAnnotations()
-        resetViewport()
+        resetViewport(atBottom)
         // 换图瞬间控件可能尚未完成布局，fit 为 0 会跳过上报；
         // 等一帧再补发一次，确保大屏拿到当前旋转角度（避免手机端已旋转、大屏仍是 0°）
         post {
@@ -160,14 +160,28 @@ class ZoomableImageView(context: Context) : View(context) {
         }
     }
 
-    fun resetViewport() {
+    /**
+     * 复位缩放 / 平移。
+     * atBottom = true 表示落到页面底部（用于向前翻页时落在上一页底部，方便继续向上回顾）；
+     * 默认落在页面顶部（符合向后翻页的阅读顺序）。
+     */
+    fun resetViewport(atBottom: Boolean = false) {
         userScale = 1f
         translateX = 0f
         translateY = 0f
+        bigScrollActive = false
+        bigProgressY = 0f
         measureFit()
         if (fitMode == ImageFitMode.FitWidth) {
-            // 宽度充满后页面可能高于屏幕：从顶部开始显示，符合阅读顺序
-            translateY = max(0f, (fitHeight - height) / 2f)
+            // 宽度充满后页面可能高于屏幕：默认从顶部开始显示；
+            // 向前翻页（atBottom）时落在上一页底部，继续按"上一页"可向上逐屏回顾。
+            val maxY = max(0f, (fitHeight - height) / 2f)
+            translateY = if (atBottom) -maxY else maxY
+            if (atBottom && maxY <= 0.5f) {
+                // 手机端整页可显示：交给"大屏滚动模式"把大屏对齐到上一页底部
+                bigScrollActive = true
+                bigProgressY = 1f
+            }
         }
         clampTranslation()
         markAnnotationDirty()
@@ -418,9 +432,97 @@ class ZoomableImageView(context: Context) : View(context) {
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         measureFit()
+        if (fitMode == ImageFitMode.FitWidth && userScale <= 1.01f) {
+            // 未放大时，尺寸变化（含横竖屏旋转）后重新从顶部对齐，
+            // 避免出现竖屏时画面停在页面中间的情况
+            translateY = (fitHeight - height) / 2f
+            translateX = 0f
+        }
         clampTranslation()
         markAnnotationDirty()
         invalidate()
+    }
+
+    /**
+     * 课件"下一屏 / 上一屏"翻动（FitWidth 长页专用）：
+     * direction +1 = 向下看一屏，-1 = 向上看一屏。
+     * 返回 true 表示应当真正翻页（已滚到边界、整页一屏能显示完、或处于放大状态），
+     * 返回 false 表示本次只是滚动了一屏、尚未越界，调用方不应翻页。
+     *
+     * - 放大状态（userScale>1）：交给调用方翻页，缩放由换图时的 resetViewport 复位为默认大小；
+     * - 页面一屏即可完整显示：直接翻页；
+     * - 否则按方向滚动约一屏高度（留 8% 重叠），滚到边界后下一次再按才翻页。
+     */
+    fun requestScreenStep(direction: Int): Boolean {
+        if (bitmap == null || fitScale <= 0f) return true
+        if (userScale > 1.01f) {
+            // 放大状态：直接翻页并复位缩放
+            return true
+        }
+        val displayHeight = fitHeight * userScale
+        val viewHeight = height.toFloat()
+        if (displayHeight <= viewHeight) {
+            // 手机端整页可显示：大屏（横屏）往往是长页。改用大屏滚动进度驱动大屏逐屏下滚，
+            // 滚到底再翻页，避免手机整页直接翻页导致大屏不滚动。
+            return stepBigScreen(direction)
+        }
+        bigScrollActive = false
+        val maxY = (displayHeight - viewHeight) / 2f
+        val atBottom = translateY <= -maxY + 0.5f
+        val atTop = translateY >= maxY - 0.5f
+        if (direction > 0 && atBottom) return true
+        if (direction < 0 && atTop) return true
+        // 滚动一屏（留 8% 重叠，避免相邻屏内容割裂）
+        val step = viewHeight * 0.92f
+        translateY = (translateY - direction * step).coerceIn(-maxY, maxY)
+        clampTranslation()
+        markAnnotationDirty()
+        notifyViewport(force = true)
+        invalidate()
+        return false
+    }
+
+    // 大屏滚动模式：手机端整页但大屏（横屏）长页时，用大屏滚动进度驱动大屏逐屏滚动
+    private var bigScrollActive = false
+    private var bigProgressY = 0f
+
+    /**
+     * 手机端整页可显示但大屏（横屏）通常是长页时，用"大屏滚动进度"驱动大屏逐屏滚动。
+     * 假设投屏大屏为横屏（宽>高），按图片原始宽高比估算大屏是否为长页：
+     * - 大屏也是整页：直接翻页；
+     * - 大屏长页：累计 bigProgressY，每次推进约一屏，滚到底/顶才返回 true 让调用方翻页。
+     * 大屏端收到 progress 后按自身比例换算为本地的逐屏滚动，从而手机整页时大屏仍能逐屏下滚。
+     */
+    private fun stepBigScreen(direction: Int): Boolean {
+        val bmp = bitmap ?: return true
+        val imageAspect = bmp.width.toFloat() / bmp.height.toFloat()
+        val bigAspectHOverW = 9f / 16f // 大屏高/宽（按 16:9 横屏估算）
+        val pageAspectHOverW = 1f / imageAspect // 页面高/宽
+        val bigMaxYRatio = (pageAspectHOverW - bigAspectHOverW) / 2f // <=0 表示大屏整页
+        if (bigMaxYRatio <= 0f) {
+            bigScrollActive = false
+            bigProgressY = 0f
+            return true
+        }
+        if (!bigScrollActive) {
+            bigScrollActive = true
+            bigProgressY = 0f
+        }
+        // 已经滚到底（向下）/ 顶（向上）：本次才翻页
+        if ((direction > 0 && bigProgressY >= 1f - 1e-4f) ||
+            (direction < 0 && bigProgressY <= 1e-4f)
+        ) {
+            bigScrollActive = false
+            bigProgressY = 0f
+            notifyViewport(force = true)
+            return true
+        }
+        // 大屏一屏（占屏高 92%）对应的进度增量
+        val stepRatio = (bigAspectHOverW * 0.92f) / (2f * bigMaxYRatio)
+        // 滚动一屏；剩余不足一屏时滚到底/顶，把剩余内容补成一屏显示出来，下次再按才翻页
+        bigProgressY = (bigProgressY + direction * stepRatio).coerceIn(0f, 1f)
+        notifyViewport(force = true)
+        return false
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -506,9 +608,22 @@ class ZoomableImageView(context: Context) : View(context) {
         val now = System.currentTimeMillis()
         if (!force && now - lastNotifyAt < NOTIFY_INTERVAL_MS) return
         lastNotifyAt = now
-        val centerX = 0.5f - translateX / (fitWidth * userScale)
-        val centerY = 0.5f - translateY / (fitHeight * userScale)
-        onViewportChanged?.invoke(userScale, centerX, centerY, rotationDegrees)
+        val maxX = max(0f, (fitWidth * userScale - width) / 2f)
+        val maxY = max(0f, (fitHeight * userScale - height) / 2f)
+        // 滚动进度：0 = 顶部/左侧对齐，1 = 底部/右侧对齐；整页可显示时为 0（顶部对齐）。
+        // 用进度而非"视口中心位置"做归一化，可消除两端屏幕比例不同造成的错位，
+        // 保证手机竖屏与横屏大屏都从页面顶部开始、并逐屏同步滚动。
+        // 手机端整页可显示（maxY<=0）且处于"大屏滚动模式"时，上报大屏滚动进度，
+        // 让大屏（横屏长页）逐屏下滚，而不是随手机整页一起直接翻页。
+        val progressX = if (maxX > 0.5f) (maxX - translateX) / (2f * maxX) else 0f
+        val progressY = if (maxY > 0.5f) {
+            (maxY - translateY) / (2f * maxY)
+        } else if (bigScrollActive) {
+            bigProgressY
+        } else {
+            0f
+        }
+        onViewportChanged?.invoke(userScale, progressX, progressY, rotationDegrees)
     }
 
     // ---- 画笔：笔迹生命周期 ----

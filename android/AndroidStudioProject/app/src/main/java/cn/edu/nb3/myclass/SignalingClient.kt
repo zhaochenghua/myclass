@@ -162,7 +162,8 @@ class SignalingClient(
         centerX: Float,
         centerY: Float,
         rotationDegrees: Int = 0,
-        page: Int = 0
+        page: Int = 0,
+        progress: Boolean = false
     ): Boolean =
         sendJson(
             JSONObject()
@@ -172,6 +173,7 @@ class SignalingClient(
                 .put("centerY", centerY.toDouble())
                 .put("rotation", rotationDegrees)
                 .put("page", page)
+                .put("progress", progress)
         )
 
     /**

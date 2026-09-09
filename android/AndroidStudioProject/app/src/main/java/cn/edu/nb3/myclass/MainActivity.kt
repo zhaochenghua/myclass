@@ -1459,7 +1459,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             val reconnecting = reconnectSignalingForCurrentRoom()
             if (reconnecting) {
                 updateStatus("正在重新连接教室端，请稍后重试屏幕共享")
-                toast("正在重新连接教室端")
             }
             return
         }
@@ -3269,7 +3268,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         modeButton.setOnClickListener {
             imageCastPenMode = !imageCastPenMode
             applyImageCastMode?.invoke()
-            toast(if (imageCastPenMode) "画笔模式：单指绘制，实时同步大屏" else "已回到手势模式")
         }
         applyImageCastMode?.invoke()
 
@@ -3684,7 +3682,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             showCoursewareScreen(title, isUploading = false)
         }
 
-        fun showPage(target: Int, notifyRemote: Boolean) {
+        fun showPage(target: Int, notifyRemote: Boolean, atBottom: Boolean = false) {
             val total = coursewarePdf?.pageCount ?: 0
             if (total <= 0) return
             val page = target.coerceIn(1, total)
@@ -3706,7 +3704,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             val cached = coursewarePdfBitmaps[page]
             if (cached != null) {
-                zoomable.setImage(cached)
+                zoomable.setImage(cached, atBottom)
                 zoomable.replaceStrokes(coursewarePdfStrokes[page].orEmpty())
                 hintText.visibility = View.GONE
                 return
@@ -3726,9 +3724,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     return@renderPdfPageAsync
                 }
                 rememberPdfBitmap(page, bitmap)
-                zoomable.setImage(bitmap)
+                zoomable.setImage(bitmap, atBottom)
                 zoomable.replaceStrokes(coursewarePdfStrokes[page].orEmpty())
                 hintText.visibility = View.GONE
+            }
+        }
+
+        /**
+         * 翻页 / 音量键的统一入口：长页面课件下先"翻一屏"（向下/向上滚动），
+         * 滚到页面边界后再按才真正翻页；处于放大状态时直接翻页并由换图逻辑复位缩放。
+         */
+        fun pagingOrStep(delta: Int) {
+            if (zoomable.requestScreenStep(delta)) {
+                // 向前翻页（delta<0）落在上一页底部，方便继续向上回顾；向后翻页仍从顶部开始
+                showPage(coursewarePage + delta, notifyRemote = true, atBottom = delta < 0)
             }
         }
 
@@ -3794,8 +3803,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             showPage(target, notifyRemote = true)
         }
 
-        prevButton.setOnClickListener { showPage(coursewarePage - 1, notifyRemote = true) }
-        nextButton.setOnClickListener { showPage(coursewarePage + 1, notifyRemote = true) }
+        prevButton.setOnClickListener { pagingOrStep(-1) }
+        nextButton.setOnClickListener { pagingOrStep(1) }
         jumpButton.setOnClickListener { jumpToInputPage() }
         pageInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
@@ -3811,7 +3820,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         modeButton.setOnClickListener {
             imageCastPenMode = !imageCastPenMode
             applyCastMode?.invoke()
-            toast(if (imageCastPenMode) "画笔模式：单指绘制，实时同步大屏" else "已回到手势模式")
         }
         applyCastMode?.invoke()
 
@@ -3859,7 +3867,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomableImageView = zoomable
         // 视口与笔迹都带页码，大屏端按页处理；课件页方向固定，旋转恒为 0
         zoomable.onViewportChanged = { scale, centerX, centerY, _ ->
-            signalingClient?.sendCoursewareImageViewport(scale, centerX, centerY, 0, coursewarePage)
+            signalingClient?.sendCoursewareImageViewport(
+                scale = scale,
+                centerX = centerX,
+                centerY = centerY,
+                rotationDegrees = 0,
+                page = coursewarePage,
+                progress = true
+            )
         }
         zoomable.onStrokeBegin = { strokeId, colorHex, width, isEraser, first ->
             signalingClient?.sendAnnotationBegin(strokeId, colorHex, width, isEraser, first, coursewarePage)
@@ -3871,7 +3886,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             signalingClient?.sendAnnotationEnd(strokeId, coursewarePage)
         }
         zoomable.onAnnotationCountChanged = { refreshAnnotationBar?.invoke() }
-        coursewarePdfPaging = { delta -> showPage(coursewarePage + delta, notifyRemote = true) }
+        coursewarePdfPaging = { delta -> pagingOrStep(delta) }
 
         if ((coursewarePdf?.pageCount ?: 0) > 0) {
             showPage(coursewarePage, notifyRemote = false)
@@ -4834,7 +4849,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 if (applied) {
                     updateFrameLockButton(isLocked = nextLocked, isEnabled = true)
                     sendCurrentDeviceOrientation(force = true)
-                    toast(if (nextLocked) "画面已锁定" else "画面已恢复实时")
                 }
             }
         }
@@ -4864,7 +4878,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener {
                 val nextEnabled = webRtcClient?.toggleAudio() == true
                 updateAudioButton(isEnabled = nextEnabled)
-                toast(if (nextEnabled) "麦克风已开启" else "麦克风已静音")
             }
         }
         cameraVersionLabel = versionLabel(onDark = true)

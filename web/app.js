@@ -1648,9 +1648,31 @@ function handleCoursewareImageViewport(message) {
   const rawCenterX = Number(message.centerX);
   const rawCenterY = Number(message.centerY);
   view.scale = Number.isFinite(rawScale) ? clamp(rawScale, view.MIN_SCALE, view.MAX_SCALE) : 1;
-  view.centerX = Number.isFinite(rawCenterX) ? clamp(rawCenterX, 0, 1) : 0.5;
-  view.centerY = Number.isFinite(rawCenterY) ? clamp(rawCenterY, 0, 1) : 0.5;
   view.rotation = normalizeImageRotation(message.rotation);
+
+  if (message.progress) {
+    // 新协议：centerX/centerY 为"滚动进度"（0=左/顶，1=右/底）。
+    // 大屏按自身屏幕比例换算回视口中心位置，从而两端屏幕比例不同时仍能一致地
+    // 从顶部开始、并逐屏同步滚动（修复手机竖屏投大屏时大屏只显示页面中间的问题）。
+    const { baseWidth, baseHeight } = imageViewBaseSize();
+    if (baseWidth && baseHeight) {
+      const rect = elements.videoView.getBoundingClientRect();
+      const limitX = Math.max(0, (1 - rect.width / (baseWidth * view.scale)) / 2);
+      const limitY = Math.max(0, (1 - rect.height / (baseHeight * view.scale)) / 2);
+      const pX = Number.isFinite(rawCenterX) ? clamp(rawCenterX, 0, 1) : 0.5;
+      const pY = Number.isFinite(rawCenterY) ? clamp(rawCenterY, 0, 1) : 0.5;
+      view.centerX = 0.5 + (pX - 0.5) * 2 * limitX;
+      view.centerY = 0.5 + (pY - 0.5) * 2 * limitY;
+    } else {
+      view.centerX = Number.isFinite(rawCenterX) ? clamp(rawCenterX, 0, 1) : 0.5;
+      view.centerY = Number.isFinite(rawCenterY) ? clamp(rawCenterY, 0, 1) : 0.5;
+    }
+  } else {
+    // 兼容旧端（如 iOS）：centerX/centerY 直接作为视口中心归一化坐标
+    view.centerX = Number.isFinite(rawCenterX) ? clamp(rawCenterX, 0, 1) : 0.5;
+    view.centerY = Number.isFinite(rawCenterY) ? clamp(rawCenterY, 0, 1) : 0.5;
+  }
+
   clampImageViewCenter();
   applyCoursewareImageViewTransform();
 }
