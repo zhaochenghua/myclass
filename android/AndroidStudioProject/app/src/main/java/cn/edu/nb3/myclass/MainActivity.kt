@@ -14,6 +14,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.drawable.GradientDrawable
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
@@ -172,6 +173,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var videoVolumeSeekBar: SeekBar? = null
     private var videoMuteButton: MaterialButton? = null
     private var zoomableImageView: ZoomableImageView? = null
+    /** 图片投屏当前是否为画笔模式（横竖屏重建后据此恢复） */
+    private var imageCastPenMode = false
+    /** 画笔模式下的当前颜色与是否板擦，跟随 ZoomableImageView 但需在重建后恢复 */
+    private var imageCastPenColor = AnnotationPalette.DEFAULT_COLOR
+    private var imageCastPenEraser = false
     /** 最近一次收到大屏视频状态的时间，用于判断大屏端是否仍在播放 */
     private var lastVideoStateAtMs = 0L
     /** 最近一次提示“课件控制已重新连接”的时间，避免弱网反复重连时反复弹提示 */
@@ -2998,34 +3004,217 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         imageHost.addView(hintText)
         root.addView(imageHost)
 
-        val actionRow = LinearLayout(this).apply {
+        // 模式提示 + 切换按钮：常驻显示，是手势 / 画笔两种模式的唯一入口
+        var refreshAnnotationBar: (() -> Unit)? = null
+        var applyImageCastMode: (() -> Unit)? = null
+
+        val modeBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(2), dp(12), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(44)
+            )
+        }
+        val modeHint = TextView(this).apply {
+            textSize = 12f
+            setSingleLine(true)
+            ellipsize = TextUtils.TruncateAt.END
+            setTextColor(Color.parseColor("#8899AA"))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        modeBar.addView(modeHint)
+        val modeButton = compactButton(secondaryButton("画笔"), 13f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(96), dp(40))
+        }
+        modeBar.addView(modeButton)
+        root.addView(modeBar)
+
+        // 手势模式工具栏：保持原有的旋转 / 返回主菜单 / 结束投屏
+        val gestureBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setPadding(dp(12), dp(4), dp(12), dp(10))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        actionRow.addView(compactButton(secondaryButton("旋转"), 14f).apply {
+        gestureBar.addView(compactButton(secondaryButton("旋转"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) }
             setOnClickListener {
                 val degrees = zoomable.rotateBy(90)
                 toast("已旋转 ${degrees}°，大屏同步")
             }
         })
-        actionRow.addView(compactButton(primaryButton("返回主菜单"), 14f).apply {
+        gestureBar.addView(compactButton(primaryButton("返回主菜单"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
                 marginStart = dp(6)
                 marginEnd = dp(6)
             }
             setOnClickListener { pauseCoursewareAndReturnMenu() }
         })
-        actionRow.addView(compactButton(secondaryButton("结束投屏"), 14f).apply {
+        gestureBar.addView(compactButton(secondaryButton("结束投屏"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
             setOnClickListener { closeCoursewareAndReturnMenu() }
         })
-        root.addView(actionRow)
+        root.addView(gestureBar)
+
+        // 画笔模式工具栏：颜色 / 板擦 + 撤销 / 清空，按钮状态随笔迹数量变化
+        val penBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val paletteRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val colorDots = mutableListOf<MaterialButton>()
+        AnnotationPalette.COLORS.forEach { colorHex ->
+            val dot = MaterialButton(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(6) }
+                cornerRadius = dp(20)
+                insetTop = 0
+                insetBottom = 0
+                minWidth = 0
+                minimumWidth = 0
+                minHeight = 0
+                minimumHeight = 0
+                setPadding(0, 0, 0, 0)
+                backgroundTintList = ColorStateList.valueOf(Color.parseColor(colorHex))
+                strokeColor = ColorStateList.valueOf(Color.WHITE)
+                setOnClickListener {
+                    zoomable.penColorHex = colorHex
+                    zoomable.penEraser = false
+                    imageCastPenColor = colorHex
+                    imageCastPenEraser = false
+                    refreshAnnotationBar?.invoke()
+                }
+            }
+            colorDots.add(dot)
+            paletteRow.addView(dot)
+        }
+        val eraserButton = annotationToolButton("板擦").apply {
+            layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
+            setOnClickListener {
+                zoomable.penEraser = !zoomable.penEraser
+                imageCastPenEraser = zoomable.penEraser
+                refreshAnnotationBar?.invoke()
+            }
+        }
+        paletteRow.addView(eraserButton)
+        penBar.addView(paletteRow)
+
+        val penActionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val undoButton = annotationToolButton("撤销").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(4) }
+            setOnClickListener {
+                if (zoomable.undoAnnotation()) {
+                    signalingClient?.sendAnnotationUndo()
+                }
+            }
+        }
+        val clearButton = annotationToolButton("清空").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                marginStart = dp(4)
+                marginEnd = dp(4)
+            }
+            setOnClickListener {
+                if (zoomable.clearAnnotations()) {
+                    signalingClient?.sendAnnotationClear()
+                }
+            }
+        }
+        val penBackButton = annotationToolButton("返回主菜单").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                marginStart = dp(4)
+                marginEnd = dp(4)
+            }
+            setOnClickListener { pauseCoursewareAndReturnMenu() }
+        }
+        val penEndButton = annotationToolButton("结束投屏").apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(4) }
+            setOnClickListener { closeCoursewareAndReturnMenu() }
+        }
+        penActionRow.addView(undoButton)
+        penActionRow.addView(clearButton)
+        penActionRow.addView(penBackButton)
+        penActionRow.addView(penEndButton)
+        penBar.addView(penActionRow)
+        root.addView(penBar)
+
+        refreshAnnotationBar = {
+            colorDots.forEachIndexed { index, dot ->
+                val selected = !zoomable.penEraser && zoomable.penColorHex == AnnotationPalette.COLORS[index]
+                dot.strokeWidth = if (selected) dp(2) else 0
+                dot.scaleX = if (selected) 1.12f else 1f
+                dot.scaleY = if (selected) 1.12f else 1f
+            }
+            eraserButton.backgroundTintList = ColorStateList.valueOf(
+                if (zoomable.penEraser) Color.argb(0.22f, 1f, 1f, 1f) else Color.TRANSPARENT
+            )
+            val hasStrokes = zoomable.annotationCount > 0
+            undoButton.isEnabled = hasStrokes
+            clearButton.isEnabled = hasStrokes
+            undoButton.alpha = if (hasStrokes) 1f else 0.4f
+            clearButton.alpha = if (hasStrokes) 1f else 0.4f
+        }
+
+        applyImageCastMode = {
+            val penMode = imageCastPenMode
+            zoomable.mode = if (penMode) ImageCastMode.Pen else ImageCastMode.Gesture
+            modeHint.text = if (penMode) {
+                "画笔模式：单指绘制，双指缩放拖动"
+            } else {
+                "手势模式：双指缩放 / 拖动，双击放大"
+            }
+            modeButton.text = if (penMode) "手势" else "画笔"
+            modeButton.backgroundTintList = ColorStateList.valueOf(
+                if (penMode) Color.parseColor("#4DA6FF") else Color.TRANSPARENT
+            )
+            modeButton.setTextColor(
+                if (penMode) {
+                    Color.WHITE
+                } else {
+                    ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface)
+                }
+            )
+            // 工具栏切换做淡入过渡，避免画面跳变
+            val showBar = if (penMode) penBar else gestureBar
+            val hideBar = if (penMode) gestureBar else penBar
+            hideBar.animate().cancel()
+            hideBar.visibility = View.GONE
+            showBar.visibility = View.VISIBLE
+            showBar.alpha = 0f
+            showBar.animate().alpha(1f).setDuration(150).start()
+            refreshAnnotationBar?.invoke()
+        }
+
+        zoomable.penColorHex = imageCastPenColor
+        zoomable.penEraser = imageCastPenEraser
+        modeButton.setOnClickListener {
+            imageCastPenMode = !imageCastPenMode
+            applyImageCastMode?.invoke()
+            toast(if (imageCastPenMode) "画笔模式：单指绘制，实时同步大屏" else "已回到手势模式")
+        }
+        applyImageCastMode?.invoke()
 
         // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
         if (mediaQueue.size > 1) {
@@ -3038,6 +3227,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomable.onViewportChanged = { scale, centerX, centerY, rotation ->
             signalingClient?.sendCoursewareImageViewport(scale, centerX, centerY, rotation)
         }
+        // 笔迹实时同步大屏：本地先落笔渲染，再尽力发送；未连接时静默忽略，不阻塞老师操作
+        zoomable.onStrokeBegin = { strokeId, colorHex, width, isEraser, first ->
+            signalingClient?.sendAnnotationBegin(strokeId, colorHex, width, isEraser, first)
+        }
+        zoomable.onStrokePoints = { strokeId, points ->
+            signalingClient?.sendAnnotationPoints(strokeId, points)
+        }
+        zoomable.onStrokeEnd = { strokeId ->
+            signalingClient?.sendAnnotationEnd(strokeId)
+        }
+        zoomable.onAnnotationCountChanged = { refreshAnnotationBar?.invoke() }
 
         val cached = castImageBitmap
         if (cached != null) {
@@ -3552,7 +3752,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun resetMediaCastState() {
         coursewareLocalUri = null
         castImageBitmap = null
+        zoomableImageView?.releaseAnnotationLayer()
         zoomableImageView = null
+        imageCastPenMode = false
+        imageCastPenEraser = false
         videoPlaying = false
         videoPosition = 0.0
         videoDuration = 0.0
@@ -3575,7 +3778,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     /** 仅释放界面引用，保留播放进度，便于从菜单返回后继续遥控 */
     private fun releaseMediaCastViews() {
+        zoomableImageView?.releaseAnnotationLayer()
         zoomableImageView = null
+        imageCastPenMode = false
+        imageCastPenEraser = false
         videoPlayPauseButton = null
         videoSeekBar = null
         videoTimeText = null
@@ -4396,6 +4602,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    /** 大屏端画笔回传的标注动作（板擦 / 撤销 / 清空 / 大屏本地笔画），与本地笔迹共用同一份栈 */
+    override fun onViewerAnnotation(payload: RemoteAnnotationPayload) {
+        // 信令回调在 OkHttp 线程，必须切回主线程再触碰 View
+        runOnUiThread {
+            zoomableImageView?.applyRemoteAnnotation(payload)
+        }
+    }
+
     override fun onSignalError(message: String) {
         runOnUiThread {
             roomJoined = false
@@ -4956,6 +5170,29 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             minHeight = 0
             minimumHeight = 0
             setPadding(dp(8), 0, dp(8), 0)
+        }
+
+    /**
+     * 画笔工具栏里的小按钮：描边样式、单行、无 inset，
+     * 用于“板擦 / 撤销 / 清空 / 返回主菜单 / 结束投屏”这类窄按钮。
+     */
+    private fun annotationToolButton(textValue: String): MaterialButton =
+        MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = textValue
+            textSize = 12f
+            setSingleLine(true)
+            maxLines = 1
+            includeFontPadding = false
+            cornerRadius = dp(10)
+            strokeWidth = dp(1)
+            insetTop = 0
+            insetBottom = 0
+            iconPadding = 0
+            minHeight = 0
+            minimumHeight = 0
+            setStrokeColor(ColorStateList.valueOf(Color.argb(0.3f, 1f, 1f, 1f)))
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+            setPadding(dp(6), 0, dp(6), 0)
         }
 
     private fun deleteButton(textValue: String): MaterialButton =

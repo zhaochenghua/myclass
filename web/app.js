@@ -874,6 +874,9 @@ async function handleSignalMessage(message) {
     case 'courseware.image.viewport':
       handleCoursewareImageViewport(message);
       break;
+    case 'courseware.annotation':
+      handleTeacherAnnotation(message);
+      break;
     case 'courseware.original':
       handleCoursewareOriginal(message);
       break;
@@ -1648,6 +1651,207 @@ function handleCoursewareImageViewport(message) {
   view.rotation = normalizeImageRotation(message.rotation);
   clampImageViewCenter();
   applyCoursewareImageViewTransform();
+}
+
+// ---- 手机端画笔同步 ----
+// 手机端与大屏端画笔共用同一份笔迹（strokes / activeStrokes）与同一套坐标口径
+// （0~1 归一化，基准为图片显示矩形），因此这里只需回放动作，渲染完全复用标注层。
+
+/** 一帧内合并多次重绘，避免高频 points 消息把主线程打满 */
+let teacherAnnotationFrame = 0;
+function scheduleAnnotationRedraw() {
+  if (teacherAnnotationFrame) return;
+  teacherAnnotationFrame = requestAnimationFrame(() => {
+    teacherAnnotationFrame = 0;
+    drawAnnotations();
+  });
+}
+
+function normalizeAnnotationPoints(rawPoints) {
+  if (!Array.isArray(rawPoints)) return [];
+  const points = [];
+  for (const raw of rawPoints) {
+    const x = Number(raw && raw.x);
+    const y = Number(raw && raw.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    points.push({ x: clamp(x, 0, 1), y: clamp(y, 0, 1) });
+  }
+  return points;
+}
+
+function teacherStrokeKey(strokeId) {
+  return `teacher:${strokeId}`;
+}
+
+/** 撤销 / 清空前把手机端尚未结束的笔画落盘，保证撤销的是完整的一笔 */
+function flushTeacherActiveStrokes() {
+  for (const [key, stroke] of Array.from(state.annotations.activeStrokes.entries())) {
+    if (!String(key).startsWith('teacher:') || !stroke) continue;
+    if (stroke.points.length > 0) {
+      state.annotations.strokes.push({
+        color: stroke.color,
+        width: stroke.width,
+        isEraser: !!stroke.isEraser,
+        mode: stroke.mode,
+        lineMode: !!stroke.lineMode,
+        points: stroke.points
+      });
+    }
+    state.annotations.activeStrokes.delete(key);
+  }
+}
+
+function handleTeacherAnnotation(message) {
+  // 手机端只在图片投屏界面发笔迹，其他场景（直播 / PDF / 黑板）忽略，避免误画
+  if (!isImageViewVisible()) return;
+  const action = message && message.action;
+  const key = teacherStrokeKey(typeof message.strokeId === 'string' ? message.strokeId : '');
+
+  if (action === 'begin') {
+    const points = normalizeAnnotationPoints(message.points);
+    if (points.length === 0) return;
+    const isEraser = !!message.isEraser;
+    state.annotations.activeStrokes.set(key, {
+      pointerId: key,
+      color: isEraser ? '#000' : (typeof message.color === 'string' ? message.color : state.annotations.currentColor),
+      width: Number.isFinite(Number(message.width)) ? Number(message.width) : 4,
+      isEraser,
+      mode: isEraser ? null : (typeof message.mode === 'string' ? message.mode : 'solid'),
+      lineMode: false,
+      points,
+      startScreen: null
+    });
+    scheduleAnnotationRedraw();
+    return;
+  }
+
+  if (action === 'points') {
+    const stroke = state.annotations.activeStrokes.get(key);
+    if (!stroke) return;
+    const points = normalizeAnnotationPoints(message.points);
+    if (points.length === 0) return;
+    stroke.points.push(...points);
+    scheduleAnnotationRedraw();
+    return;
+  }
+
+  if (action === 'end') {
+    const stroke = state.annotations.activeStrokes.get(key);
+    state.annotations.activeStrokes.delete(key);
+    if (stroke && stroke.points.length > 0) {
+      state.annotations.strokes.push({
+        color: stroke.color,
+        width: stroke.width,
+        isEraser: !!stroke.isEraser,
+        mode: stroke.mode,
+        lineMode: !!stroke.lineMode,
+        points: stroke.points
+      });
+    }
+    drawAnnotations();
+    updateAnnotationButtons();
+    return;
+  }
+
+  if (action === 'undo') {
+    withSuppressedViewerSync(() => {
+      flushTeacherActiveStrokes();
+      undoAnnotationStroke();
+    });
+    return;
+  }
+
+  if (action === 'clear') {
+    withSuppressedViewerSync(() => resetAnnotations());
+  }
+}
+
+// ---- 大屏端画笔回传手机 ----
+// 手机端画笔是单向同步过来的，大屏本地画的笔画同样需要回传，
+// 否则两端笔迹栈会发散：大屏擦掉的线手机上还在，撤销也会撤错笔画。
+
+let suppressViewerAnnotationSync = false;
+let viewerStrokeSeq = 0;
+const viewerStrokeIds = new Map();
+const viewerPendingPoints = new Map();
+let viewerLastSyncAt = 0;
+const VIEWER_ANNOTATION_SYNC_INTERVAL_MS = 60;
+const VIEWER_ANNOTATION_MAX_PENDING = 12;
+
+/** 只有图片投屏场景手机端才有画板，直播 / PDF / 黑板场景回传没有意义 */
+function viewerAnnotationEnabled() {
+  return !suppressViewerAnnotationSync && isImageViewVisible();
+}
+
+function sendViewerAnnotation(payload) {
+  sendMessage(Object.assign({ type: 'viewer.annotation' }, payload));
+}
+
+function syncViewerAnnotationBegin(pointerId) {
+  if (!viewerAnnotationEnabled()) return;
+  const stroke = state.annotations.activeStrokes.get(pointerId);
+  if (!stroke || stroke.points.length === 0) return;
+  const strokeId = `v${++viewerStrokeSeq}`;
+  viewerStrokeIds.set(pointerId, strokeId);
+  viewerPendingPoints.set(strokeId, []);
+  viewerLastSyncAt = Date.now();
+  sendViewerAnnotation({
+    action: 'begin',
+    strokeId,
+    color: stroke.color,
+    width: stroke.width,
+    isEraser: !!stroke.isEraser,
+    mode: stroke.mode || 'solid',
+    points: [stroke.points[0]]
+  });
+}
+
+function syncViewerAnnotationPoints(pointerId, point) {
+  const strokeId = viewerStrokeIds.get(pointerId);
+  if (!strokeId || !point || !viewerAnnotationEnabled()) return;
+  const buffer = viewerPendingPoints.get(strokeId) || [];
+  buffer.push(point);
+  viewerPendingPoints.set(strokeId, buffer);
+  const now = Date.now();
+  if (now - viewerLastSyncAt >= VIEWER_ANNOTATION_SYNC_INTERVAL_MS || buffer.length >= VIEWER_ANNOTATION_MAX_PENDING) {
+    sendViewerAnnotation({ action: 'points', strokeId, points: buffer });
+    viewerPendingPoints.set(strokeId, []);
+    viewerLastSyncAt = now;
+  }
+}
+
+function syncViewerAnnotationEnd(pointerId) {
+  const strokeId = viewerStrokeIds.get(pointerId);
+  if (!strokeId) return;
+  viewerStrokeIds.delete(pointerId);
+  const buffer = viewerPendingPoints.get(strokeId) || [];
+  viewerPendingPoints.delete(strokeId);
+  // 已经发过 begin 就必须补发 end，否则手机端会残留一条未结束的笔画
+  if (suppressViewerAnnotationSync) return;
+  if (buffer.length > 0) {
+    sendViewerAnnotation({ action: 'points', strokeId, points: buffer });
+  }
+  sendViewerAnnotation({ action: 'end', strokeId });
+}
+
+function syncViewerAnnotationUndo() {
+  if (!viewerAnnotationEnabled()) return;
+  sendViewerAnnotation({ action: 'undo' });
+}
+
+function syncViewerAnnotationClear() {
+  if (!viewerAnnotationEnabled()) return;
+  sendViewerAnnotation({ action: 'clear' });
+}
+
+/** 处理来自手机端的 undo / clear 时抑制回传，避免两端互相撤销形成回环 */
+function withSuppressedViewerSync(fn) {
+  suppressViewerAnnotationSync = true;
+  try {
+    fn();
+  } finally {
+    suppressViewerAnnotationSync = false;
+  }
 }
 
 /** 旋转角度归一到 0 / 90 / 180 / 270（旧版手机端不下发该字段时为 0） */
@@ -2563,6 +2767,7 @@ function beginAnnotationStroke(event) {
     points: [point],
     startScreen: isLine ? { x: event.clientX, y: event.clientY } : null
   });
+  syncViewerAnnotationBegin(event.pointerId);
   drawAnnotations();
 }
 
@@ -2608,6 +2813,7 @@ function continueAnnotationStroke(event) {
   } else {
     stroke.points.push(point);
   }
+  syncViewerAnnotationPoints(event.pointerId, stroke.points.at(-1));
   drawAnnotations();
 }
 
@@ -2642,6 +2848,7 @@ function finishAnnotationStroke(event) {
     });
   }
   state.annotations.activeStrokes.delete(event.pointerId);
+  syncViewerAnnotationEnd(event.pointerId);
   runCatching(() => elements.annotationCanvas.releasePointerCapture(event.pointerId));
   if (stroke.lineMode) hideAngleIndicator();
   drawAnnotations();
@@ -2806,10 +3013,12 @@ function undoAnnotationStroke() {
   state.annotations.strokes.pop();
   drawAnnotations();
   updateAnnotationButtons();
+  syncViewerAnnotationUndo();
 }
 
 function clearAnnotations() {
   resetAnnotations();
+  syncViewerAnnotationClear();
 }
 
 function resetAnnotations() {

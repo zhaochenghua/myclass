@@ -5,6 +5,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -57,6 +58,8 @@ class SignalingClient(
         /** 服务器明确返回的错误（连接本身仍存活，例如旧版服务器不支持某条消息类型） */
         fun onServerError(message: String)
         fun onSignalError(message: String)
+        /** 大屏端画笔回传的标注动作（板擦、撤销、清空与大屏本地笔画） */
+        fun onViewerAnnotation(payload: RemoteAnnotationPayload)
     }
 
     private val client = OkHttpClient.Builder()
@@ -168,6 +171,74 @@ class SignalingClient(
                 .put("rotation", rotationDegrees)
         )
 
+    /**
+     * 手机端画笔标注同步到大屏。同一笔画用 strokeId 串联 begin → points（可多次，节流增量）→ end，
+     * 坐标口径与大屏端画笔一致（0~1 归一化，基准为图片变换后的 AABB）。
+     * undo / clear 直接作用于大屏端当前的标注栈，与大屏端本地画笔共用一份笔迹。
+     */
+    fun sendAnnotationBegin(
+        strokeId: String,
+        colorHex: String,
+        width: Float,
+        isEraser: Boolean,
+        firstPoint: AnnotationPoint
+    ): Boolean =
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.annotation")
+                .put("action", "begin")
+                .put("strokeId", strokeId)
+                .put("color", colorHex)
+                .put("width", width.toDouble())
+                .put("isEraser", isEraser)
+                .put("mode", "solid")
+                .put("lineMode", false)
+                .put("points", pointsArray(listOf(firstPoint)))
+        )
+
+    fun sendAnnotationPoints(strokeId: String, points: List<AnnotationPoint>): Boolean {
+        if (points.isEmpty()) return false
+        return sendJson(
+            JSONObject()
+                .put("type", "courseware.annotation")
+                .put("action", "points")
+                .put("strokeId", strokeId)
+                .put("points", pointsArray(points))
+        )
+    }
+
+    fun sendAnnotationEnd(strokeId: String): Boolean =
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.annotation")
+                .put("action", "end")
+                .put("strokeId", strokeId)
+        )
+
+    fun sendAnnotationUndo(): Boolean =
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.annotation")
+                .put("action", "undo")
+        )
+
+    fun sendAnnotationClear(): Boolean =
+        sendJson(
+            JSONObject()
+                .put("type", "courseware.annotation")
+                .put("action", "clear")
+        )
+
+    private fun pointsArray(points: List<AnnotationPoint>) = JSONArray().apply {
+        points.forEach { point ->
+            put(
+                JSONObject()
+                    .put("x", AnnotationPalette.round(point.x))
+                    .put("y", AnnotationPalette.round(point.y))
+            )
+        }
+    }
+
     fun sendOrientation(orientation: DeviceOrientationPayload) {
         sendJson(
             JSONObject()
@@ -230,6 +301,7 @@ class SignalingClient(
                 screen = message.optInt("screen", 1).coerceAtLeast(1)
             )
             "viewer.courseware.close" -> callback.onViewerCoursewareClose()
+            "viewer.annotation" -> callback.onViewerAnnotation(parseViewerAnnotation(message))
             "error" -> callback.onServerError(message.optString("message", "信令错误"))
         }
     }
@@ -283,6 +355,31 @@ class SignalingClient(
             screen = message.optInt("screen", 1).coerceAtLeast(1),
             screenCount = message.optInt("screenCount", 1).coerceAtLeast(1),
             fitMode = message.optString("fitMode", "fit-page")
+        )
+    }
+
+    private fun parseViewerAnnotation(message: JSONObject): RemoteAnnotationPayload {
+        val points = mutableListOf<AnnotationPoint>()
+        val array = message.optJSONArray("points")
+        if (array != null) {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                points.add(
+                    AnnotationPoint(
+                        item.optDouble("x").toFloat(),
+                        item.optDouble("y").toFloat()
+                    )
+                )
+            }
+        }
+        return RemoteAnnotationPayload(
+            action = message.optString("action"),
+            strokeId = message.optString("strokeId"),
+            colorHex = message.optString("color"),
+            width = message.optDouble("width", AnnotationPalette.PEN_WIDTH.toDouble()).toFloat(),
+            isEraser = message.optBoolean("isEraser", false),
+            mode = message.optString("mode", "solid"),
+            points = points
         )
     }
 

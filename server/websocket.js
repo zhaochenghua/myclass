@@ -2,6 +2,7 @@ const { WebSocketServer } = require('ws');
 const { RoomManager, sendJson, DEFAULT_ROOM_TTL_MS } = require('./roomManager');
 
 const TEACHER_ONLY_MESSAGE_TYPES = new Set([
+  'courseware.annotation',
   'courseware.close',
   'courseware.image.viewport',
   'courseware.navigate',
@@ -11,6 +12,13 @@ const TEACHER_ONLY_MESSAGE_TYPES = new Set([
   'webrtc.offer',
   'teacher.orientation',
   'teacher.stop'
+]);
+
+// 仅允许大屏端（viewer）发送，用于把大屏本地画笔回传给教师手机端
+const VIEWER_ONLY_MESSAGE_TYPES = new Set([
+  'viewer.annotation',
+  'viewer.courseware.open',
+  'viewer.courseware.close'
 ]);
 
 function setupWebSocket(server, options) {
@@ -90,6 +98,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'webrtc.answer':
     case 'webrtc.ice-candidate':
     case 'courseware.close':
+    case 'courseware.annotation':
     case 'courseware.image.viewport':
     case 'courseware.navigate':
     case 'courseware.open':
@@ -101,6 +110,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'teacher.stop':
     case 'viewer.courseware.open':
     case 'viewer.courseware.close':
+    case 'viewer.annotation':
       handleForward(socket, message, roomManager, options);
       break;
     default:
@@ -178,8 +188,8 @@ function handleForward(socket, message, roomManager, options) {
     return;
   }
 
-  // viewer.courseware.* 仅允许大屏端发送
-  if (message.type.startsWith('viewer.courseware.') && binding.role !== 'viewer') {
+  // viewer.* 仅允许大屏端发送
+  if (VIEWER_ONLY_MESSAGE_TYPES.has(message.type) && binding.role !== 'viewer') {
     sendJson(socket, { type: 'error', message: '只有教室端可以发送该消息' });
     return;
   }
