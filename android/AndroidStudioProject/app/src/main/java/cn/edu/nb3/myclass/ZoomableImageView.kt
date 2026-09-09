@@ -212,6 +212,33 @@ class ZoomableImageView(context: Context) : View(context) {
         annotationBitmap = null
     }
 
+    // ---- 按页笔迹：课件翻页时保存 / 恢复 ----
+
+    /**
+     * 取出当前页笔迹（翻页前调用）。大屏端尚未结束的回传笔画会先落盘，
+     * 保证保存下来的是完整的一笔。返回副本，避免外部改动影响内部状态。
+     */
+    fun currentStrokes(): List<AnnotationStroke> {
+        flushRemoteStrokes()
+        return strokes.map { it.copy(points = it.points.toMutableList()) }
+    }
+
+    /**
+     * 载入指定页的笔迹（翻页后调用）。仅本地恢复，不产生任何同步副作用，
+     * 也不改动视口——视口由 setImage 负责复位。
+     */
+    fun replaceStrokes(next: List<AnnotationStroke>) {
+        activeStroke = null
+        activeDrawnIndex = 0
+        pendingPoints.clear()
+        strokes.clear()
+        strokes.addAll(next.map { it.copy(points = it.points.toMutableList()) })
+        remoteStrokes.clear()
+        annotationDirty = true
+        invalidate()
+        onAnnotationCountChanged?.invoke()
+    }
+
     // ---- 画笔：大屏端画笔回传（保证两端笔迹栈完全一致）----
 
     /**
