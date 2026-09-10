@@ -21,6 +21,8 @@ import { SignalingClient, resolveWebSocketUrl } from './signaling.js';
 import { LivePublisher } from './publisher.js';
 import { MediaPipeline } from './pipeline.js';
 import { CoursewareClient, coursewareFormatLabel } from './courseware.js';
+import { AnnotationBoard } from './annotation.js';
+import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js';
 
 const QUALITY_PRESETS = {
   smooth: { label: '流畅 960×720', width: 960, height: 720, fps: 24, maxBitrate: 3000000 },
@@ -49,6 +51,12 @@ const state = {
   media: { queue: [], index: -1, preloading: false, uploading: false },
   // 大屏端视频播放状态（遥控器界面用）
   video: { playing: false, position: 0, duration: 0, muted: false, volume: 100 },
+  // 画笔标注：图片投屏与课件投屏各一块画板
+  mediaBoard: null,
+  cwBoard: null,
+  // 课件标注按页缓存笔迹（与 Android coursewarePdfStrokes 一致）
+  cwStrokes: { store: new Map(), page: 0 },
+  cwPdf: { doc: null, url: '', pageCount: 0, rendering: false, pendingPage: 0 },
   resumeLiveAfterJoin: false,
   pendingCoursewareClose: false,
   uploadAbort: null,
@@ -58,6 +66,8 @@ const state = {
 // ---------------------------------------------------------------- 引导
 
 async function bootstrap() {
+  // 标注画板只依赖 DOM，最先初始化：即使后续配置/登录失败，画笔相关代码也不会拿到空画板
+  setupAnnotationBoards();
   bindStaticEvents();
   renderQualityOptions();
   registerServiceWorker();
@@ -186,6 +196,9 @@ function showMenu() {
   state.screen = 'Menu';
   showView('Menu');
   $('menuStatus').textContent = `已连接课堂 ${state.roomCode || ''}`;
+  // 离开投屏/课件页时收起画笔，避免回到菜单后工具栏残留
+  setMediaPenMode(false);
+  setCoursewarePenMode(false);
 }
 
 // ---------------------------------------------------------------- 信令
@@ -226,6 +239,7 @@ function ensureSignaling() {
       onCoursewareVideoState: handleCoursewareVideoState,
       onViewerCoursewareOpen: handleViewerCoursewareOpen,
       onViewerCoursewareClose: handleViewerCoursewareClose,
+      onViewerAnnotation: handleViewerAnnotation,
       onSignalError: (message) => toast(message, { warn: true }),
       onDisconnected: () => {
         if (state.joined) $('connectHint').textContent = '连接已断开，正在重新连接...';
@@ -918,21 +932,28 @@ function applyMediaPreviewRotation() {
   // 先缩放（含旋转后的适应修正），再按归一化中心反向平移，使视口对准图片对应区域
   img.style.transform =
     `rotate(${rotation}deg) scale(${scale * adapt}) translate(${-panX * 100}%, ${-panY * 100}%)`;
+  // 图片显示矩形变化后，标注画布要跟着重绘（笔迹坐标以图片显示矩形为基准）
+  state.mediaBoard?.invalidate();
 }
 
-/** 图片投屏页缩放手势：双指捏合 + 单指平移 + 滚轮（桌面调试），仅对图片生效 */
+/** 图片投屏页手势：双指捏合缩放 + 双指拖动平移 + 单指平移 + 滚轮（桌面调试），仅对图片生效 */
 function bindMediaGestures() {
   const stage = $('mediaPreviewBox');
   if (!stage) return;
   let pinchActive = false;
   let lastDist = 0;
   let lastSingle = null;
+  let lastCenter = null; // 双指中点，用于双指平移（画笔模式下单指被绘制占用，只能靠双指平移）
 
   const pointsOf = (event) => {
     const list = event.touches ? Array.from(event.touches) : [];
     return list.map((p) => ({ x: p.clientX, y: p.clientY }));
   };
   const distOf = (pts) => Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  const centerOf = (pts) => ({
+    x: (pts[0].x + pts[1].x) / 2,
+    y: (pts[0].y + pts[1].y) / 2
+  });
   const currentItem = () => state.media.queue[state.media.index];
   const imageShown = () => {
     const it = currentItem();
@@ -943,25 +964,39 @@ function bindMediaGestures() {
     if (!imageShown()) return;
     const pts = pointsOf(event);
     if (pts.length >= 2) {
+      // 第二根手指落下：先结束当前笔画，再进入双指缩放/平移（与 Android 一致）
+      state.mediaBoard?.endActiveStroke(true);
       pinchActive = true;
       lastDist = distOf(pts);
+      lastCenter = centerOf(pts);
       lastSingle = null;
     } else if (pts.length === 1) {
       lastSingle = { x: pts[0].x, y: pts[0].y };
+      lastCenter = null;
     }
   }, { passive: true });
 
   stage.addEventListener('touchmove', (event) => {
     if (!imageShown()) return;
     const pts = pointsOf(event);
-    if (pts.length >= 2 && lastDist > 0) {
+    if (pts.length >= 2) {
       pinchActive = true;
+      const box = stage.getBoundingClientRect();
       const current = distOf(pts);
-      if (current > 0) zoomByMedia(current / lastDist);
+      if (current > 0 && lastDist > 0) zoomByMedia(current / lastDist);
       lastDist = current;
+      // 双指平移：按中点位移拖动画面（缩放状态下画笔模式也能用）
+      const center = centerOf(pts);
+      if (lastCenter && box.width && box.height) {
+        panByMedia((center.x - lastCenter.x) / box.width, (center.y - lastCenter.y) / box.height);
+      }
+      lastCenter = center;
+      lastSingle = null;
       event.preventDefault();
       return;
     }
+    // 画笔模式下单指用于绘制，不再平移画面
+    if (state.mediaBoard?.penMode) return;
     if (pts.length === 1 && lastSingle) {
       const dx = pts[0].x - lastSingle.x;
       const dy = pts[0].y - lastSingle.y;
@@ -977,7 +1012,12 @@ function bindMediaGestures() {
     if (remaining.length < 2) {
       pinchActive = false;
       lastDist = 0;
+      lastCenter = null;
       lastSingle = remaining.length === 1 ? { x: remaining[0].x, y: remaining[0].y } : null;
+    } else {
+      // 还剩两根及以上手指：以最新两点重设基准，避免抬起一指后画面跳一下
+      lastDist = distOf(remaining);
+      lastCenter = centerOf(remaining);
     }
     if (remaining.length === 0) lastSingle = null;
   }, { passive: true });
@@ -986,6 +1026,7 @@ function bindMediaGestures() {
     pinchActive = false;
     lastDist = 0;
     lastSingle = null;
+    lastCenter = null;
   }, { passive: true });
 
   // 桌面/触控板调试用：滚轮缩放
@@ -1028,6 +1069,9 @@ function switchToReadyMediaItem(index) {
   if (!item) return;
   state.media.index = index;
   state.courseware = null;
+  // 换一张图就是换一份标注：收起画笔并清空本地笔迹
+  setMediaPenMode(false);
+  state.mediaBoard?.reset();
 
   stopLive({ notify: false });
   state.signaling?.sendStop();
@@ -1242,9 +1286,7 @@ function updateMediaCastUI(statusOverride) {
   $('mediaVideoPanel').hidden = !isVideo;
   // 旋转只对图片有意义（视频自带方向信息）
   $('mediaImageActions').hidden = isVideo || !item;
-  if (!isVideo && item) {
-    $('mediaRotate').textContent = `旋转 90°（${item.rotation || 0}°）`;
-  }
+  // 旋转按钮保持固定文案"旋转 90°"，当前角度由 rotateCurrentMedia 的提示条反馈
   updateMediaPreview(item, isVideo);
 
   const switchRow = $('mediaSwitchRow');
@@ -1272,6 +1314,8 @@ function updateMediaPreview(item, isVideo) {
     img.hidden = true;
     img.removeAttribute('src');
     img.style.transform = '';
+    // 视频没有可标注的内容，顺带收起画笔
+    state.mediaBoard?.setEnabled(false);
     return;
   }
   // 图片尺寸要等加载完才知道，旋转后的自适应缩放必须在 onload 里再算一次
@@ -1284,6 +1328,7 @@ function updateMediaPreview(item, isVideo) {
     img.src = item.url;
   }
   img.hidden = false;
+  state.mediaBoard?.setEnabled(true);
   applyMediaPreviewRotation();
 }
 
@@ -1381,6 +1426,9 @@ function resetMediaCastState() {
     URL.revokeObjectURL(mediaPreviewUrl);
     mediaPreviewUrl = null;
   }
+  setMediaPenMode(false);
+  state.mediaBoard?.setEnabled(false);
+  state.mediaBoard?.reset();
   state.media.queue = [];
   state.media.index = -1;
   resetVideoState();
@@ -1406,6 +1454,361 @@ function resumeMediaCast() {
     updateMediaCastUI();
   }
   return true;
+}
+
+// ---------------------------------------------------------------- 画笔标注
+// 与 Android 端一致：iPad 上直接标注 → 通过 courseware.annotation 增量同步到大屏；
+// 大屏端的标注动作（viewer.annotation）也会回传并在本地回放，两端笔迹栈保持一致。
+// 图片投屏 page = 0（由大屏按当前页处理），课件投屏传当前页码。
+
+const MEDIA_BAR = {
+  colors: 'mediaAnnotationColors',
+  eraser: 'mediaEraserButton',
+  undo: 'mediaUndoButton',
+  clear: 'mediaClearButton'
+};
+const CW_BAR = {
+  colors: 'cwAnnotationColors',
+  eraser: 'cwEraserButton',
+  undo: 'cwUndoButton',
+  clear: 'cwClearButton'
+};
+
+function setupAnnotationBoards() {
+  if (state.mediaBoard && state.cwBoard) return; // 已初始化
+  try {
+    createAnnotationBoards();
+  } catch (error) {
+    // 画板初始化失败不应影响直播等主流程，这里给出可见提示便于排查
+    console.error('[MyClass] 标注画板初始化失败', error);
+    toast('标注功能初始化失败，请刷新页面重试', { warn: true, duration: 4000 });
+  }
+}
+
+function createAnnotationBoards() {
+  state.mediaBoard = new AnnotationBoard({
+    canvas: $('mediaAnnotationCanvas'),
+    getSurface: () => ($('mediaPreview').hidden ? null : $('mediaPreview')),
+    emit: (payload) => sendAnnotation(payload, 0),
+    onChange: () => {
+      refreshAnnotationBar(MEDIA_BAR);
+      syncAnnotationCanvas(MEDIA_BAR);
+    }
+  });
+
+  state.cwBoard = new AnnotationBoard({
+    canvas: $('cwAnnotationCanvas'),
+    getSurface: coursewareSurface,
+    emit: (payload) => sendAnnotation(payload, state.courseware?.page || 1),
+    onChange: () => {
+      refreshAnnotationBar(CW_BAR);
+      syncAnnotationCanvas(CW_BAR);
+    }
+  });
+
+  bindAnnotationBar(MEDIA_BAR, state.mediaBoard);
+  bindAnnotationBar(CW_BAR, state.cwBoard);
+}
+
+function boardOfBar(bar) {
+  return bar === MEDIA_BAR ? state.mediaBoard : state.cwBoard;
+}
+
+function bindAnnotationBar(bar, board) {
+  $(bar.colors)
+    .querySelectorAll('.annotation-color')
+    .forEach((dot) => {
+      dot.addEventListener('click', () => {
+        board.setColor(dot.dataset.color); // 选颜色自动退出板擦
+        refreshAnnotationBar(bar);
+      });
+    });
+  $(bar.eraser).addEventListener('click', () => {
+    board.setEraser(!board.eraser);
+    refreshAnnotationBar(bar);
+  });
+  $(bar.undo).addEventListener('click', () => {
+    if (!board.undo()) toast('没有可撤销的笔迹');
+  });
+  $(bar.clear).addEventListener('click', () => {
+    if (!board.clear()) toast('没有可清空的笔迹');
+  });
+}
+
+/** 有笔迹或处于画笔模式时显示标注画布；非画笔模式下画布不接收触摸，手势照常生效 */
+function syncAnnotationCanvas(bar) {
+  const board = boardOfBar(bar);
+  const canvas = $(bar === MEDIA_BAR ? 'mediaAnnotationCanvas' : 'cwAnnotationCanvas');
+  if (!board || !canvas) return;
+  canvas.hidden = !(board.penMode || board.count > 0);
+  canvas.classList.toggle('is-pen', board.penMode);
+}
+
+function refreshAnnotationBar(bar) {
+  const board = boardOfBar(bar);
+  if (!board) return;
+  $(bar.colors)
+    .querySelectorAll('.annotation-color')
+    .forEach((dot) => {
+      dot.classList.toggle('is-active', !board.eraser && dot.dataset.color === board.color);
+    });
+  $(bar.eraser).classList.toggle('is-active', board.eraser);
+  const hasStrokes = board.count > 0;
+  $(bar.undo).disabled = !hasStrokes;
+  $(bar.clear).disabled = !hasStrokes;
+}
+
+/** 把画板产生的动作翻译成信令消息（page 由调用场景决定） */
+function sendAnnotation(payload, page) {
+  const signaling = state.signaling;
+  if (!signaling?.isOpen()) return;
+  switch (payload.action) {
+    case 'begin':
+      signaling.sendAnnotationBegin(
+        payload.strokeId,
+        payload.colorHex,
+        payload.width,
+        payload.isEraser,
+        payload.points[0],
+        page
+      );
+      break;
+    case 'points':
+      signaling.sendAnnotationPoints(payload.strokeId, payload.points, page);
+      break;
+    case 'end':
+      signaling.sendAnnotationEnd(payload.strokeId, page);
+      break;
+    case 'undo':
+      signaling.sendAnnotationUndo(page);
+      break;
+    case 'clear':
+      signaling.sendAnnotationClear(page);
+      break;
+    default:
+      break;
+  }
+}
+
+/** 大屏端画笔回传：直接回放动作，保持两端笔迹一致 */
+function handleViewerAnnotation(payload) {
+  if (!payload || typeof payload.action !== 'string') return;
+  if (state.screen === 'MediaCast') {
+    state.mediaBoard?.applyRemote(payload);
+    return;
+  }
+  if (state.screen === 'CoursewarePlay') {
+    const page = Number(payload.page) || 0;
+    // page = 0 表示旧版大屏或未分页场景，按当前页处理
+    if (page > 0 && page !== (state.courseware?.page || 1)) return;
+    state.cwBoard?.applyRemote(payload);
+  }
+}
+
+// ---- 图片投屏标注 ----
+
+function setMediaPenMode(on) {
+  const board = state.mediaBoard;
+  if (!board) return;
+  board.setPenMode(on);
+  syncAnnotationCanvas(MEDIA_BAR);
+  $('mediaAnnotationBar').hidden = !on;
+  const button = $('mediaPenButton');
+  button.textContent = on ? '退出画笔' : '画笔';
+  button.classList.toggle('is-active', on);
+  if (on) board.render();
+  refreshAnnotationBar(MEDIA_BAR);
+}
+
+function toggleMediaPen() {
+  const board = state.mediaBoard;
+  if (!board) return;
+  const item = state.media.queue[state.media.index];
+  if (!item || item.kind !== 'image') {
+    toast('只有图片可以标注', { warn: true });
+    return;
+  }
+  const next = !board.penMode;
+  setMediaPenMode(next);
+  if (next) toast('画笔模式：单指绘制，双指缩放拖动');
+}
+
+// ---- 课件投屏标注 ----
+
+function coursewareSurface() {
+  const canvas = $('cwPageCanvas');
+  if (!canvas.hidden) return canvas;
+  const image = $('cwPageImage');
+  if (!image.hidden) return image;
+  return null;
+}
+
+function coursewarePreviewKind(cw) {
+  if (!cw?.url) return 'none';
+  if (cw.linkUrl) return 'link';
+  if (/\.pdf(\?|$)/i.test(cw.url)) return 'pdf';
+  if (IMAGE_PATTERN.test(cw.url)) return 'image';
+  return 'other';
+}
+
+function setCoursewarePenMode(on) {
+  const board = state.cwBoard;
+  if (!board) {
+    setupAnnotationBoards();
+    return;
+  }
+  if (on && !board.enabled) {
+    toast('当前课件不支持在 iPad 上标注', { warn: true });
+    return;
+  }
+  board.setPenMode(on);
+  syncAnnotationCanvas(CW_BAR);
+  $('cwAnnotationBar').hidden = !on;
+  const button = $('cwPenButton');
+  button.textContent = on ? '退出画笔' : '画笔';
+  button.classList.toggle('is-active', on);
+  if (on) board.render();
+  refreshAnnotationBar(CW_BAR);
+}
+
+/** 打开课件后准备本地预览（PDF 渲染成位图，从而复用与图片一致的标注能力） */
+async function prepareCoursewarePreview() {
+  const cw = state.courseware;
+  if (!cw) return;
+
+  state.cwStrokes.store.clear();
+  state.cwStrokes.page = cw.page || 1;
+  state.cwBoard?.reset();
+  setCoursewarePenMode(false);
+
+  const kind = coursewarePreviewKind(cw);
+  if (kind === 'pdf') {
+    await loadCoursewarePdf(cw);
+    return;
+  }
+  if (kind === 'image') {
+    $('cwPageCanvas').hidden = true;
+    const image = $('cwPageImage');
+    image.onload = () => state.cwBoard?.invalidate();
+    image.src = cw.url;
+    image.hidden = false;
+    $('cwStageHint').hidden = true;
+    state.cwBoard?.setEnabled(true);
+    state.cwBoard?.invalidate();
+    return;
+  }
+
+  $('cwPageCanvas').hidden = true;
+  $('cwPageImage').hidden = true;
+  $('cwStageHint').hidden = false;
+  $('cwStageHint').textContent =
+    kind === 'link' ? '链接课件由大屏直接打开，不支持在 iPad 上标注' : '该课件暂不支持在 iPad 上预览标注';
+  state.cwBoard?.setEnabled(false);
+}
+
+async function loadCoursewarePdf(cw) {
+  const hint = $('cwStageHint');
+  $('cwPageCanvas').hidden = true;
+  $('cwPageImage').hidden = true;
+
+  if (state.cwPdf.doc && state.cwPdf.url === cw.url) {
+    hint.hidden = true;
+    await renderCoursewarePage(state.courseware?.page || 1);
+    return;
+  }
+
+  hint.hidden = false;
+  hint.textContent = '正在加载课件预览...';
+  try {
+    const doc = await openPdfDocument(cw.url);
+    if (state.courseware !== cw) {
+      destroyPdfDocument(doc);
+      return;
+    }
+    destroyPdfDocument(state.cwPdf.doc);
+    state.cwPdf.doc = doc;
+    state.cwPdf.url = cw.url;
+    state.cwPdf.pageCount = doc.numPages || 0;
+    if (state.courseware && doc.numPages > 0 && state.courseware.pageCount !== doc.numPages) {
+      state.courseware.pageCount = doc.numPages;
+    }
+    hint.hidden = true;
+    await renderCoursewarePage(state.courseware?.page || 1);
+    updateCoursewareStatus();
+  } catch (error) {
+    hint.hidden = false;
+    hint.textContent = `课件预览加载失败：${error.message || '未知错误'}`;
+    state.cwBoard?.setEnabled(false);
+  }
+}
+
+async function renderCoursewarePage(page) {
+  const doc = state.cwPdf.doc;
+  if (!doc) return;
+  const total = state.cwPdf.pageCount || doc.numPages || 1;
+  const target = clamp(Math.round(page) || 1, 1, total);
+
+  if (state.cwPdf.rendering) {
+    state.cwPdf.pendingPage = target;
+    return;
+  }
+  state.cwPdf.rendering = true;
+  try {
+    await renderPdfPage(doc, target, $('cwPageCanvas'));
+    if (!state.courseware) return;
+    $('cwPageCanvas').hidden = false;
+    $('cwStageHint').hidden = true;
+    applyCoursewarePageAnnotations(target);
+    state.cwBoard?.setEnabled(true);
+    state.cwBoard?.invalidate();
+  } catch {
+    $('cwStageHint').hidden = false;
+    $('cwStageHint').textContent = `第 ${target} 页渲染失败`;
+  } finally {
+    state.cwPdf.rendering = false;
+    const pending = state.cwPdf.pendingPage;
+    state.cwPdf.pendingPage = 0;
+    if (pending && pending !== target) await renderCoursewarePage(pending);
+  }
+}
+
+/** 翻页时按页存取笔迹（与 Android MainActivity 中 coursewarePdfStrokes 一致） */
+function applyCoursewarePageAnnotations(page) {
+  const board = state.cwBoard;
+  if (!board) return;
+  const store = state.cwStrokes.store;
+  const previous = state.cwStrokes.page;
+  if (previous && previous !== page) {
+    const saved = board.currentStrokes();
+    if (saved.length > 0) store.set(previous, saved);
+    else store.delete(previous);
+  }
+  state.cwStrokes.page = page;
+  board.replaceStrokes(store.get(page) || []);
+}
+
+function releaseCoursewarePreview() {
+  destroyPdfDocument(state.cwPdf.doc);
+  state.cwPdf.doc = null;
+  state.cwPdf.url = '';
+  state.cwPdf.pageCount = 0;
+  state.cwPdf.pendingPage = 0;
+  state.cwStrokes.store.clear();
+  state.cwStrokes.page = 0;
+  setCoursewarePenMode(false);
+  state.cwBoard?.setEnabled(false);
+  state.cwBoard?.reset();
+  $('cwPageCanvas').hidden = true;
+  $('cwPageImage').hidden = true;
+  $('cwAnnotationCanvas').hidden = true;
+  $('cwAnnotationBar').hidden = true;
+  $('cwStageHint').hidden = false;
+  $('cwStageHint').textContent = '正在打开课件...';
+}
+
+function clearCourseware() {
+  state.courseware = null;
+  releaseCoursewarePreview();
 }
 
 // ---------------------------------------------------------------- 课件
@@ -1573,6 +1976,8 @@ function openCourseware(item) {
   state.screen = 'CoursewarePlay';
   showView('CoursewarePlay');
   updateCoursewareStatus();
+  // 本地渲染课件页面，供 iPad 上直接标注（失败不影响大屏播放）
+  prepareCoursewarePreview().catch(() => {});
   toast(state.courseware.linkUrl ? '链接课件已推送到大屏' : '课件已打开');
 }
 
@@ -1587,12 +1992,15 @@ function updateCoursewareStatus() {
 
 function handleCoursewareState(message) {
   if (!state.courseware) return;
+  const previousPage = state.courseware.page;
   state.courseware.page = Math.max(1, Number(message.page) || 1);
   state.courseware.pageCount = Math.max(1, Number(message.pageCount) || 1);
   state.courseware.screen = Math.max(1, Number(message.screen) || 1);
   state.courseware.screenCount = Math.max(1, Number(message.screenCount) || 1);
   if (message.fitMode) state.courseware.fitMode = message.fitMode;
   if (state.screen === 'CoursewarePlay') updateCoursewareStatus();
+  // 翻页后同步渲染对应页，并按页恢复该页笔迹
+  if (state.courseware.page !== previousPage) renderCoursewarePage(state.courseware.page);
 }
 
 function handleViewerCoursewareOpen(message) {
@@ -1612,6 +2020,8 @@ function handleViewerCoursewareOpen(message) {
   state.screen = 'CoursewarePlay';
   showView('CoursewarePlay');
   updateCoursewareStatus();
+  // 大屏端直接打开的课件也要在本地渲染，才能用 iPad 标注
+  prepareCoursewarePreview().catch(() => {});
 }
 
 function handleViewerCoursewareClose() {
@@ -1623,7 +2033,7 @@ function handleViewerCoursewareClose() {
   }
   if (state.screen !== 'CoursewarePlay') return;
   // 不回发关闭信号，避免与大屏端形成循环
-  state.courseware = null;
+  clearCourseware();
   showMenu();
 }
 
@@ -1652,7 +2062,7 @@ function stopCoursewareSignals() {
 
 function stopCourseware({ silent = false } = {}) {
   if (!state.courseware) return;
-  state.courseware = null;
+  clearCourseware();
   if (silent) return;
   if (!stopCoursewareSignals() && state.roomCode) {
     state.pendingCoursewareClose = true;
@@ -1833,6 +2243,8 @@ function bindStaticEvents() {
     updateMediaCastUI();
   });
 
+  $('mediaPenButton').addEventListener('click', () => toggleMediaPen());
+
   $('mediaQueueBack').addEventListener('click', () => backFromMediaQueue());
   $('mediaQueueAdd').addEventListener('click', () => openMediaPicker());
 
@@ -1845,6 +2257,9 @@ function bindStaticEvents() {
   $('cwListRefresh').addEventListener('click', () => loadServerCourseware());
   $('cwListUpload').addEventListener('click', () => pickCoursewareFile());
   $('cwListFileInput').addEventListener('change', (event) => uploadCourseware(event.target.files?.[0]));
+
+  $('cwBackButton').addEventListener('click', () => showMenu());
+  $('cwPenButton').addEventListener('click', () => setCoursewarePenMode(!state.cwBoard?.penMode));
 
   bindPageLongPress('cwPrevPage', -1);
   bindPageLongPress('cwNextPage', 1);
@@ -1860,6 +2275,9 @@ function bindStaticEvents() {
   });
   window.addEventListener('resize', () => {
     sendOrientationNow();
+    // 容器尺寸变化后标注画布要重新按新尺寸绘制
+    state.mediaBoard?.render();
+    state.cwBoard?.render();
   });
 
   document.addEventListener('visibilitychange', () => {

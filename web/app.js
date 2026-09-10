@@ -2022,6 +2022,21 @@ function clampImageViewCenter() {
   view.centerY = clamp(view.centerY, 0.5 - limitY, 0.5 + limitY);
 }
 
+/**
+ * 当前是否还有可拖动的范围（内容在某个方向超出视口）。
+ * 图片投屏未放大时正好铺满视口，确实拖不动；
+ * 但 PDF 课件是宽度充满，页面常常高于屏幕，即使未放大也应能上下拖动，
+ * 因此不能用“是否放大”代替这个判断。
+ */
+function imageViewHasPanRange() {
+  const view = state.imageView;
+  const { baseWidth, baseHeight } = imageViewBaseSize();
+  if (!baseWidth || !baseHeight) return false;
+  const rect = elements.videoView.getBoundingClientRect();
+  const scale = Math.max(view.scale || 1, view.MIN_SCALE);
+  return baseWidth * scale > rect.width + 1 || baseHeight * scale > rect.height + 1;
+}
+
 /** 把 state.imageView 渲染成实际 transform（图片与 PDF 课件共用同一套换算） */
 function applyCoursewareImageViewTransform() {
   const kind = currentContentKind();
@@ -2117,8 +2132,8 @@ function panImageViewTo(startCenterX, startCenterY, dx, dy) {
 
 function beginImagePan(event) {
   const view = state.imageView;
-  // 未放大时没有可平移的范围，留给双指缩放等手势处理
-  if ((view.scale || 1) <= 1.0001) return;
+  // 内容未超出视口时没有可平移的范围，留给双指缩放等手势处理
+  if (!imageViewHasPanRange()) return;
   event.preventDefault();
   runCatching(() => elements.annotationCanvas.setPointerCapture(event.pointerId));
   view.active = true;
@@ -2200,7 +2215,7 @@ function endImagePinch() {
     view.startY = point.y;
     view.startCenterX = view.centerX;
     view.startCenterY = view.centerY;
-    if ((view.scale || 1) > 1.0001) elements.annotationCanvas.classList.add('is-panning');
+    if (imageViewHasPanRange()) elements.annotationCanvas.classList.add('is-panning');
   }
 }
 

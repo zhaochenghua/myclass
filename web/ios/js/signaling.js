@@ -2,13 +2,23 @@
 //
 // 手机端 -> 服务端：teacher.join / webrtc.offer / webrtc.ice-candidate /
 //                   teacher.orientation / teacher.stop /
-//                   courseware.open / courseware.navigate / courseware.page / courseware.close
+//                   courseware.open / courseware.navigate / courseware.page / courseware.close /
+//                   courseware.annotation（begin / points / end / undo / clear）
 // 服务端 -> 手机端：join.accepted / join.rejected / teacher.kicked /
 //                   viewer.disconnected / room.expired / webrtc.answer /
 //                   webrtc.ice-candidate / courseware.state /
-//                   viewer.courseware.open / viewer.courseware.close / error
+//                   viewer.courseware.open / viewer.courseware.close /
+//                   viewer.annotation（大屏画笔回传）/ error
 
 const RECONNECT_DELAY_MS = 1500;
+
+/** 与大屏端、Android 端一致：归一化坐标保留 4 位小数 */
+function annotationPoint(point) {
+  return {
+    x: Math.round(Number(point?.x || 0) * 10000) / 10000,
+    y: Math.round(Number(point?.y || 0) * 10000) / 10000
+  };
+}
 
 export class SignalingClient {
   constructor(options = {}) {
@@ -131,6 +141,50 @@ export class SignalingClient {
     return this.send(message);
   }
 
+  // ---- 画笔标注 ----
+  // 与 Android SignalingClient 完全一致：同一笔画用 strokeId 串联 begin → points（节流增量）→ end，
+  // 坐标口径与大屏端画笔一致（0~1 归一化，基准为内容变换后的 AABB）。
+  // undo / clear 只作用于 page 指定的那一页；page = 0 时由大屏端按当前页处理。
+
+  sendAnnotationBegin(strokeId, colorHex, width, isEraser, firstPoint, page = 0) {
+    return this.send({
+      type: 'courseware.annotation',
+      action: 'begin',
+      strokeId,
+      color: colorHex,
+      width,
+      isEraser: isEraser === true,
+      mode: 'solid',
+      lineMode: false,
+      page,
+      points: [annotationPoint(firstPoint)]
+    });
+  }
+
+  sendAnnotationPoints(strokeId, points, page = 0) {
+    const list = Array.isArray(points) ? points : [];
+    if (list.length === 0) return false;
+    return this.send({
+      type: 'courseware.annotation',
+      action: 'points',
+      strokeId,
+      page,
+      points: list.map(annotationPoint)
+    });
+  }
+
+  sendAnnotationEnd(strokeId, page = 0) {
+    return this.send({ type: 'courseware.annotation', action: 'end', strokeId, page });
+  }
+
+  sendAnnotationUndo(page = 0) {
+    return this.send({ type: 'courseware.annotation', action: 'undo', page });
+  }
+
+  sendAnnotationClear(page = 0) {
+    return this.send({ type: 'courseware.annotation', action: 'clear', page });
+  }
+
   // ---- 内部实现 ----
   #open() {
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
@@ -193,6 +247,9 @@ export class SignalingClient {
           break;
         case 'viewer.courseware.close':
           this.handlers.onViewerCoursewareClose?.(message);
+          break;
+        case 'viewer.annotation':
+          this.handlers.onViewerAnnotation?.(message);
           break;
         case 'error':
           this.handlers.onSignalError?.(message.message || '信令错误');

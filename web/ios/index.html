@@ -32,76 +32,89 @@
     <main class="app">
       <!-- ============ 登录 / 注册 ============ -->
       <section class="view view-center" id="viewAuth" hidden>
+        <!-- 横屏时 panel-side / panel-main 变成左右两栏；竖屏用 display:contents 保持原有单列顺序 -->
         <div class="panel">
-          <h1 class="title">上课投屏平台</h1>
-          <p class="subtitle">首次使用请注册账号</p>
-          <label class="field">
-            <input
-              id="authUsername"
-              type="text"
-              inputmode="text"
-              autocomplete="username"
-              placeholder="用户名（2-20位）"
-            />
-          </label>
-          <label class="field">
-            <input
-              id="authPassword"
-              type="password"
-              autocomplete="current-password"
-              placeholder="密码（4-32位）"
-            />
-          </label>
-          <button class="btn btn-primary" id="authLogin" type="button">登录</button>
-          <button class="btn btn-ghost" id="authRegister" type="button">注册新账号</button>
-          <p class="footnote">本应用由宁波三中人工智能实验室开发维护</p>
-          <p class="footnote footnote-dim" id="authVersion"></p>
+          <div class="panel-side">
+            <h1 class="title">上课投屏平台</h1>
+            <p class="subtitle">首次使用请注册账号</p>
+            <p class="footnote">本应用由宁波三中人工智能实验室开发维护</p>
+            <p class="footnote footnote-dim" id="authVersion"></p>
+          </div>
+          <div class="panel-main">
+            <label class="field">
+              <input
+                id="authUsername"
+                type="text"
+                inputmode="text"
+                autocomplete="username"
+                placeholder="用户名（2-20位）"
+              />
+            </label>
+            <label class="field">
+              <input
+                id="authPassword"
+                type="password"
+                autocomplete="current-password"
+                placeholder="密码（4-32位）"
+              />
+            </label>
+            <button class="btn btn-primary" id="authLogin" type="button">登录</button>
+            <button class="btn btn-ghost" id="authRegister" type="button">注册新账号</button>
+          </div>
         </div>
       </section>
 
       <!-- ============ 输入连接码 ============ -->
       <section class="view view-center" id="viewConnect" hidden>
         <div class="panel">
-          <h1 class="title">上课投屏平台</h1>
-          <p class="subtitle" id="connectHint">请输入教室大屏上的 4 位连接码</p>
-          <input
-            id="roomCodeInput"
-            class="code-input"
-            type="text"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            maxlength="4"
-            autocomplete="off"
-            placeholder="----"
-          />
-          <button class="btn btn-primary" id="connectButton" type="button">连接</button>
-          <div class="split-row">
-            <button class="btn btn-ghost" id="manageCoursewareButton" type="button">
-              课件管理
-            </button>
-            <button class="btn btn-ghost" id="switchUserButton" type="button">
-              切换用户
-            </button>
+          <div class="panel-side">
+            <h1 class="title">上课投屏平台</h1>
+            <p class="subtitle" id="connectHint">请输入教室大屏上的 4 位连接码</p>
+            <p class="footnote" id="connectServerHint"></p>
+            <p class="footnote footnote-dim" id="connectVersion"></p>
           </div>
-          <p class="footnote" id="connectServerHint"></p>
-          <p class="footnote footnote-dim" id="connectVersion"></p>
+          <div class="panel-main">
+            <input
+              id="roomCodeInput"
+              class="code-input"
+              type="text"
+              inputmode="numeric"
+              pattern="[0-9]*"
+              maxlength="4"
+              autocomplete="off"
+              placeholder="----"
+            />
+            <button class="btn btn-primary" id="connectButton" type="button">连接</button>
+            <div class="split-row">
+              <button class="btn btn-ghost" id="manageCoursewareButton" type="button">
+                课件管理
+              </button>
+              <button class="btn btn-ghost" id="switchUserButton" type="button">
+                切换用户
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 
       <!-- ============ 功能菜单 ============ -->
       <section class="view view-center" id="viewMenu" hidden>
         <div class="panel">
-          <h1 class="title">功能菜单</h1>
-          <p class="subtitle" id="menuStatus">已连接课堂</p>
-          <button class="btn btn-primary" id="menuCamera" type="button">摄像头直播</button>
-          <button class="btn btn-primary" id="menuMedia" type="button">图片视频投屏</button>
-          <button class="btn btn-primary" id="menuCourseware" type="button">播放课件</button>
-          <label class="field field-inline">
-            <span>画质</span>
-            <select id="qualitySelect"></select>
-          </label>
-          <button class="btn btn-ghost" id="menuDisconnect" type="button">断开连接</button>
-          <p class="footnote" id="menuVersion"></p>
+          <div class="panel-side">
+            <h1 class="title">功能菜单</h1>
+            <p class="subtitle" id="menuStatus">已连接课堂</p>
+            <p class="footnote" id="menuVersion"></p>
+          </div>
+          <div class="panel-main">
+            <button class="btn btn-primary" id="menuCamera" type="button">摄像头直播</button>
+            <button class="btn btn-primary" id="menuMedia" type="button">图片视频投屏</button>
+            <button class="btn btn-primary" id="menuCourseware" type="button">播放课件</button>
+            <label class="field field-inline">
+              <span>画质</span>
+              <select id="qualitySelect"></select>
+            </label>
+            <button class="btn btn-ghost" id="menuDisconnect" type="button">断开连接</button>
+          </div>
         </div>
       </section>
 
@@ -133,15 +146,19 @@
       <!-- ============ 图片视频投屏来源 ============ -->
       <section class="view view-center" id="viewMediaSource" hidden>
         <div class="panel">
-          <h1 class="title">图片视频投屏</h1>
-          <button class="btn btn-primary" id="mediaLocalButton" type="button">
-            本机图片视频（可多选）
-          </button>
-          <button class="btn btn-primary" id="mediaServerButton" type="button">服务器图片视频</button>
-          <button class="btn btn-ghost" id="mediaSourceBack" type="button">返回菜单</button>
-          <p class="footnote" id="mediaSourceStatus">
-            可一次选择多个图片或视频，投屏中用“上一个/下一个”直接切换，无需重新选择
-          </p>
+          <div class="panel-side">
+            <h1 class="title">图片视频投屏</h1>
+            <p class="footnote" id="mediaSourceStatus">
+              可一次选择多个图片或视频，投屏中用“上一个/下一个”直接切换，无需重新选择
+            </p>
+          </div>
+          <div class="panel-main">
+            <button class="btn btn-primary" id="mediaLocalButton" type="button">
+              本机图片视频（可多选）
+            </button>
+            <button class="btn btn-primary" id="mediaServerButton" type="button">服务器图片视频</button>
+            <button class="btn btn-ghost" id="mediaSourceBack" type="button">返回菜单</button>
+          </div>
         </div>
       </section>
 
@@ -155,6 +172,8 @@
 
         <div class="media-body" id="mediaPreviewBox">
           <img class="media-preview" id="mediaPreview" alt="" hidden />
+          <!-- 标注画布：仅在画笔模式显示，覆盖整个预览区 -->
+          <canvas class="annotation-canvas" id="mediaAnnotationCanvas" hidden></canvas>
           <div class="media-video" id="mediaVideoPanel" hidden>
             <button class="btn btn-primary" id="mediaPlayToggle" type="button">播放</button>
             <div class="media-row">
@@ -172,9 +191,24 @@
 
         <footer class="list-footer">
           <p class="subtitle" id="mediaStatus">正在准备...</p>
+          <div class="annotation-bar" id="mediaAnnotationBar" hidden>
+            <div class="annotation-colors" id="mediaAnnotationColors">
+              <button class="annotation-color" data-color="#ffd166" type="button" aria-label="黄色"></button>
+              <button class="annotation-color is-active" data-color="#ff4d6d" type="button" aria-label="红色"></button>
+              <button class="annotation-color" data-color="#38bdf8" type="button" aria-label="蓝色"></button>
+              <button class="annotation-color" data-color="#22c55e" type="button" aria-label="绿色"></button>
+              <button class="annotation-color" data-color="#ffffff" type="button" aria-label="白色"></button>
+            </div>
+            <div class="annotation-actions">
+              <button class="tool" id="mediaEraserButton" type="button">板擦</button>
+              <button class="tool" id="mediaUndoButton" type="button">撤销</button>
+              <button class="tool" id="mediaClearButton" type="button">清空</button>
+            </div>
+          </div>
           <div class="media-row" id="mediaImageActions" hidden>
-            <button class="btn btn-nav" id="mediaRotate" type="button">旋转 90°</button>
+            <button class="btn btn-nav" id="mediaRotate" type="button">旋转90°</button>
             <button class="btn btn-nav" id="mediaResetView" type="button">复位视图</button>
+            <button class="btn btn-nav" id="mediaPenButton" type="button">画笔</button>
           </div>
           <div class="media-row" id="mediaSwitchRow" hidden>
             <button class="btn btn-nav" id="mediaPrev" type="button">◀ 上一个</button>
@@ -198,13 +232,17 @@
       <!-- ============ 课件来源 ============ -->
       <section class="view view-center" id="viewCoursewareSource" hidden>
         <div class="panel">
-          <h1 class="title">播放课件</h1>
-          <button class="btn btn-primary" id="cwServerButton" type="button">服务器课件</button>
-          <button class="btn btn-primary" id="cwUploadButton" type="button">本地上传</button>
-          <button class="btn btn-ghost" id="cwSourceBack" type="button">返回菜单</button>
-          <p class="footnote" id="cwSourceStatus">
-            可直接打开服务器暂存课件，或从手机重新上传
-          </p>
+          <div class="panel-side">
+            <h1 class="title">播放课件</h1>
+            <p class="footnote" id="cwSourceStatus">
+              可直接打开服务器暂存课件，或从手机重新上传
+            </p>
+          </div>
+          <div class="panel-main">
+            <button class="btn btn-primary" id="cwServerButton" type="button">服务器课件</button>
+            <button class="btn btn-primary" id="cwUploadButton" type="button">本地上传</button>
+            <button class="btn btn-ghost" id="cwSourceBack" type="button">返回菜单</button>
+          </div>
         </div>
         <input id="cwFileInput" type="file" hidden />
       </section>
@@ -223,28 +261,58 @@
         <input id="cwListFileInput" type="file" hidden />
       </section>
 
-      <!-- ============ 课件播放 ============ -->
-      <section class="view view-center" id="viewCoursewarePlay" hidden>
-        <div class="panel">
-          <h1 class="title title-sm" id="cwPlayTitle">课件</h1>
-          <p class="subtitle" id="cwPlayStatus">正在打开...</p>
-          <div class="page-row">
-            <button class="btn btn-nav" id="cwPrevPage" type="button">上一页</button>
-            <button class="btn btn-nav" id="cwNextPage" type="button">下一页</button>
+      <!-- ============ 课件播放（含标注） ============ -->
+      <section class="view view-cw" id="viewCoursewarePlay" hidden>
+        <header class="list-header">
+          <button class="pill" id="cwBackButton" type="button">返回</button>
+          <h2 class="list-title" id="cwPlayTitle">课件</h2>
+          <button class="pill" id="cwPenButton" type="button">画笔</button>
+        </header>
+
+        <div class="cw-stage" id="cwStage">
+          <canvas id="cwPageCanvas" hidden></canvas>
+          <img class="cw-page-image" id="cwPageImage" alt="" hidden />
+          <canvas class="annotation-canvas" id="cwAnnotationCanvas" hidden></canvas>
+          <p class="cw-stage-hint" id="cwStageHint">正在打开课件...</p>
+        </div>
+
+        <!-- 横屏时 cw-side 整体变成右侧竖栏（预览占满左侧），竖屏时与原来一样纵向排列 -->
+        <div class="cw-side">
+          <div class="annotation-bar" id="cwAnnotationBar" hidden>
+            <div class="annotation-colors" id="cwAnnotationColors">
+              <button class="annotation-color" data-color="#ffd166" type="button" aria-label="黄色"></button>
+              <button class="annotation-color is-active" data-color="#ff4d6d" type="button" aria-label="红色"></button>
+              <button class="annotation-color" data-color="#38bdf8" type="button" aria-label="蓝色"></button>
+              <button class="annotation-color" data-color="#22c55e" type="button" aria-label="绿色"></button>
+              <button class="annotation-color" data-color="#ffffff" type="button" aria-label="白色"></button>
+            </div>
+            <div class="annotation-actions">
+              <button class="tool" id="cwEraserButton" type="button">板擦</button>
+              <button class="tool" id="cwUndoButton" type="button">撤销</button>
+              <button class="tool" id="cwClearButton" type="button">清空</button>
+            </div>
           </div>
-          <div class="page-row">
-            <input
-              id="cwPageInput"
-              class="code-input code-input-sm"
-              type="text"
-              inputmode="numeric"
-              pattern="[0-9]*"
-              placeholder="页码"
-            />
-            <button class="btn btn-nav" id="cwGotoPage" type="button">跳转</button>
-          </div>
-          <button class="btn btn-ghost" id="cwCloseButton" type="button">结束播放</button>
-          <p class="footnote footnote-dim">长按上一页/下一页可连续翻页</p>
+
+          <footer class="list-footer cw-footer">
+            <p class="subtitle" id="cwPlayStatus">正在打开...</p>
+            <div class="page-row">
+              <button class="btn btn-nav" id="cwPrevPage" type="button">上一页</button>
+              <button class="btn btn-nav" id="cwNextPage" type="button">下一页</button>
+            </div>
+            <div class="page-row">
+              <input
+                id="cwPageInput"
+                class="code-input code-input-sm"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                placeholder="页码"
+              />
+              <button class="btn btn-nav" id="cwGotoPage" type="button">跳转</button>
+            </div>
+            <button class="btn btn-ghost" id="cwCloseButton" type="button">结束播放</button>
+            <p class="footnote footnote-dim">长按上一页/下一页可连续翻页</p>
+          </footer>
         </div>
       </section>
     </main>
