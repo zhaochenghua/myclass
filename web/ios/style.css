@@ -277,8 +277,10 @@ input::placeholder {
 
 .page-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.6rem;
   align-items: center;
+  justify-content: center;
 }
 
 .footnote {
@@ -611,12 +613,19 @@ input::placeholder {
   background: #000;
 }
 
+/* 与安卓端 ZoomableImageView 的 FitWidth 一致：宽度充满舞台，两侧不留黑边，
+   内容高于舞台时在舞台上直接拖动查看（不可用 overflow 裁掉横向，横向本来就是满的）。
+   注意：高度故意允许溢出，配合 .cw-stage 的 overflow:hidden 做"长页滚动"。 */
 #cwPageCanvas,
 .cw-page-image {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+  max-width: none;
+  max-height: none;
   background: #fff;
+  transform-origin: center center;
 }
 
 /* 上面的 display:block 优先级高于 [hidden] 的 UA 样式，必须显式覆盖 */

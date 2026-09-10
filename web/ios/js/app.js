@@ -56,7 +56,17 @@ const state = {
   cwBoard: null,
   // 课件标注按页缓存笔迹（与 Android coursewarePdfStrokes 一致）
   cwStrokes: { store: new Map(), page: 0 },
-  cwPdf: { doc: null, url: '', pageCount: 0, rendering: false, pendingPage: 0 },
+  cwPdf: { doc: null, url: '', pageCount: 0, rendering: false, pendingPage: 0, ignoreRemotePageUntil: 0 },
+  // 课件预览视口（与安卓端 ZoomableImageView 的 userScale / translateX / translateY 同构）
+  cwView: {
+    scale: 1,
+    translateX: 0,
+    translateY: 0,
+    // iPad 整页可显示时用它驱动大屏逐屏滚动（同安卓 bigScrollActive / bigProgressY）
+    bigScrollActive: false,
+    bigProgressY: 0,
+    lastNotifyAt: 0
+  },
   resumeLiveAfterJoin: false,
   pendingCoursewareClose: false,
   uploadAbort: null,
@@ -1689,12 +1699,18 @@ async function prepareCoursewarePreview() {
   if (kind === 'image') {
     $('cwPageCanvas').hidden = true;
     const image = $('cwPageImage');
-    image.onload = () => state.cwBoard?.invalidate();
+    // 图片类课件与 PDF 页一样走 FitWidth：宽度充满舞台，长图可拖动查看
+    image.onload = () => {
+      applyCoursewareSurfaceRatio(image, image.naturalWidth, image.naturalHeight);
+      state.cwBoard?.invalidate();
+      resetCoursewareViewport({ atBottom: false });
+    };
     image.src = cw.url;
     image.hidden = false;
     $('cwStageHint').hidden = true;
     state.cwBoard?.setEnabled(true);
     state.cwBoard?.invalidate();
+    resetCoursewareViewport({ atBottom: false });
     return;
   }
 
@@ -1742,7 +1758,8 @@ async function loadCoursewarePdf(cw) {
   }
 }
 
-async function renderCoursewarePage(page) {
+/** 渲染第 page 页；atBottom = true 时落在页面底部（向前翻页，便于向上逐屏回顾） */
+async function renderCoursewarePage(page, { atBottom = false } = {}) {
   const doc = state.cwPdf.doc;
   if (!doc) return;
   const total = state.cwPdf.pageCount || doc.numPages || 1;
@@ -1754,12 +1771,17 @@ async function renderCoursewarePage(page) {
   }
   state.cwPdf.rendering = true;
   try {
-    await renderPdfPage(doc, target, $('cwPageCanvas'));
+    const canvas = $('cwPageCanvas');
+    await renderPdfPage(doc, target, canvas);
     if (!state.courseware) return;
-    $('cwPageCanvas').hidden = false;
+    canvas.hidden = false;
     $('cwStageHint').hidden = true;
+    // 显式锁定显示比例：canvas 按页面比例铺满舞台宽度（FitWidth）
+    applyCoursewareSurfaceRatio(canvas, canvas.width, canvas.height);
     applyCoursewarePageAnnotations(target);
     state.cwBoard?.setEnabled(true);
+    // 换页后复位视口并同步大屏（同安卓 showPage → setImage → resetViewport）
+    resetCoursewareViewport({ atBottom });
     state.cwBoard?.invalidate();
   } catch {
     $('cwStageHint').hidden = false;
@@ -1768,7 +1790,7 @@ async function renderCoursewarePage(page) {
     state.cwPdf.rendering = false;
     const pending = state.cwPdf.pendingPage;
     state.cwPdf.pendingPage = 0;
-    if (pending && pending !== target) await renderCoursewarePage(pending);
+    if (pending && pending !== target) await renderCoursewarePage(pending, { atBottom });
   }
 }
 
@@ -1798,6 +1820,7 @@ function releaseCoursewarePreview() {
   setCoursewarePenMode(false);
   state.cwBoard?.setEnabled(false);
   state.cwBoard?.reset();
+  resetCwViewState();
   $('cwPageCanvas').hidden = true;
   $('cwPageImage').hidden = true;
   $('cwAnnotationCanvas').hidden = true;
@@ -1809,6 +1832,431 @@ function releaseCoursewarePreview() {
 function clearCourseware() {
   state.courseware = null;
   releaseCoursewarePreview();
+}
+
+// ------------------------------------------------- 课件预览视口（缩放 / 平移 / 逐屏）
+// 与安卓端 ZoomableImageView（FitWidth + userScale / translateX / translateY）完全同构：
+//  - 内容按宽度充满舞台显示（FitWidth），长页可上下拖动查看；
+//  - 缩放 / 平移实时同步大屏（progress 协议 + page），两端屏幕比例不同也能保持一致；
+//  - 「上一页 / 下一页」先逐屏滚动，滚到页面边界才真正翻页。
+// 坐标口径：translate 为"内容中心相对舞台中心"的像素位移，
+// 变换链与 ZoomableImageView.onDraw 的 translate → scale 完全一致。
+
+const CW_MAX_SCALE = 8; // 同 ZoomableImageView.MAX_SCALE
+const CW_NOTIFY_INTERVAL_MS = 80; // 同 ZoomableImageView.NOTIFY_INTERVAL_MS
+const CW_DOUBLE_TAP_SCALE = 2.5; // 同 ZoomableImageView.DOUBLE_TAP_SCALE
+const CW_SCREEN_STEP_RATIO = 0.92; // 逐屏滚动留 8% 重叠，避免相邻屏内容割裂
+const BIG_SCREEN_H_OVER_W = 9 / 16; // 大屏按 16:9 横屏估算（同安卓 stepBigScreen）
+
+function coursewareStage() {
+  return $('cwStage');
+}
+
+function coursewareStageSize() {
+  const stage = coursewareStage();
+  if (!stage) return { width: 0, height: 0 };
+  const rect = stage.getBoundingClientRect();
+  return { width: rect.width, height: rect.height };
+}
+
+/** 内容的布局尺寸（不含 transform），对应安卓端的 fitWidth / fitHeight */
+function coursewareBaseSize() {
+  const surface = coursewareSurface();
+  if (!surface || surface.hidden) return { width: 0, height: 0 };
+  return { width: surface.offsetWidth || 0, height: surface.offsetHeight || 0 };
+}
+
+/** 内容原始像素尺寸（位图 / 图片），用于估算大屏是否为长页 */
+function coursewareNaturalSize() {
+  const canvas = $('cwPageCanvas');
+  if (!canvas.hidden && canvas.width && canvas.height) {
+    return { width: canvas.width, height: canvas.height };
+  }
+  const image = $('cwPageImage');
+  if (!image.hidden && image.naturalWidth && image.naturalHeight) {
+    return { width: image.naturalWidth, height: image.naturalHeight };
+  }
+  return { width: 0, height: 0 };
+}
+
+/** 本地预览已就绪：后续翻页由 iPad 主导（同安卓 coursewarePdfPaging != null） */
+function coursewarePreviewReady() {
+  if (!state.courseware || state.cwBoard?.enabled !== true) return false;
+  const base = coursewareBaseSize();
+  return base.width > 0 && base.height > 0;
+}
+
+/** 显式锁定显示比例，保证 canvas / img 都按页面比例铺满舞台宽度 */
+function applyCoursewareSurfaceRatio(surface, width, height) {
+  if (!surface || !width || !height) return;
+  surface.style.aspectRatio = `${width} / ${height}`;
+}
+
+function coursewareMaxTranslation() {
+  const view = state.cwView;
+  const base = coursewareBaseSize();
+  const stage = coursewareStageSize();
+  if (!base.width || !base.height || !stage.width || !stage.height) return { x: 0, y: 0 };
+  return {
+    x: Math.max(0, (base.width * view.scale - stage.width) / 2),
+    y: Math.max(0, (base.height * view.scale - stage.height) / 2)
+  };
+}
+
+function clampCoursewareTranslation() {
+  const view = state.cwView;
+  const max = coursewareMaxTranslation();
+  view.translateX = clamp(view.translateX, -max.x, max.x);
+  view.translateY = clamp(view.translateY, -max.y, max.y);
+}
+
+function applyCoursewareView({ notify = true, force = false } = {}) {
+  const surface = coursewareSurface();
+  if (!surface) return;
+  clampCoursewareTranslation();
+  const view = state.cwView;
+  surface.style.transformOrigin = 'center center';
+  surface.style.transform =
+    `translate(${view.translateX}px, ${view.translateY}px) scale(${view.scale})`;
+  // 显示矩形变化后按新矩形重画笔迹（笔迹坐标以内容显示矩形为基准）
+  state.cwBoard?.invalidate();
+  updateCoursewareStatus();
+  if (notify) notifyCoursewareViewport(force);
+}
+
+function notifyCoursewareViewport(force = false) {
+  const view = state.cwView;
+  const base = coursewareBaseSize();
+  const stage = coursewareStageSize();
+  if (!base.width || !base.height || !stage.width || !stage.height) return;
+  const signaling = state.signaling;
+  if (!signaling?.isOpen()) return;
+  const now = Date.now();
+  if (!force && now - view.lastNotifyAt < CW_NOTIFY_INTERVAL_MS) return;
+  view.lastNotifyAt = now;
+  const max = coursewareMaxTranslation();
+  // 滚动进度：0 = 顶部/左侧对齐，1 = 底部/右侧对齐；整页可显示时为 0（顶部对齐）。
+  // 用进度而非"视口中心位置"归一化，可消除两端屏幕比例不同造成的错位。
+  const progressX = max.x > 0.5 ? (max.x - view.translateX) / (2 * max.x) : 0;
+  const progressY =
+    max.y > 0.5
+      ? (max.y - view.translateY) / (2 * max.y)
+      : view.bigScrollActive
+        ? view.bigProgressY
+        : 0;
+  signaling.sendCoursewareImageViewport({
+    scale: view.scale,
+    centerX: Math.round(progressX * 10000) / 10000,
+    centerY: Math.round(progressY * 10000) / 10000,
+    rotation: 0, // 课件页方向固定，同安卓硬编码 0
+    page: Number(state.courseware?.page) || 0,
+    progress: true
+  });
+}
+
+/** 一次手势内同时完成"围绕焦点缩放"与"平移"，只重绘一次（同安卓 handleTwoFingerGesture） */
+function applyCoursewareGesture({ factor = 1, focusX = 0, focusY = 0, dx = 0, dy = 0 }) {
+  const view = state.cwView;
+  const previous = view.scale;
+  const next = clamp(previous * factor, 1, CW_MAX_SCALE);
+  if (next !== previous) {
+    const ratio = next / previous;
+    view.translateX = (view.translateX - focusX) * ratio + focusX;
+    view.translateY = (view.translateY - focusY) * ratio + focusY;
+    view.scale = next;
+  }
+  view.translateX += dx;
+  view.translateY += dy;
+  applyCoursewareView();
+}
+
+function toggleCoursewareZoom(point) {
+  const view = state.cwView;
+  if (view.scale > 1.01) {
+    view.scale = 1;
+    applyCoursewareView({ force: true });
+    return;
+  }
+  const rect = coursewareStage().getBoundingClientRect();
+  applyCoursewareGesture({
+    factor: CW_DOUBLE_TAP_SCALE,
+    focusX: point.x - (rect.left + rect.width / 2),
+    focusY: point.y - (rect.top + rect.height / 2)
+  });
+  notifyCoursewareViewport(true);
+}
+
+/** 清空视口状态与残留 transform / 比例（关闭课件、释放本地预览时用） */
+function resetCwViewState() {
+  const view = state.cwView;
+  view.scale = 1;
+  view.translateX = 0;
+  view.translateY = 0;
+  view.bigScrollActive = false;
+  view.bigProgressY = 0;
+  view.lastNotifyAt = 0;
+  for (const element of [$('cwPageCanvas'), $('cwPageImage')]) {
+    if (!element) continue;
+    element.style.removeProperty('transform');
+    element.style.removeProperty('aspect-ratio');
+  }
+}
+
+/** 换页 / 打开课件后复位视口（安卓 ZoomableImageView.resetViewport） */
+function resetCoursewareViewport({ atBottom = false, notify = true } = {}) {
+  const view = state.cwView;
+  view.scale = 1;
+  view.translateX = 0;
+  view.translateY = 0;
+  view.bigScrollActive = false;
+  view.bigProgressY = 0;
+  const base = coursewareBaseSize();
+  const stage = coursewareStageSize();
+  if (base.height && stage.height) {
+    // 宽度充满后页面可能高于舞台：默认从顶部开始显示；
+    // 向前翻页（atBottom）时落在上一页底部，继续按"上一页"可向上逐屏回顾。
+    const maxY = Math.max(0, (base.height - stage.height) / 2);
+    view.translateY = atBottom ? -maxY : maxY;
+    if (atBottom && maxY <= 0.5) {
+      // iPad 整页可显示：交给"大屏滚动模式"把大屏对齐到上一页底部
+      view.bigScrollActive = true;
+      view.bigProgressY = 1;
+    }
+  }
+  applyCoursewareView({ notify, force: true });
+}
+
+/** 舞台尺寸变化后重新适配（安卓 ZoomableImageView.onSizeChanged） */
+function refitCoursewareViewport() {
+  const view = state.cwView;
+  if (view.scale <= 1.01) {
+    const base = coursewareBaseSize();
+    const stage = coursewareStageSize();
+    if (base.height && stage.height) {
+      view.translateX = 0;
+      view.translateY = (base.height - stage.height) / 2; // 未放大时回到顶部对齐
+    }
+  }
+  applyCoursewareView({ force: true });
+}
+
+/**
+ * 「下一屏 / 上一屏」滚动（同安卓 ZoomableImageView.requestScreenStep）
+ * @returns true 表示应当真正翻页（已滚到边界、整页一屏能显示完、或处于放大状态）
+ */
+function requestCoursewareScreenStep(direction) {
+  const view = state.cwView;
+  const base = coursewareBaseSize();
+  const stage = coursewareStageSize();
+  if (!base.width || !base.height || !stage.height) return true;
+
+  // 放大状态：直接翻页，缩放由渲染新页时的 resetCoursewareViewport 复位
+  if (view.scale > 1.01) return true;
+
+  const displayHeight = base.height * view.scale;
+  const viewHeight = stage.height;
+  if (displayHeight <= viewHeight) {
+    // iPad 整页可显示：大屏（横屏）往往是长页，改用大屏滚动进度驱动大屏逐屏下滚，
+    // 滚到底再翻页，避免 iPad 整页直接翻页导致大屏不滚动。
+    return stepCoursewareBigScreen(direction);
+  }
+
+  view.bigScrollActive = false;
+  const maxY = (displayHeight - viewHeight) / 2;
+  const atBottom = view.translateY <= -maxY + 0.5;
+  const atTop = view.translateY >= maxY - 0.5;
+  if (direction > 0 && atBottom) return true;
+  if (direction < 0 && atTop) return true;
+
+  view.translateY = clamp(
+    view.translateY - direction * viewHeight * CW_SCREEN_STEP_RATIO,
+    -maxY,
+    maxY
+  );
+  applyCoursewareView({ force: true });
+  return false;
+}
+
+/**
+ * 大屏滚动模式：iPad 整页可显示、但按 16:9 估算大屏是长页时，
+ * 用 bigProgressY 驱动大屏逐屏滚动，滚到底/顶才返回 true 让 iPad 翻页。
+ * 同安卓 ZoomableImageView.stepBigScreen。
+ */
+function stepCoursewareBigScreen(direction) {
+  const view = state.cwView;
+  const natural = coursewareNaturalSize();
+  if (!natural.width || !natural.height) return true;
+
+  const pageAspectHOverW = natural.height / natural.width;
+  const bigMaxYRatio = (pageAspectHOverW - BIG_SCREEN_H_OVER_W) / 2;
+  if (bigMaxYRatio <= 0) {
+    // 大屏也是整页
+    view.bigScrollActive = false;
+    view.bigProgressY = 0;
+    return true;
+  }
+  if (!view.bigScrollActive) {
+    view.bigScrollActive = true;
+    view.bigProgressY = 0;
+  }
+  if (
+    (direction > 0 && view.bigProgressY >= 1 - 1e-4) ||
+    (direction < 0 && view.bigProgressY <= 1e-4)
+  ) {
+    // 已到边界：本次才翻页。
+    // 此处不能上报视口：当前页尚未换掉，上报会把大屏拉回"本页顶部"，
+    // 造成翻页前闪一下本页顶部的画面（安卓在此处同样刻意不上报）。
+    view.bigScrollActive = false;
+    view.bigProgressY = 0;
+    return true;
+  }
+  const stepRatio = (BIG_SCREEN_H_OVER_W * CW_SCREEN_STEP_RATIO) / (2 * bigMaxYRatio);
+  view.bigProgressY = clamp(view.bigProgressY + direction * stepRatio, 0, 1);
+  notifyCoursewareViewport(true);
+  updateCoursewareStatus();
+  return false;
+}
+
+/** 估算当前页的屏数，用于「第 x / y 屏」提示（仅显示用，不参与定位） */
+function coursewareScreenInfo() {
+  const view = state.cwView;
+  const base = coursewareBaseSize();
+  const stage = coursewareStageSize();
+  if (!base.height || !stage.height) return null;
+
+  if (view.bigScrollActive) {
+    const natural = coursewareNaturalSize();
+    if (!natural.width || !natural.height) return null;
+    const bigMaxYRatio = (natural.height / natural.width - BIG_SCREEN_H_OVER_W) / 2;
+    if (bigMaxYRatio <= 0) return null;
+    const stepRatio = (BIG_SCREEN_H_OVER_W * CW_SCREEN_STEP_RATIO) / (2 * bigMaxYRatio);
+    const total = Math.max(2, Math.ceil(1 / stepRatio) + 1);
+    return {
+      screen: clamp(Math.round(view.bigProgressY * (total - 1)) + 1, 1, total),
+      count: total
+    };
+  }
+
+  const displayHeight = base.height * view.scale;
+  if (displayHeight <= stage.height + 1) return null;
+  const range = displayHeight - stage.height;
+  const maxY = range / 2;
+  const steps = Math.max(1, Math.ceil(range / (stage.height * CW_SCREEN_STEP_RATIO)));
+  const count = steps + 1;
+  const progress = maxY > 0.5 ? (maxY - view.translateY) / (2 * maxY) : 0;
+  return { screen: clamp(Math.round(progress * steps) + 1, 1, count), count };
+}
+
+/** 课件舞台手势：双指缩放 + 双指平移 + 单指平移 + 双击缩放（同安卓 ZoomableImageView） */
+function bindCoursewareGestures() {
+  const stage = coursewareStage();
+  if (!stage) return;
+  let twoFingerActive = false;
+  let lastCenter = null;
+  let lastSpan = 0;
+  let lastSingle = null;
+  let lastTapAt = 0;
+  let lastTapPoint = null;
+
+  const pointsOf = (event) => Array.from(event.touches || []).map((p) => ({ x: p.clientX, y: p.clientY }));
+  const distOf = (pts) => Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  const centerOf = (pts) => ({ x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 });
+  const focusOf = (point) => {
+    const rect = stage.getBoundingClientRect();
+    return {
+      x: point.x - (rect.left + rect.width / 2),
+      y: point.y - (rect.top + rect.height / 2)
+    };
+  };
+
+  stage.addEventListener('touchstart', (event) => {
+    if (!coursewarePreviewReady()) return;
+    const pts = pointsOf(event);
+    if (pts.length >= 2) {
+      // 第二根手指落下：先结束当前笔画，再进入双指缩放 / 平移（与安卓一致）
+      state.cwBoard?.endActiveStroke(true);
+      twoFingerActive = true;
+      lastSpan = distOf(pts);
+      lastCenter = centerOf(pts);
+      lastSingle = null;
+      lastTapAt = 0;
+      lastTapPoint = null;
+    } else if (pts.length === 1) {
+      lastSingle = { x: pts[0].x, y: pts[0].y };
+      lastCenter = null;
+      lastSpan = 0;
+      // 双击缩放（画笔模式下禁用，避免绘制过程中的误触）
+      if (state.cwBoard?.penMode) return;
+      const now = Date.now();
+      const near =
+        lastTapPoint && Math.hypot(pts[0].x - lastTapPoint.x, pts[0].y - lastTapPoint.y) < 36;
+      if (near && now - lastTapAt < 320) {
+        toggleCoursewareZoom(pts[0]);
+        lastTapAt = 0;
+        lastTapPoint = null;
+      } else {
+        lastTapAt = now;
+        lastTapPoint = { x: pts[0].x, y: pts[0].y };
+      }
+    }
+  }, { passive: true });
+
+  stage.addEventListener('touchmove', (event) => {
+    if (!coursewarePreviewReady()) return;
+    const pts = pointsOf(event);
+    if (pts.length >= 2 && twoFingerActive) {
+      const center = centerOf(pts);
+      const span = distOf(pts);
+      const focus = focusOf(center);
+      applyCoursewareGesture({
+        factor: lastSpan > 0 && span > 0 ? span / lastSpan : 1,
+        focusX: focus.x,
+        focusY: focus.y,
+        dx: lastCenter ? center.x - lastCenter.x : 0,
+        dy: lastCenter ? center.y - lastCenter.y : 0
+      });
+      lastCenter = center;
+      lastSpan = span;
+      lastSingle = null;
+      lastTapAt = 0;
+      lastTapPoint = null;
+      event.preventDefault();
+      return;
+    }
+    // 画笔模式：单指留给绘制，缩放 / 平移靠双指（不必来回切模式）
+    if (state.cwBoard?.penMode) return;
+    if (pts.length === 1 && lastSingle) {
+      applyCoursewareGesture({ dx: pts[0].x - lastSingle.x, dy: pts[0].y - lastSingle.y });
+      lastSingle = { x: pts[0].x, y: pts[0].y };
+      lastTapAt = 0;
+      lastTapPoint = null;
+      event.preventDefault();
+    }
+  }, { passive: false });
+
+  const release = (event) => {
+    const remaining = pointsOf(event);
+    twoFingerActive = false;
+    lastSpan = 0;
+    lastCenter = null;
+    lastSingle = remaining.length === 1 ? { x: remaining[0].x, y: remaining[0].y } : null;
+    if (remaining.length === 0) notifyCoursewareViewport(true);
+  };
+  stage.addEventListener('touchend', release, { passive: true });
+  stage.addEventListener('touchcancel', release, { passive: true });
+
+  // 桌面 / 触控板调试用：滚轮缩放
+  stage.addEventListener('wheel', (event) => {
+    if (!coursewarePreviewReady()) return;
+    const rect = stage.getBoundingClientRect();
+    applyCoursewareGesture({
+      factor: event.deltaY < 0 ? 1.08 : 1 / 1.08,
+      focusX: event.clientX - (rect.left + rect.width / 2),
+      focusY: event.clientY - (rect.top + rect.height / 2)
+    });
+    notifyCoursewareViewport(true);
+    event.preventDefault();
+  }, { passive: false });
 }
 
 // ---------------------------------------------------------------- 课件
@@ -1985,22 +2433,34 @@ function updateCoursewareStatus() {
   const cw = state.courseware;
   if (!cw) return;
   $('cwPlayTitle').textContent = cw.title;
-  const screenText = cw.screenCount > 1 ? `，第 ${cw.screen} / ${cw.screenCount} 屏` : '';
-  $('cwPlayStatus').textContent = `第 ${cw.page} / ${cw.pageCount} 页${screenText}`;
+  // 本地预览可用时以本机滚动状态为准（大屏端现在按滚动进度联动，不再上报屏数）
+  const local = coursewareScreenInfo();
+  const localText = local && local.count > 1 ? `，第 ${local.screen} / ${local.count} 屏` : '';
+  const remoteText = cw.screenCount > 1 ? `，第 ${cw.screen} / ${cw.screenCount} 屏` : '';
+  const zoomText = state.cwView.scale > 1.02 ? `，${state.cwView.scale.toFixed(1)}x` : '';
+  $('cwPlayStatus').textContent = `第 ${cw.page} / ${cw.pageCount} 页${localText || remoteText}${zoomText}`;
   $('cwPageInput').placeholder = `1-${cw.pageCount}`;
 }
 
 function handleCoursewareState(message) {
   if (!state.courseware) return;
-  const previousPage = state.courseware.page;
-  state.courseware.page = Math.max(1, Number(message.page) || 1);
-  state.courseware.pageCount = Math.max(1, Number(message.pageCount) || 1);
+  const remotePage = Math.max(1, Number(message.page) || 1);
+  // 本地刚发起翻页时，大屏可能还没渲染完就回传了旧页码，
+  // 直接采信会把 iPad 的页码改回去造成来回跳页（同安卓对 courseware.state 的处理）。
+  const pagingLocally = Date.now() < (state.cwPdf.ignoreRemotePageUntil || 0);
+  if (remotePage !== state.courseware.page && !pagingLocally) {
+    state.courseware.page = remotePage;
+    renderCoursewarePage(remotePage);
+  }
+  // 本地 PDF 已加载时页数以本地为准（最准确）
+  state.courseware.pageCount = Math.max(
+    Number(state.cwPdf.pageCount) || 0,
+    Math.max(1, Number(message.pageCount) || 1)
+  );
   state.courseware.screen = Math.max(1, Number(message.screen) || 1);
   state.courseware.screenCount = Math.max(1, Number(message.screenCount) || 1);
   if (message.fitMode) state.courseware.fitMode = message.fitMode;
   if (state.screen === 'CoursewarePlay') updateCoursewareStatus();
-  // 翻页后同步渲染对应页，并按页恢复该页笔迹
-  if (state.courseware.page !== previousPage) renderCoursewarePage(state.courseware.page);
 }
 
 function handleViewerCoursewareOpen(message) {
@@ -2037,9 +2497,52 @@ function handleViewerCoursewareClose() {
   showMenu();
 }
 
+/**
+ * 上一页 / 下一页的统一入口（同安卓 MainActivity.pagingOrStep）：
+ * 本地预览可用时由 iPad 主导——先在页面内逐屏滚动，滚到边界才真正翻页；
+ * 没有本地预览（链接课件、预览加载失败等）才退化成 courseware.navigate 由大屏处理。
+ */
 function navigateCourseware(delta) {
   if (!state.joined || !state.courseware) return;
+  if (coursewarePreviewReady()) {
+    if (requestCoursewareScreenStep(delta)) flipCoursewarePage(delta);
+    else updateCoursewareStatus();
+    return;
+  }
   state.signaling?.sendCoursewareNavigate(delta);
+}
+
+/** 真正翻页：本地换页并同步大屏（同安卓 showPage） */
+function flipCoursewarePage(delta) {
+  const cw = state.courseware;
+  const total = Math.max(1, Number(state.cwPdf.pageCount) || Number(cw.pageCount) || 1);
+  const current = Number(cw.page) || 1;
+  const target = clamp(current + delta, 1, total);
+  if (target === current) {
+    // 已经在首页 / 末页：只刷新提示，不再重复发信令
+    updateCoursewareStatus();
+    toast(delta > 0 ? '已经是最后一页' : '已经是第一页');
+    return;
+  }
+  jumpToCoursewarePage(target, { atBottom: delta < 0 });
+}
+
+/** 切换到指定页：本地立刻换页 + 同步大屏（翻页与跳页共用，避免两端页码不一致） */
+function jumpToCoursewarePage(target, { atBottom = false } = {}) {
+  const cw = state.courseware;
+  if (!cw) return;
+  // 这段时间忽略大屏回传的旧页码，避免刚跳过去又被拉回来
+  state.cwPdf.ignoreRemotePageUntil = Date.now() + 1500;
+  cw.page = target;
+  cw.screen = 1;
+  // 课件一律走 courseware.page：大屏会优先把 courseware.navigate 解释成"翻屏"而不是"翻页"
+  state.signaling?.sendCoursewarePage(target);
+  if (coursewarePreviewKind(cw) === 'pdf') {
+    renderCoursewarePage(target, { atBottom });
+  } else {
+    resetCoursewareViewport({ atBottom });
+  }
+  updateCoursewareStatus();
 }
 
 function gotoCoursewarePage() {
@@ -2050,7 +2553,10 @@ function gotoCoursewarePage() {
     return;
   }
   if (!state.joined || !state.courseware) return;
-  state.signaling?.sendCoursewarePage(Math.floor(page));
+  // 只有本地 PDF 已加载（知道真实页数）时才做范围收敛，否则照原样跳转
+  const knownTotal = Number(state.cwPdf.pageCount) || 0;
+  const target = knownTotal > 0 ? clamp(Math.floor(page), 1, knownTotal) : Math.floor(page);
+  jumpToCoursewarePage(target);
   $('cwPageInput').value = '';
 }
 
@@ -2260,6 +2766,15 @@ function bindStaticEvents() {
 
   $('cwBackButton').addEventListener('click', () => showMenu());
   $('cwPenButton').addEventListener('click', () => setCoursewarePenMode(!state.cwBoard?.penMode));
+  // 缩放 / 平移后一键回到「顶部对齐 + 1 倍」的默认视图
+  $('cwResetView').addEventListener('click', () => {
+    if (!coursewarePreviewReady()) {
+      toast('当前课件不支持在 iPad 上预览', { warn: true });
+      return;
+    }
+    resetCoursewareViewport({ atBottom: false });
+    toast('已复位视图');
+  });
 
   bindPageLongPress('cwPrevPage', -1);
   bindPageLongPress('cwNextPage', 1);
@@ -2268,6 +2783,8 @@ function bindStaticEvents() {
 
   bindLiveGestures();
   bindMediaGestures();
+  // 课件预览的双指缩放 / 平移 / 双击放大（缺了这一步 iPad 上只能看不能操作画面）
+  bindCoursewareGestures();
   $('mediaResetView').addEventListener('click', resetMediaView);
 
   window.addEventListener('orientationchange', () => {
@@ -2278,6 +2795,8 @@ function bindStaticEvents() {
     // 容器尺寸变化后标注画布要重新按新尺寸绘制
     state.mediaBoard?.render();
     state.cwBoard?.render();
+    // 课件预览要按新舞台尺寸重新适配并回到顶部对齐（同安卓 onSizeChanged）
+    if (state.screen === 'CoursewarePlay') refitCoursewareViewport();
   });
 
   document.addEventListener('visibilitychange', () => {

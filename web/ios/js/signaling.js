@@ -114,18 +114,30 @@ export class SignalingClient {
   }
 
   /**
-   * 同步图片视口/旋转到大屏（与 Android SignalingClient 完全一致）：
-   * scale 为相对适应屏幕的放大倍数，centerX / centerY 为视口中心归一化坐标，
-   * rotation 为旋转角度（0 / 90 / 180 / 270）。
+   * 同步图片 / 课件视口到大屏（与 Android SignalingClient 完全一致）：
+   * scale 为相对"适应屏幕"的放大倍数，rotation 为旋转角度（0 / 90 / 180 / 270）。
+   *
+   * 两种归端口径（大屏端按 progress 字段分支处理）：
+   * - progress = false（图片投屏，兼容旧端）：centerX / centerY 直接是视口中心归一化坐标；
+   * - progress = true（课件投屏，与安卓最新版一致）：centerX / centerY 是"滚动进度"
+   *   （0 = 左/顶对齐，1 = 右/底对齐），并附带 page 让大屏按页记忆视口。
+   *   用进度而非"视口中心位置"，可消除 iPad 与横屏大屏画面比例不同造成的错位，
+   *   保证两端都从页面顶部开始、并逐屏同步滚动。
    */
-  sendCoursewareImageViewport({ scale = 1, centerX = 0.5, centerY = 0.5, rotation = 0 }) {
-    return this.send({
-      type: 'courseware.image.viewport',
-      scale,
-      centerX,
-      centerY,
-      rotation
-    });
+  sendCoursewareImageViewport({
+    scale = 1,
+    centerX = 0.5,
+    centerY = 0.5,
+    rotation = 0,
+    page = 0,
+    progress = false
+  }) {
+    const message = { type: 'courseware.image.viewport', scale, centerX, centerY, rotation };
+    if (progress) {
+      message.progress = true;
+      if (page) message.page = page;
+    }
+    return this.send(message);
   }
 
   /**
