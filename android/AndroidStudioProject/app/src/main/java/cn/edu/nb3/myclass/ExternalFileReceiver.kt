@@ -16,6 +16,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
@@ -543,10 +544,8 @@ object ExternalFileReceiver {
             put("url", pending.url)
         }
 
-        val body = okhttp3.RequestBody.create(
-            "application/json; charset=utf-8".toMediaTypeOrNull(),
-            json.toString()
-        )
+        val body = json.toString()
+            .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
         val request = Request.Builder()
             .url("$baseUrl/api/courseware/link")

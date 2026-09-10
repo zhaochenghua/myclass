@@ -66,6 +66,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
@@ -744,10 +745,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     put("username", username)
                     put("password", password)
                 }
-                val body = RequestBody.create(
-                    "application/json; charset=utf-8".toMediaTypeOrNull(),
-                    json.toString()
-                )
+                val body = json.toString()
+                    .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
                 val url = "${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/auth/${if (isRegister) "register" else "login"}"
                 val request = Request.Builder().url(url).post(body).build()
                 authHttpClient.newCall(request).execute().use { response ->
@@ -2518,7 +2517,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val json = JSONObject().put("title", newTitle)
         val request = Request.Builder()
             .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware/$id/rename")
-            .put(RequestBody.create("application/json; charset=utf-8".toMediaTypeOrNull(), json.toString()))
+            .put(json.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
             .also { addAuthHeader(it) }
             .build()
         coursewareHttpClient.newCall(request).execute().use { response ->
