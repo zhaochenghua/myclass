@@ -474,6 +474,11 @@ class ZoomableImageView(context: Context) : View(context) {
         if (direction < 0 && atTop) return true
         // 滚动一屏（留 8% 重叠，避免相邻屏内容割裂）
         val step = viewHeight * 0.92f
+        // 可滚动范围不足一屏（页面只比屏幕高一点点，如横版 PPT）：一屏就能滚完剩余内容，
+        // 直接翻页即可，避免"先滚到底、再按一次才翻页"导致要按两下。
+        if (2f * maxY <= step) {
+            return true
+        }
         translateY = (translateY - direction * step).coerceIn(-maxY, maxY)
         clampTranslation()
         markAnnotationDirty()
@@ -522,6 +527,13 @@ class ZoomableImageView(context: Context) : View(context) {
         }
         // 大屏一屏（占屏高 92%）对应的进度增量
         val stepRatio = (bigAspectHOverW * 0.92f) / (2f * bigMaxYRatio)
+        // 大屏可滚动范围不足一屏（页面只比大屏高一点点，如横版 PPT）：一屏就能滚完，
+        // 直接翻页，避免需要按两下才翻页。
+        if (stepRatio >= 1f) {
+            bigScrollActive = false
+            bigProgressY = 0f
+            return true
+        }
         // 滚动一屏；剩余不足一屏时滚到底/顶，把剩余内容补成一屏显示出来，下次再按才翻页
         bigProgressY = (bigProgressY + direction * stepRatio).coerceIn(0f, 1f)
         notifyViewport(force = true)
