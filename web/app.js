@@ -3,6 +3,7 @@ const state = {
   peerConnection: null,
   config: null,
   reconnectTimer: null,
+  reconnectAttempts: 0,
   relayCheckTimer: null,
   lastRelayMode: null,
   teacherConnected: false,
@@ -765,6 +766,26 @@ async function loadConfig() {
   return response.json();
 }
 
+const ROOM_CODE_STORAGE_KEY = 'myclass.viewer.roomCode';
+
+function readStoredRoomCode() {
+  try {
+    return window.localStorage.getItem(ROOM_CODE_STORAGE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+function storeRoomCode(code) {
+  try {
+    if (code) {
+      window.localStorage.setItem(ROOM_CODE_STORAGE_KEY, String(code));
+    }
+  } catch {
+    // 隐私模式等场景下 localStorage 不可用，忽略即可
+  }
+}
+
 function connectSignaling() {
   clearTimeout(state.reconnectTimer);
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -773,8 +794,11 @@ function connectSignaling() {
   state.socket = socket;
 
   socket.addEventListener('open', () => {
-    sendMessage({ type: 'viewer.join' });
-    setWaitingStatus('正在创建课堂...');
+    state.reconnectAttempts = 0;
+    // 断线重连时带上次的连接码，服务端在宽限期内会复用房间，避免教师端重连。
+    const savedCode = readStoredRoomCode();
+    sendMessage(savedCode ? { type: 'viewer.join', roomCode: savedCode } : { type: 'viewer.join' });
+    setWaitingStatus(savedCode ? '正在恢复课堂...' : '正在创建课堂...');
   });
 
   socket.addEventListener('message', (event) => {
@@ -784,14 +808,18 @@ function connectSignaling() {
   socket.addEventListener('close', () => {
     cleanupPeerConnection();
     state.teacherConnected = false;
+    const codeHint = state.roomCode ? `（原连接码 ${state.roomCode}）` : '';
     if (state.presentationMode === 'courseware') {
       updateCoursewareConnectionIndicator();
-      setWaitingStatus('信令连接已断开，可继续翻页查看课件');
+      setWaitingStatus(`信令连接已断开，可继续翻页查看课件${codeHint}`);
     } else {
       showJoinView();
-      setWaitingStatus('连接已断开，正在重新连接...');
+      setWaitingStatus(`连接已断开，正在重新连接...${codeHint}`);
     }
-    state.reconnectTimer = setTimeout(connectSignaling, 1500);
+    // 重连退避：0.8s → 1.6s → 3.2s → 5s（上限），避免网络抖动时疯狂重连
+    const delay = Math.min(5000, 800 * 2 ** state.reconnectAttempts);
+    state.reconnectAttempts += 1;
+    state.reconnectTimer = setTimeout(connectSignaling, delay);
   });
 
   socket.addEventListener('error', () => {
@@ -803,9 +831,10 @@ async function handleSignalMessage(message) {
   switch (message.type) {
     case 'room.created':
       state.roomCode = message.code;
+      storeRoomCode(message.code);
       elements.roomCode.textContent = message.code;
       elements.coursewareConnCode.textContent = message.code;
-      setWaitingStatus('等待教师连接...');
+      setWaitingStatus(message.resumed ? '已恢复原连接码，等待教师连接...' : '等待教师连接...');
       break;
     case 'teacher.online':
       state.teacherConnected = true;

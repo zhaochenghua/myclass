@@ -2,6 +2,10 @@ const crypto = require('crypto');
 
 const SOCKET_OPEN = 1;
 const DEFAULT_ROOM_TTL_MS = 2 * 60 * 60 * 1000;
+// 教室端（大屏）断开后房间的保留宽限期。
+// 这段时间内大屏重连（携带原连接码）会复用同一个房间和连接码，教师端无感知，
+// 从而避免网络抖动 / 页面刷新导致大屏连接码变化、教师反复重连。
+const DEFAULT_VIEWER_GRACE_MS = 5 * 60 * 1000;
 
 function isOpen(socket) {
   return socket && socket.readyState === SOCKET_OPEN;
@@ -18,11 +22,21 @@ function sendJson(socket, payload) {
 class RoomManager {
   constructor(options = {}) {
     this.roomTtlMs = options.roomTtlMs || DEFAULT_ROOM_TTL_MS;
+    this.viewerGraceMs = options.viewerGraceMs || DEFAULT_VIEWER_GRACE_MS;
     this.rooms = new Map();
     this.socketIndex = new Map();
   }
 
-  createRoom(viewerSocket) {
+  /**
+   * 教室端加入课堂。requestedCode 为断线重连时带回的原连接码，
+   * 命中处于宽限期的房间则复用原码（返回 resumed=true），否则新建房间。
+   */
+  createRoom(viewerSocket, requestedCode = null) {
+    const resumed = this.#resumeRoom(viewerSocket, requestedCode);
+    if (resumed) {
+      return resumed;
+    }
+
     const now = Date.now();
     const code = this.#createUniqueCode();
     const room = {
@@ -30,13 +44,48 @@ class RoomManager {
       viewerSocket,
       teacherSocket: null,
       createdAt: now,
-      expiresAt: now + this.roomTtlMs
+      expiresAt: now + this.roomTtlMs,
+      disconnectedAt: null,
+      graceTimer: null
     };
 
     this.rooms.set(code, room);
     this.socketIndex.set(viewerSocket, { code, role: 'viewer' });
 
-    return room;
+    return { room, resumed: false };
+  }
+
+  #resumeRoom(viewerSocket, requestedCode) {
+    if (!requestedCode) {
+      return null;
+    }
+
+    const code = String(requestedCode).trim();
+    if (!/^\d{4}$/.test(code)) {
+      return null;
+    }
+
+    const room = this.rooms.get(code);
+    // 仅接管“大屏已断开且处于宽限期”的房间，防止在线的大屏被他人抢占。
+    if (!room || room.viewerSocket || !room.disconnectedAt || this.#isExpired(room)) {
+      return null;
+    }
+
+    clearTimeout(room.graceTimer);
+    room.graceTimer = null;
+    room.disconnectedAt = null;
+    room.viewerSocket = viewerSocket;
+    room.expiresAt = Date.now() + this.roomTtlMs;
+    this.socketIndex.set(viewerSocket, { code, role: 'viewer' });
+
+    if (isOpen(room.teacherSocket)) {
+      sendJson(room.teacherSocket, {
+        type: 'viewer.online',
+        message: '教室端已恢复连接'
+      });
+    }
+
+    return { room, resumed: true };
   }
 
   joinAsTeacher(code, teacherSocket, teacherInfo = null) {
@@ -95,28 +144,39 @@ class RoomManager {
   removeSocket(socket) {
     const binding = this.socketIndex.get(socket);
     if (!binding) {
-      return;
+      return null;
     }
 
     const room = this.rooms.get(binding.code);
     this.socketIndex.delete(socket);
 
     if (!room) {
-      return;
+      return binding;
     }
 
     if (binding.role === 'viewer') {
-      // 教室端关闭后课堂连接码立即失效，手机端需要重新输入新连接码。
-      sendJson(room.teacherSocket, {
-        type: 'viewer.disconnected',
-        message: '教室端已断开，请重新输入连接码'
-      });
-      if (isOpen(room.teacherSocket)) {
-        room.teacherSocket.close(4003, 'viewer disconnected');
+      // 房间可能已被重连的新连接接管，此时不能再销毁房间。
+      if (room.viewerSocket !== socket) {
+        return binding;
       }
-      this.socketIndex.delete(room.teacherSocket);
-      this.rooms.delete(room.code);
-      return;
+
+      // 教室端断开后先保留房间一个宽限期（教师端保持在线），
+      // 大屏在此期间重连即复用原连接码；超过宽限期才真正销毁课堂。
+      room.viewerSocket = null;
+      room.disconnectedAt = Date.now();
+      sendJson(room.teacherSocket, {
+        type: 'viewer.reconnecting',
+        message: '教室端已断开，正在等待自动恢复'
+      });
+
+      clearTimeout(room.graceTimer);
+      room.graceTimer = setTimeout(() => {
+        this.#closeRoom(room, 'viewer.disconnected', '教室端已断开，请重新输入连接码');
+      }, this.viewerGraceMs);
+      if (typeof room.graceTimer.unref === 'function') {
+        room.graceTimer.unref();
+      }
+      return binding;
     }
 
     if (binding.role === 'teacher' && room.teacherSocket === socket) {
@@ -126,6 +186,8 @@ class RoomManager {
         message: '教师设备已断开'
       });
     }
+
+    return binding;
   }
 
   cleanupExpiredRooms() {
@@ -138,6 +200,9 @@ class RoomManager {
   }
 
   #closeRoom(room, type, message) {
+    clearTimeout(room.graceTimer);
+    room.graceTimer = null;
+
     sendJson(room.viewerSocket, { type, message });
     sendJson(room.teacherSocket, { type, message });
 
@@ -172,5 +237,6 @@ module.exports = {
   RoomManager,
   sendJson,
   isOpen,
-  DEFAULT_ROOM_TTL_MS
+  DEFAULT_ROOM_TTL_MS,
+  DEFAULT_VIEWER_GRACE_MS
 };

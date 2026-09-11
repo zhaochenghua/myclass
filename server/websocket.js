@@ -1,5 +1,26 @@
 const { WebSocketServer } = require('ws');
-const { RoomManager, sendJson, DEFAULT_ROOM_TTL_MS } = require('./roomManager');
+const {
+  RoomManager,
+  sendJson,
+  DEFAULT_ROOM_TTL_MS,
+  DEFAULT_VIEWER_GRACE_MS
+} = require('./roomManager');
+
+// 心跳：15 秒一次 ping，连续 3 次收不到 pong（约 45~60 秒）才判定连接死亡。
+// 原先 30 秒一次、一次未响应即 terminate，对投屏大屏（可能息屏/被节流）过于激进，
+// 一次网络抖动就会掐断大屏并导致重连后连接码变化。
+const HEARTBEAT_INTERVAL_MS = 15 * 1000;
+const MAX_MISSED_PONGS = 3;
+
+function logWs(message) {
+  // 用本地时间（服务器为东八区），避免排查时还要做时区换算
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const stamp =
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
+    `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  console.log(`[${stamp}] [WS] ${message}`);
+}
 
 const TEACHER_ONLY_MESSAGE_TYPES = new Set([
   'courseware.annotation',
@@ -27,7 +48,8 @@ function setupWebSocket(server, options) {
   const roomManager =
     options.roomManager ||
     new RoomManager({
-      roomTtlMs: options.roomTtlMs || DEFAULT_ROOM_TTL_MS
+      roomTtlMs: options.roomTtlMs || DEFAULT_ROOM_TTL_MS,
+      viewerGraceMs: options.viewerGraceMs || DEFAULT_VIEWER_GRACE_MS
     });
 
   const wss = new WebSocketServer({
@@ -40,18 +62,25 @@ function setupWebSocket(server, options) {
     }
   });
 
-  wss.on('connection', (socket) => {
+  wss.on('connection', (socket, request) => {
+    socket.remoteAddress = request?.socket?.remoteAddress || '?';
     socket.isAlive = true;
+    socket.missedPongs = 0;
     socket.on('pong', () => {
       socket.isAlive = true;
+      socket.missedPongs = 0;
     });
 
     socket.on('message', (rawMessage) => {
       handleMessage(socket, rawMessage, roomManager, options);
     });
 
-    socket.on('close', () => {
-      roomManager.removeSocket(socket);
+    socket.on('close', (closeCode, reason) => {
+      const binding = roomManager.removeSocket(socket);
+      logWs(
+        `close role=${binding?.role || '?'} code=${binding?.code || '-'} ` +
+          `closeCode=${closeCode} reason=${reason ? reason.toString() : ''} from=${socket.remoteAddress}`
+      );
     });
   });
 
@@ -59,14 +88,18 @@ function setupWebSocket(server, options) {
   const interval = setInterval(() => {
     roomManager.cleanupExpiredRooms();
     for (const socket of wss.clients) {
-      if (!socket.isAlive) {
+      if (socket.missedPongs >= MAX_MISSED_PONGS) {
+        logWs(`heartbeat timeout, terminate from=${socket.remoteAddress}`);
         socket.terminate();
         continue;
+      }
+      if (!socket.isAlive) {
+        socket.missedPongs += 1;
       }
       socket.isAlive = false;
       socket.ping();
     }
-  }, 30 * 1000);
+  }, HEARTBEAT_INTERVAL_MS);
 
   wss.on('close', () => {
     clearInterval(interval);
@@ -89,7 +122,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
 
   switch (message.type) {
     case 'viewer.join':
-      handleViewerJoin(socket, roomManager, options);
+      handleViewerJoin(socket, message, roomManager, options);
       break;
     case 'teacher.join':
       handleTeacherJoin(socket, message, roomManager, options);
@@ -121,18 +154,25 @@ function handleMessage(socket, rawMessage, roomManager, options) {
   }
 }
 
-function handleViewerJoin(socket, roomManager, options) {
+function handleViewerJoin(socket, message, roomManager, options) {
   const existing = roomManager.getBinding(socket);
   if (existing) {
     sendJson(socket, { type: 'error', message: '教室端已加入课堂' });
     return;
   }
 
-  // 连接码由服务端生成并保存在内存，避免浏览器刷新时出现碰撞。
-  const room = roomManager.createRoom(socket);
+  // 断线重连时大屏会带上次的连接码，命中处于宽限期的房间则复用，避免教师端重连。
+  const requestedCode = typeof message.roomCode === 'string' ? message.roomCode : null;
+  const { room, resumed } = roomManager.createRoom(socket, requestedCode);
+  logWs(
+    `room.${resumed ? 'resumed' : 'created'} code=${room.code} ` +
+      `requested=${requestedCode || '-'} from=${socket.remoteAddress}`
+  );
+
   sendJson(socket, {
     type: 'room.created',
     code: room.code,
+    resumed,
     expiresAt: room.expiresAt,
     ttlSeconds: Math.floor((room.expiresAt - Date.now()) / 1000),
     apkUrl: options.apkUrl
@@ -156,6 +196,10 @@ async function handleTeacherJoin(socket, message, roomManager, options) {
   }
 
   const result = roomManager.joinAsTeacher(code, socket, teacherInfo);
+  logWs(
+    `teacher.join code=${code} ok=${result.ok} reason=${result.reason || '-'} ` +
+      `from=${socket.remoteAddress}`
+  );
   if (!result.ok) {
     sendJson(socket, {
       type: 'join.rejected',

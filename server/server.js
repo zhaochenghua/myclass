@@ -85,6 +85,8 @@ function getIosUrl() {
   return `${IOS_BASE_URL}/ios/?v=${encodeURIComponent(iosVersion)}`;
 }
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
+// 大屏断开后保留房间（连接码）的宽限期，默认 5 分钟，设为 0 可恢复“断开即失效”
+const VIEWER_GRACE_MS = Number(process.env.VIEWER_GRACE_MS || 5 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
   (process.env.ALLOWED_HOSTS || `${SERVER_IP},localhost,127.0.0.1,ai.nbsdszx.cn`)
     .split(',')
@@ -570,11 +572,15 @@ app.use(
 );
 
 // HTTP 与 HTTPS 共用一个 RoomManager，保证两种协议下拿到的连接码属于同一间教室。
-const roomManager = new RoomManager({ roomTtlMs: ROOM_TTL_MS });
+const roomManager = new RoomManager({
+  roomTtlMs: ROOM_TTL_MS,
+  viewerGraceMs: VIEWER_GRACE_MS
+});
 
 const websocketOptions = {
   pathPrefix: PATH_PREFIX,
   roomTtlMs: ROOM_TTL_MS,
+  viewerGraceMs: VIEWER_GRACE_MS,
   apkUrl: getApkUrl(),
   roomManager,
   isAllowedHost,
