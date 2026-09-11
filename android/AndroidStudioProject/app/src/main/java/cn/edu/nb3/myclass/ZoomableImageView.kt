@@ -134,6 +134,11 @@ class ZoomableImageView(context: Context) : View(context) {
     private val remoteStrokes = LinkedHashMap<String, AnnotationStroke>()
     private var activeStroke: AnnotationStroke? = null
     private var activeDrawnIndex = 0
+    // 待定落点：单指按下时先只记录位置，确认为绘制（移动超过阈值）才真正起笔。
+    // 这样双指缩放/平移时第二指落下可直接丢弃落点，不会留下孤立的小点。
+    private var pendingStartX = 0f
+    private var pendingStartY = 0f
+    private var hasPendingStart = false
     private val pendingPoints = mutableListOf<AnnotationPoint>()
     private var strokeSeq = 0
     private var lastSyncAt = 0L
@@ -234,6 +239,7 @@ class ZoomableImageView(context: Context) : View(context) {
     fun resetAnnotations() {
         activeStroke = null
         activeDrawnIndex = 0
+        hasPendingStart = false
         pendingPoints.clear()
         strokes.clear()
         remoteStrokes.clear()
@@ -246,6 +252,7 @@ class ZoomableImageView(context: Context) : View(context) {
     fun releaseAnnotationLayer() {
         activeStroke = null
         activeDrawnIndex = 0
+        hasPendingStart = false
         pendingPoints.clear()
         strokes.clear()
         remoteStrokes.clear()
@@ -272,6 +279,7 @@ class ZoomableImageView(context: Context) : View(context) {
     fun replaceStrokes(next: List<AnnotationStroke>) {
         activeStroke = null
         activeDrawnIndex = 0
+        hasPendingStart = false
         pendingPoints.clear()
         strokes.clear()
         strokes.addAll(next.map { it.copy(points = it.points.toMutableList()) })
@@ -474,6 +482,11 @@ class ZoomableImageView(context: Context) : View(context) {
         if (direction < 0 && atTop) return true
         // 滚动一屏（留 8% 重叠，避免相邻屏内容割裂）
         val step = viewHeight * 0.92f
+        // 可滚动范围不足一屏（页面只比屏幕高一点点，如横版 PPT）：一屏就能滚完剩余内容，
+        // 直接翻页即可，避免"先滚到底、再按一次才翻页"导致要按两下。
+        if (2f * maxY <= step) {
+            return true
+        }
         translateY = (translateY - direction * step).coerceIn(-maxY, maxY)
         clampTranslation()
         markAnnotationDirty()
@@ -522,6 +535,13 @@ class ZoomableImageView(context: Context) : View(context) {
         }
         // 大屏一屏（占屏高 92%）对应的进度增量
         val stepRatio = (bigAspectHOverW * 0.92f) / (2f * bigMaxYRatio)
+        // 大屏可滚动范围不足一屏（页面只比大屏高一点点，如横版 PPT）：一屏就能滚完，
+        // 直接翻页，避免需要按两下才翻页。
+        if (stepRatio >= 1f) {
+            bigScrollActive = false
+            bigProgressY = 0f
+            return true
+        }
         // 滚动一屏；剩余不足一屏时滚到底/顶，把剩余内容补成一屏显示出来，下次再按才翻页
         bigProgressY = (bigProgressY + direction * stepRatio).coerceIn(0f, 1f)
         notifyViewport(force = true)
@@ -556,21 +576,44 @@ class ZoomableImageView(context: Context) : View(context) {
             MotionEvent.ACTION_DOWN -> {
                 twoFingerActive = false
                 if (mode == ImageCastMode.Pen && event.pointerCount == 1) {
-                    startStroke(event.x, event.y)
+                    // 先只记录落点，等确认是单指绘制（移动超过阈值）才真正起笔，
+                    // 避免双指缩放 / 平移时把落点提交成"只有一个点的笔画"而留下小点。
+                    pendingStartX = event.x
+                    pendingStartY = event.y
+                    hasPendingStart = true
                 }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
-                // 第二指落下：结束画笔笔画，进入双指缩放 / 平移
-                finishActiveStroke(notify = true)
+                // 第二指落下：若尚未真正起笔（只是落点），直接丢弃落点，不产生孤立小点；
+                // 已经起笔则正常结束当前笔画，进入双指缩放 / 平移。
+                if (hasPendingStart) {
+                    hasPendingStart = false
+                } else {
+                    finishActiveStroke(notify = true)
+                }
                 twoFingerActive = true
                 updateTwoFingerState(event)
             }
             MotionEvent.ACTION_MOVE -> {
                 when {
                     mode == ImageCastMode.Pen && event.pointerCount == 1 -> {
-                        extendStroke(event.x, event.y)
+                        if (hasPendingStart) {
+                            val dx = event.x - pendingStartX
+                            val dy = event.y - pendingStartY
+                            val slop = START_STROKE_SLOP_DP * resources.displayMetrics.density
+                            if (dx * dx + dy * dy >= slop * slop) {
+                                // 确认为绘制：以最初落点起笔，再补上当前这个移动点
+                                hasPendingStart = false
+                                startStroke(pendingStartX, pendingStartY)
+                                extendStroke(event.x, event.y)
+                            }
+                        } else {
+                            extendStroke(event.x, event.y)
+                        }
                     }
                     event.pointerCount >= 2 -> {
+                        // 双指手势期间丢弃待定落点，避免抬指后被当成单击画点
+                        hasPendingStart = false
                         handleTwoFingerGesture(event)
                     }
                     // 手势模式下单指平移由 GestureListener.onScroll 负责
@@ -584,10 +627,21 @@ class ZoomableImageView(context: Context) : View(context) {
                     updateTwoFingerState(event)
                 }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            MotionEvent.ACTION_UP -> {
+                if (hasPendingStart) {
+                    // 单指点击且未移动：补画一个点，保留"单击画点"的能力
+                    hasPendingStart = false
+                    startStroke(pendingStartX, pendingStartY)
+                }
                 finishActiveStroke(notify = true)
                 notifyViewport(force = true)
                 performClick()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                // 手势被取消：丢弃待定落点，不补画点
+                hasPendingStart = false
+                finishActiveStroke(notify = true)
+                notifyViewport(force = true)
             }
         }
         gestureDetector.onTouchEvent(event)
@@ -668,15 +722,18 @@ class ZoomableImageView(context: Context) : View(context) {
         invalidate()
         val now = System.currentTimeMillis()
         if (now - lastSyncAt >= AnnotationPalette.SYNC_INTERVAL_MS || pendingPoints.size >= MAX_PENDING_POINTS) {
-            flushPendingPoints()
+            flushPendingPoints(stroke)
             lastSyncAt = now
         }
     }
 
     private fun finishActiveStroke(notify: Boolean) {
         val stroke = activeStroke ?: return
+        // 先把尚未发送的点补发出去，再结束笔画。
+        // 顺序很关键：若先置空 activeStroke，flush 时取到 null 会直接 return，
+        // 最后一段点就丢了，大屏上的笔画会短一截（例如画圆不闭合）。
+        flushPendingPoints(stroke)
         activeStroke = null
-        flushPendingPoints()
         strokes.add(stroke)
         annotationDirty = true
         invalidate()
@@ -686,8 +743,7 @@ class ZoomableImageView(context: Context) : View(context) {
         onAnnotationCountChanged?.invoke()
     }
 
-    private fun flushPendingPoints() {
-        val stroke = activeStroke
+    private fun flushPendingPoints(stroke: AnnotationStroke?) {
         if (stroke == null || pendingPoints.isEmpty()) return
         val batch = pendingPoints.toList()
         pendingPoints.clear()
@@ -875,6 +931,8 @@ class ZoomableImageView(context: Context) : View(context) {
         private const val NOTIFY_INTERVAL_MS = 80L
         /** 单次批量上报的最大点数，防止弱网下积压过多 */
         private const val MAX_PENDING_POINTS = 12
+        /** 起笔判定阈值（dp）：单指移动超过该距离才认定为绘制，避免落点被误判成笔画 */
+        private const val START_STROKE_SLOP_DP = 6f
         /** 板擦不依赖颜色（大屏端固定 #000），这里给一个占位色 */
         private const val ERASER_COLOR = "#000000"
     }

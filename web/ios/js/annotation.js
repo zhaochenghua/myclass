@@ -18,6 +18,8 @@ export const ERASER_WIDTH = 40;
 const SYNC_INTERVAL_MS = 60;
 const MAX_PENDING_POINTS = 12;
 const MIN_POINT_DISTANCE = 0.0015;
+/** 起笔判定阈值（CSS px）：单指移动超过该距离才认定为绘制，避免落点被误判成笔画 */
+const START_STROKE_SLOP_PX = 6;
 const ERASER_COLOR = '#000000';
 
 function round4(value) {
@@ -59,6 +61,12 @@ export class AnnotationBoard {
     this.remoteStrokes = new Map();
     this.activeStroke = null;
     this.activePointerId = null;
+    // 待定落点：按下时先只记录位置，确认为绘制（移动超过阈值）才真正起笔。
+    // 这样双指缩放/平移时第二指落下可直接丢弃落点，不会留下孤立的小点。
+    this.hasPendingStart = false;
+    this.pendingStart = null;
+    this.pendingClientX = 0;
+    this.pendingClientY = 0;
     this.pendingPoints = [];
     this.lastSyncAt = 0;
     this.strokeSeq = 0;
@@ -159,7 +167,13 @@ export class AnnotationBoard {
   /** 第二根手指落下 / 退出画笔时结束当前笔画 */
   endActiveStroke(notify = true) {
     const stroke = this.activeStroke;
-    if (!stroke) return;
+    if (!stroke) {
+      // 尚未真正起笔（只是落点）：直接丢弃落点，不产生孤立小点。
+      // 双指缩放/平移时第二指落下走的就是这条路径。
+      this.hasPendingStart = false;
+      this.pendingStart = null;
+      return;
+    }
     this.#flushPendingPoints();
     this.activeStroke = null;
     this.activePointerId = null;
@@ -395,11 +409,17 @@ export class AnnotationBoard {
         /* 某些浏览器不支持捕获，忽略 */
       }
       this.activePointerId = event.pointerId;
-      this.#beginStroke(point);
+      // 先只记录落点，等确认是单指绘制（移动超过阈值）才真正起笔，
+      // 避免双指缩放 / 平移时把落点提交成"只有一个点的笔画"而留下小点。
+      this.pendingClientX = event.clientX;
+      this.pendingClientY = event.clientY;
+      this.pendingStart = point;
+      this.hasPendingStart = true;
     });
 
     canvas.addEventListener('pointermove', (event) => {
-      if (!this.activeStroke || event.pointerId !== this.activePointerId) return;
+      if (!this.activeStroke && !this.hasPendingStart) return;
+      if (event.pointerId !== this.activePointerId) return;
       event.preventDefault();
       // 尽量取回合并事件，快速划动时笔迹更平滑（不支持时退回单事件）
       let samples = [];
@@ -408,27 +428,50 @@ export class AnnotationBoard {
       } catch {
         samples = [];
       }
-      if (samples.length > 0) {
-        for (const sample of samples) this.#extendStroke(sample.clientX, sample.clientY);
-      } else {
-        this.#extendStroke(event.clientX, event.clientY);
+      const list = samples.length > 0 ? samples : [event];
+      for (const sample of list) {
+        if (this.hasPendingStart) {
+          const dx = sample.clientX - this.pendingClientX;
+          const dy = sample.clientY - this.pendingClientY;
+          if (dx * dx + dy * dy < START_STROKE_SLOP_PX * START_STROKE_SLOP_PX) continue;
+          // 确认为绘制：以最初落点起笔，再补上当前这个点
+          this.hasPendingStart = false;
+          this.#beginStroke(this.pendingStart);
+          this.pendingStart = null;
+        }
+        this.#extendStroke(sample.clientX, sample.clientY);
       }
     });
 
     const finish = (event) => {
       if (this.activePointerId === null || event.pointerId !== this.activePointerId) return;
       event.preventDefault();
+      if (this.hasPendingStart) {
+        // 单指点击且未移动：补画一个点，保留"单击画点"的能力
+        this.hasPendingStart = false;
+        this.#beginStroke(this.pendingStart);
+        this.pendingStart = null;
+      }
+      this.endActiveStroke(true);
+      // 释放捕获放在最后：releasePointerCapture 可能同步触发 lostpointercapture，
+      // 若此时落点还没消费完，会被误判成"未起笔"而丢弃，导致单击画不出点。
       try {
         canvas.releasePointerCapture(event.pointerId);
       } catch {
         /* ignore */
       }
-      this.endActiveStroke(true);
     };
     canvas.addEventListener('pointerup', finish);
-    canvas.addEventListener('pointercancel', finish);
+    canvas.addEventListener('pointercancel', (event) => {
+      // 手势被取消：丢弃待定落点，不补画点
+      if (this.activePointerId === null || event.pointerId !== this.activePointerId) return;
+      this.hasPendingStart = false;
+      this.pendingStart = null;
+      this.endActiveStroke(true);
+    });
     canvas.addEventListener('lostpointercapture', () => {
-      if (this.activePointerId !== null) this.endActiveStroke(true);
+      // 仅在真正起笔后结束；未起笔时保留待定落点，交给 pointerup 补画点
+      if (this.activeStroke) this.endActiveStroke(true);
     });
   }
 
@@ -453,7 +496,8 @@ export class AnnotationBoard {
       points: [point]
     };
     this.activeStroke = stroke;
-    this.pendingPoints = [point];
+    // begin 已携带起点，无需再放入待发队列，避免首帧把起点重复发给大屏
+    this.pendingPoints = [];
     this.lastSyncAt = performance.now();
     this.emit({
       action: 'begin',
