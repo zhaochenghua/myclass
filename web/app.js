@@ -1,6 +1,8 @@
 const state = {
   socket: null,
   peerConnection: null,
+  // Queue ICE candidates that arrive before the remote description.
+  pendingRemoteCandidates: [],
   config: null,
   reconnectTimer: null,
   reconnectAttempts: 0,
@@ -932,6 +934,7 @@ async function handleSignalMessage(message) {
 
 async function handleOffer(sdp) {
   cleanupPeerConnection();
+  state.pendingRemoteCandidates = [];
   const peerConnection = createPeerConnection();
   if (!peerConnection) return;
   state.peerConnection = peerConnection;
@@ -942,6 +945,11 @@ async function handleOffer(sdp) {
       type: 'offer',
       sdp
     });
+    const pendingCandidates = state.pendingRemoteCandidates.splice(0);
+    for (const candidate of pendingCandidates) {
+      try { await peerConnection.addIceCandidate(candidate); }
+      catch (error) { console.warn('add queued ICE candidate failed', error); }
+    }
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
     sendMessage({
@@ -1067,7 +1075,9 @@ function configureLowLatencyReceiver(receiver) {
 }
 
 async function addRemoteCandidate(candidate) {
-  if (!state.peerConnection || !candidate) {
+  if (!candidate) return;
+  if (!state.peerConnection || !state.peerConnection.remoteDescription) {
+    state.pendingRemoteCandidates.push(candidate);
     return;
   }
   try {
@@ -1147,6 +1157,7 @@ function cleanupPeerConnection() {
     state.peerConnection.close();
     state.peerConnection = null;
   }
+  state.pendingRemoteCandidates = [];
   elements.remoteVideo.srcObject = null;
   state.framePresentation = {
     frameLocked: false,

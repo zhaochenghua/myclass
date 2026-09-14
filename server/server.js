@@ -108,6 +108,7 @@ if (!AUTH_SECRET) {
 }
 const INACTIVE_USER_DELETE_DAYS = Number(process.env.INACTIVE_USER_DELETE_DAYS || 60);
 const usersPath = path.join(dataDir, 'users.json');
+const { readUsers, writeUsers } = require('./userStore').createUserStore(usersPath);
 
 const app = express();
 const server = http.createServer(app);
@@ -298,7 +299,11 @@ app.post(`${PATH_PREFIX}/api/auth/login`, async (req, res, next) => {
       res.status(401).json({ error: '用户名或密码错误' });
       return;
     }
-    user.token = crypto.randomBytes(32).toString('hex');
+    // Keep an existing token valid when the same account logs in again.
+    // Otherwise another device/login invalidates an active classroom session.
+    if (!user.token) {
+      user.token = crypto.randomBytes(32).toString('hex');
+    }
     user.lastLoginAt = new Date().toISOString();
     await writeUsers(users);
     const role = user.role || (user.username === 'admin' ? 'admin' : 'user');
@@ -1105,22 +1110,6 @@ function isAllowedOrigin(origin) {
   }
 }
 
-// -- 用户数据读写 --
-async function readUsers() {
-  try {
-    const text = await fs.promises.readFile(usersPath, 'utf8');
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  }
-}
-
-async function writeUsers(users) {
-  await fs.promises.writeFile(usersPath, JSON.stringify(users, null, 2), 'utf8');
-}
-
 function hashPassword(password) {
   return crypto.createHmac('sha256', AUTH_SECRET).update(password).digest('hex');
 }
@@ -1170,8 +1159,10 @@ async function cleanupInactiveUsers() {
         await deleteStoredCourseware(item.id, item.userId).catch(() => {});
       }
     }
-    const remaining = users.filter((u) => !inactiveIds.has(u.id));
-    await writeUsers(remaining);
+    for (let i = users.length - 1; i >= 0; i -= 1) {
+      if (inactiveIds.has(users[i].id)) users.splice(i, 1);
+    }
+    await writeUsers(users);
     console.log(`清理了 ${inactive.length} 个不活跃用户及课件`);
   } catch (error) {
     console.error('清理不活跃用户失败:', error.message);

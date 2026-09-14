@@ -125,7 +125,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     )
 
     private var currentScreen = Screen.Connect
-    private var authToken: String? = null
+    @Volatile private var authToken: String? = null
+    private var authGeneration = 0
     private var authUsername: String? = null
     private var signalingClient: SignalingClient? = null
     private var webRtcClient: CameraWebRtcClient? = null
@@ -267,6 +268,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private val bracketTitlePattern = Pattern.compile("【([^】]+)】")
     private var initialIntentProcessed = false
     private val coursewareHttpClient = OkHttpClient.Builder()
+        .addInterceptor { chain ->
+            val response = chain.proceed(chain.request())
+            if (response.code == 401) {
+                val token = chain.request().header("Authorization")?.removePrefix("Bearer ")
+                onAuthenticationExpired(token)
+            }
+            response
+        }
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.MINUTES)
         .readTimeout(30, TimeUnit.MINUTES)
@@ -540,6 +549,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun saveAuth(token: String, username: String) {
+        authGeneration += 1
         authToken = token
         authUsername = username
         prefs.edit()
@@ -549,6 +559,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun clearAuth() {
+        authGeneration += 1
         authToken = null
         authUsername = null
         prefs.edit().remove("token").remove("username").apply()
@@ -571,25 +582,60 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun verifyTokenThenProceed() {
+        val token = authToken ?: return
+        val generation = authGeneration
         Thread {
             runCatching {
                 val request = Request.Builder()
                     .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/auth/me")
-                    .get().also { addAuthHeader(it) }
+                    .get().header("Authorization", "Bearer $token")
                     .build()
                 authHttpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) throw IOException("token invalid")
+                    if (response.code == 401) throw TokenExpiredException()
+                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
                 }
             }.onSuccess {
-                runOnUiThread { showConnectScreen() }
-            }.onFailure {
                 runOnUiThread {
-                    clearAuth()
-                    // Already on auth screen, just update status
-                    updateStatus("无法连接服务器，请确认已连接教室网络")
+                    if (authGeneration == generation && currentScreen == Screen.Auth) {
+                        showConnectScreen()
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    // A slow startup request must not clear a newer login.
+                    if (authGeneration != generation || currentScreen != Screen.Auth) return@runOnUiThread
+                    if (error is TokenExpiredException) {
+                        clearAuth()
+                        updateStatus("登录已过期，请重新登录")
+                    } else {
+                        updateStatus("无法连接服务器，请确认已连接教室网络")
+                    }
                 }
             }
         }.start()
+    }
+
+    private class TokenExpiredException : IOException()
+
+    fun onAuthenticationExpired(rejectedToken: String?) {
+        runOnUiThread {
+            if (rejectedToken == null || authToken != rejectedToken || isDestroyed) return@runOnUiThread
+            clearAuth()
+            // Preserve the active projection until the teacher chooses to sign in.
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("登录状态已失效")
+                .setMessage("投屏连接与账号登录是独立状态。当前投屏可继续；使用课件列表或上传需要重新登录。")
+                .setNegativeButton("稍后登录", null)
+                .setPositiveButton("重新登录") { _, _ ->
+                    signalingClient?.sendStop()
+                    signalingClient?.sendCoursewareClose()
+                    releaseCamera()
+                    handleRoomInvalid()
+                    showAuthScreen()
+                    updateStatus("请重新登录后连接课堂")
+                }
+                .show()
+        }
     }
 
     private fun showAuthScreen() {

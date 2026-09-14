@@ -1,0 +1,34 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { createUserStore } = require('./userStore');
+
+test('concurrent activity writes preserve credentials, new accounts and valid JSON', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myclass-auth-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'users.json');
+  const store = createUserStore(file);
+  const seed = await store.readUsers();
+  seed.push({ id: '1', username: 'test', token: 'old', passwordHash: 'before', lastLoginAt: '2026-01-01' });
+  await store.writeUsers(seed);
+  const [activity, password, registration] = await Promise.all([store.readUsers(), store.readUsers(), store.readUsers()]);
+  password[0].token = 'new';
+  password[0].passwordHash = 'after';
+  registration.push({ id: '2', username: 'second', token: 'second' });
+  activity[0].lastLoginAt = '2026-09-14';
+  await Promise.all([store.writeUsers(password), store.writeUsers(registration), store.writeUsers(activity)]);
+  const final = await store.readUsers();
+  assert.equal(final.length, 2);
+  assert.equal(final[0].token, 'new');
+  assert.equal(final[0].passwordHash, 'after');
+  assert.equal(final[0].lastLoginAt, '2026-09-14');
+  const stale = await store.readUsers();
+  const deleted = await store.readUsers();
+  deleted.splice(0, 1);
+  await store.writeUsers(deleted);
+  stale[0].lastLoginAt = '2026-09-15';
+  await store.writeUsers(stale);
+  assert.equal((await store.readUsers()).length, 1);
+});

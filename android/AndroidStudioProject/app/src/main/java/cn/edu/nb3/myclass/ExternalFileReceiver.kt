@@ -153,6 +153,7 @@ object ExternalFileReceiver {
                     (activity as? MainActivity)?.openLinkCoursewareOnScreen(pending.url, pending.displayName)
                 }
             } catch (e: Exception) {
+                if (e is ExpiredUploadAuth) (activity as? MainActivity)?.onAuthenticationExpired(token)
                 activity.runOnUiThread {
                     Toast.makeText(activity, "添加失败: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
@@ -295,6 +296,7 @@ object ExternalFileReceiver {
                     Toast.makeText(activity, "${pending.displayName} 上传完成", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
+                if (e is ExpiredUploadAuth) (activity as? MainActivity)?.onAuthenticationExpired(token)
                 activity.runOnUiThread {
                     Toast.makeText(activity, "上传失败: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
@@ -446,6 +448,8 @@ object ExternalFileReceiver {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
+    private class ExpiredUploadAuth : java.io.IOException("登录已过期，请重新登录")
+
     private fun uploadFile(baseUrl: String, token: String, file: File, displayName: String, onProgress: ((Long) -> Unit)? = null) {
         val fileBody = object : RequestBody() {
             override fun contentType() = "application/octet-stream".toMediaTypeOrNull()
@@ -481,6 +485,7 @@ object ExternalFileReceiver {
             .build()
 
         uploadClient.newCall(request).execute().use { response ->
+            if (response.code == 401) throw ExpiredUploadAuth()
             if (!response.isSuccessful) {
                 val msg = runCatching {
                     JSONObject(response.body?.string().orEmpty()).optString("error")
@@ -554,6 +559,7 @@ object ExternalFileReceiver {
             .build()
 
         uploadClient.newCall(request).execute().use { response ->
+            if (response.code == 401) throw ExpiredUploadAuth()
             if (!response.isSuccessful) {
                 val msg = runCatching {
                     JSONObject(response.body?.string().orEmpty()).optString("error")
