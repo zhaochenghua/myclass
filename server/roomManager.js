@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { PresentationState } = require('./presentationState');
 
 const SOCKET_OPEN = 1;
 const DEFAULT_ROOM_TTL_MS = 2 * 60 * 60 * 1000;
@@ -31,8 +32,8 @@ class RoomManager {
    * 教室端加入课堂。requestedCode 为断线重连时带回的原连接码，
    * 命中处于宽限期的房间则复用原码（返回 resumed=true），否则新建房间。
    */
-  createRoom(viewerSocket, requestedCode = null) {
-    const resumed = this.#resumeRoom(viewerSocket, requestedCode);
+  createRoom(viewerSocket, requestedCode = null, recoveryKey = null) {
+    const resumed = this.#resumeRoom(viewerSocket, requestedCode, recoveryKey);
     if (resumed) {
       return resumed;
     }
@@ -41,8 +42,12 @@ class RoomManager {
     const code = this.#createUniqueCode();
     const room = {
       code,
+      recoveryKey: crypto.randomBytes(24).toString('hex'),
       viewerSocket,
       teacherSocket: null,
+      teacherInfo: null,
+      presentation: new PresentationState(),
+      presentationRevision: 0,
       createdAt: now,
       expiresAt: now + this.roomTtlMs,
       disconnectedAt: null,
@@ -55,7 +60,7 @@ class RoomManager {
     return { room, resumed: false };
   }
 
-  #resumeRoom(viewerSocket, requestedCode) {
+  #resumeRoom(viewerSocket, requestedCode, recoveryKey) {
     if (!requestedCode) {
       return null;
     }
@@ -67,9 +72,16 @@ class RoomManager {
 
     const room = this.rooms.get(code);
     // 仅接管“大屏已断开且处于宽限期”的房间，防止在线的大屏被他人抢占。
-    if (!room || room.viewerSocket || !room.disconnectedAt || this.#isExpired(room)) {
+    if (!room || this.#isExpired(room)) {
       return null;
     }
+    // Only the same browser tab may replace a half-open connection immediately.
+    if (room.viewerSocket) {
+      if (!recoveryKey || recoveryKey !== room.recoveryKey) return null;
+      const previous = room.viewerSocket;
+      this.socketIndex.delete(previous);
+      previous.close(4000, 'viewer reconnected');
+    } else if (!room.disconnectedAt) return null;
 
     clearTimeout(room.graceTimer);
     room.graceTimer = null;
@@ -78,14 +90,17 @@ class RoomManager {
     room.expiresAt = Date.now() + this.roomTtlMs;
     this.socketIndex.set(viewerSocket, { code, role: 'viewer' });
 
-    if (isOpen(room.teacherSocket)) {
-      sendJson(room.teacherSocket, {
-        type: 'viewer.online',
-        message: '教室端已恢复连接'
-      });
-    }
-
     return { room, resumed: true };
+  }
+
+  restoreViewer(room) {
+    if (isOpen(room.teacherSocket)) {
+      sendJson(room.viewerSocket, { type: 'teacher.online', ...room.teacherInfo });
+    }
+    if (room.viewerSocket?.supportsRecovery) {
+      sendJson(room.viewerSocket, { type: 'room.snapshot', presentation: room.presentation.snapshot(), presentationRevision: room.presentationRevision });
+    }
+    sendJson(room.teacherSocket, { type: 'viewer.online', message: '教室端已恢复连接' });
   }
 
   joinAsTeacher(code, teacherSocket, teacherInfo = null) {
@@ -107,7 +122,9 @@ class RoomManager {
       this.socketIndex.delete(room.teacherSocket);
     }
 
+    if (room.teacherInfo?.username !== teacherInfo?.username) room.presentation.reset();
     room.teacherSocket = teacherSocket;
+    room.teacherInfo = teacherInfo ? { username: teacherInfo.username, token: teacherInfo.token } : null;
     this.socketIndex.set(teacherSocket, { code, role: 'teacher' });
 
     // 通知大屏端教师上线，携带用户信息用于同步登录
@@ -117,6 +134,7 @@ class RoomManager {
       onlineMsg.token = teacherInfo.token;
     }
     sendJson(room.viewerSocket, onlineMsg);
+    sendJson(teacherSocket, { type: isOpen(room.viewerSocket) ? 'viewer.online' : 'viewer.reconnecting' });
 
     return { ok: true, room };
   }
@@ -134,6 +152,18 @@ class RoomManager {
 
     const target =
       binding.role === 'teacher' ? room.viewerSocket : room.teacherSocket;
+    room.expiresAt = Date.now() + this.roomTtlMs;
+    if (payload.type === 'courseware.state' && payload.presentationRevision != null &&
+        payload.presentationRevision !== room.presentationRevision) return false;
+    if (['courseware.open', 'courseware.page', 'courseware.navigate', 'viewer.courseware.open'].includes(payload.type)) {
+      room.presentationRevision += 1;
+      payload = { ...payload, presentationRevision: room.presentationRevision };
+    }
+    const samePresentation = payload.type === 'courseware.open' && room.presentation.open?.url === payload.url;
+    room.presentation.apply(payload, binding.role);
+    if (samePresentation && room.viewerSocket?.supportsRecovery) {
+      return sendJson(target, { type: 'room.snapshot', presentation: room.presentation.snapshot(), presentationRevision: room.presentationRevision });
+    }
     return sendJson(target, payload);
   }
 
@@ -193,6 +223,10 @@ class RoomManager {
   cleanupExpiredRooms() {
     const now = Date.now();
     for (const room of this.rooms.values()) {
+      if (isOpen(room.teacherSocket)) {
+        room.expiresAt = now + this.roomTtlMs;
+        continue;
+      }
       if (room.expiresAt <= now) {
         this.#closeRoom(room, 'room.expired', '连接码已过期');
       }

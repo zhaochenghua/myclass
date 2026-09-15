@@ -132,6 +132,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var webRtcClient: CameraWebRtcClient? = null
     private var cameraRenderer: SurfaceViewRenderer? = null
     private var statusText: TextView? = null
+    private var viewerOnline = true
+    private var viewerConnectionNotice: TextView? = null
     private var startLiveButton: MaterialButton? = null
     private var stopLiveButton: MaterialButton? = null
     private var switchCameraButton: MaterialButton? = null
@@ -3081,6 +3083,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             )
         }
         imageHost.addView(hintText)
+        attachViewerConnectionNotice(imageHost)
 
         // 模式提示 + 切换按钮：常驻显示，是手势 / 画笔两种模式的唯一入口
         var refreshAnnotationBar: (() -> Unit)? = null
@@ -3451,6 +3454,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             )
         }
         imageHost.addView(hintText)
+        attachViewerConnectionNotice(imageHost)
 
         var refreshAnnotationBar: (() -> Unit)? = null
         var applyCastMode: (() -> Unit)? = null
@@ -5173,7 +5177,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             coursewareScreen
                         )
                     }
-                    showCoursewareScreen(title = coursewareTitle, isUploading = false)
+                    if (zoomableImageView == null) {
+                        showCoursewareScreen(title = coursewareTitle, isUploading = false)
+                    } else {
+                        // Preserve local ink and zoom when only signaling has reconnected.
+                        zoomableImageView?.resendViewport()
+                        updateStatus(coursewareStatusText(coursewareTitle))
+                    }
                     if (!screenStillPlayingVideo) {
                         showCoursewareReconnectToast()
                     }
@@ -5208,6 +5218,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             } else {
                 showMenuScreen()
             }
+        }
+    }
+
+    override fun onViewerConnectionChanged(online: Boolean) {
+        runOnUiThread {
+            val changed = viewerOnline != online
+            viewerOnline = online
+            viewerConnectionNotice?.visibility = if (online) View.GONE else View.VISIBLE
+            if (currentScreen == Screen.Courseware && coursewareUrl.isNotBlank()) {
+                updateStatus(coursewareStatusText(coursewareTitle))
+                if (online) zoomableImageView?.resendViewport()
+            } else if (roomJoined) {
+                updateStatus(if (online) "大屏已连接" else "大屏断线，正在等待自动恢复")
+            }
+            if (changed) toast(if (online) "大屏已恢复连接" else "大屏断线，正在等待自动恢复")
         }
     }
 
@@ -5408,8 +5433,26 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     fun updateStatus(message: String) {
         runOnUiThread {
-            statusText?.text = message
+            statusText?.text = if (roomJoined && !viewerOnline) {
+                "大屏断线，正在等待自动恢复\n$message"
+            } else message
         }
+    }
+
+    private fun attachViewerConnectionNotice(host: FrameLayout) {
+        val notice = TextView(this).apply {
+            text = "大屏断线，正在等待自动恢复"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(154, 52, 18))
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            visibility = if (viewerOnline) View.GONE else View.VISIBLE
+        }
+        host.addView(notice, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP
+        ))
+        viewerConnectionNotice = notice
     }
 
     private fun startLiveFromUi() {

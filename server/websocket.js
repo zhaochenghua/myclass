@@ -63,7 +63,8 @@ function setupWebSocket(server, options) {
   });
 
   wss.on('connection', (socket, request) => {
-    socket.remoteAddress = request?.socket?.remoteAddress || '?';
+    socket.remoteAddress = request.headers['x-real-ip'] || request?.socket?.remoteAddress || '?';
+    socket.on('error', error => logWs(`socket error from=${socket.remoteAddress} message=${error.message}`));
     socket.isAlive = true;
     socket.missedPongs = 0;
     socket.on('pong', () => {
@@ -121,6 +122,9 @@ function handleMessage(socket, rawMessage, roomManager, options) {
   }
 
   switch (message.type) {
+    case 'client.ping':
+      sendJson(socket, { type: 'server.pong', at: message.at });
+      break;
     case 'viewer.join':
       handleViewerJoin(socket, message, roomManager, options);
       break;
@@ -163,7 +167,8 @@ function handleViewerJoin(socket, message, roomManager, options) {
 
   // 断线重连时大屏会带上次的连接码，命中处于宽限期的房间则复用，避免教师端重连。
   const requestedCode = typeof message.roomCode === 'string' ? message.roomCode : null;
-  const { room, resumed } = roomManager.createRoom(socket, requestedCode);
+  socket.supportsRecovery = message.supportsRecovery === true;
+  const { room, resumed } = roomManager.createRoom(socket, requestedCode, message.recoveryKey);
   logWs(
     `room.${resumed ? 'resumed' : 'created'} code=${room.code} ` +
       `requested=${requestedCode || '-'} from=${socket.remoteAddress}`
@@ -172,11 +177,13 @@ function handleViewerJoin(socket, message, roomManager, options) {
   sendJson(socket, {
     type: 'room.created',
     code: room.code,
+    recoveryKey: room.recoveryKey,
     resumed,
     expiresAt: room.expiresAt,
     ttlSeconds: Math.floor((room.expiresAt - Date.now()) / 1000),
     apkUrl: options.apkUrl
   });
+  if (resumed) roomManager.restoreViewer(room);
 }
 
 async function handleTeacherJoin(socket, message, roomManager, options) {

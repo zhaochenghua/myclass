@@ -16,7 +16,9 @@ const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 3000);
 const PATH_PREFIX = normalizePrefix(process.env.PATH_PREFIX || '/myclass');
 const PUBLIC_BASE_URL = removeTrailingSlash(
-  process.env.PUBLIC_BASE_URL || `http://ai.nbsdszx.cn${PATH_PREFIX}`
+  // Android 的网络安全配置允许校园网固定 IP 的 HTTP；下载地址也必须与此一致，
+  // 否则更新器会因为 ai.nbsdszx.cn 的明文 HTTP 被 Android 拒绝。
+  process.env.PUBLIC_BASE_URL || `http://${SERVER_IP}${PATH_PREFIX}`
 );
 // 版本号必须以 server/data/versions.json 为准（由 Android 构建脚本自动写入）。
 // 不要为 appVersion 在此硬编码默认值，否则容易被误认为改这里就能生效。
@@ -169,6 +171,13 @@ app.use((req, res, next) => {
 
 app.get('/', (req, res) => {
   res.redirect(`${PATH_PREFIX}/`);
+});
+
+// Classroom viewers use the campus IP; leave iOS HTTPS, API and downloads unchanged.
+app.get([PATH_PREFIX, `${PATH_PREFIX}/`, `${PATH_PREFIX}/index.html`], (req, res, next) => {
+  if (!['ai.nbsdszx.cn', 'ai.imst.xyz'].includes(req.hostname)) return next();
+  const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+  res.redirect(302, `http://${SERVER_IP}${PATH_PREFIX}/${query}`);
 });
 
 app.get(`${PATH_PREFIX}/health`, (req, res) => {
@@ -569,6 +578,9 @@ app.use(
     maxAge: '5m',
     index: 'index.html',
     setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html') || filePath.endsWith('app.js')) {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
       if (filePath.endsWith('.mjs')) {
         res.setHeader('Content-Type', 'application/javascript');
       }

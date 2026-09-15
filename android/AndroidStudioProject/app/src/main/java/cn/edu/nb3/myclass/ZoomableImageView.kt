@@ -660,6 +660,8 @@ class ZoomableImageView(context: Context) : View(context) {
         translateY = translateY.coerceIn(-maxY, maxY)
     }
 
+    fun resendViewport() = notifyViewport(force = true)
+
     private fun notifyViewport(force: Boolean = false) {
         if (fitWidth <= 0f || fitHeight <= 0f) return
         val now = System.currentTimeMillis()

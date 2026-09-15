@@ -44,6 +44,7 @@ class SignalingClient(
 
     interface Callback {
         fun onJoinAccepted()
+        fun onViewerConnectionChanged(online: Boolean)
         fun onJoinRejected(message: String)
         fun onKicked(message: String)
         fun onServerClosed(message: String)
@@ -67,7 +68,7 @@ class SignalingClient(
         .build()
 
     private var webSocket: WebSocket? = null
-    private var closedByUser = false
+    @Volatile private var closedByUser = false
 
     fun connect() {
         val request = Request.Builder()
@@ -274,6 +275,7 @@ class SignalingClient(
     }
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
+        if (closedByUser) { webSocket.close(1000, "user closed"); return }
         // 手机端连接成功后立即提交 4 位连接码。
         val joinMsg = JSONObject()
             .put("type", "teacher.join")
@@ -284,9 +286,12 @@ class SignalingClient(
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
+        if (closedByUser) return
         val message = runCatching { JSONObject(text) }.getOrNull() ?: return
         when (message.optString("type")) {
             "join.accepted" -> callback.onJoinAccepted()
+            "viewer.online" -> callback.onViewerConnectionChanged(true)
+            "viewer.reconnecting" -> callback.onViewerConnectionChanged(false)
             "join.rejected" -> callback.onJoinRejected(message.optString("message", "连接码错误"))
             "teacher.kicked" -> callback.onKicked(message.optString("message", "本设备已下线"))
             "viewer.disconnected",
@@ -323,7 +328,7 @@ class SignalingClient(
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
         if (!closedByUser) {
-            callback.onServerClosed("信令连接已断开")
+            callback.onSignalError("信令连接已断开，正在重连")
         }
     }
 

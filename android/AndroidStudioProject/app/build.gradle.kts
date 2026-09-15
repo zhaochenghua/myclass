@@ -37,8 +37,8 @@ android {
         applicationId = "cn.edu.nb3.myclass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2026091008
-        versionName = "1.8.0-2026091008"
+        versionCode = 2026091519
+        versionName = "1.8.1-2026091519"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
         buildConfigField("int", "VIDEO_WIDTH", "1920")
@@ -57,6 +57,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 调试包不做 PNG 压缩，缩短打包时间（不影响 release）
+            isCrunchPngs = false
+        }
+
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("release")
@@ -74,6 +79,21 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    // 调试期按 ABI 拆包：WebRTC 的 so 约占 40MB，只打当前设备架构可把安装体积
+    // 从 ~46MB 降到 ~10MB，安装耗时大幅下降。release 默认不拆分，产物不变。
+    // 用法：gradle :app:installDebug -PdebugAbi=x86_64（dev.ps1 会自动传入）
+    val debugAbi = providers.gradleProperty("debugAbi").orNull
+    if (!debugAbi.isNullOrBlank()) {
+        splits {
+            abi {
+                isEnable = true
+                reset()
+                include(*debugAbi.split(",").map { it.trim() }.toTypedArray())
+                isUniversalApk = false
+            }
+        }
     }
 }
 
