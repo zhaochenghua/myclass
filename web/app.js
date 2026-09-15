@@ -905,13 +905,13 @@ async function handleSignalMessage(message) {
     case 'teacher.offline':
       setConnectionNotice('手机连接中断，等待自动重连…');
       state.teacherConnected = false;
-      // 清除手机同步登录状态
-      if (state.syncedFromTeacher) {
-        state.teacherToken = null;
-        state.syncedFromTeacher = false;
-        state.directTeach = false;
-        elements.directTeachUser.hidden = true;
-        elements.directTeachLogout.hidden = true;
+      // 保留已同步的登录态和本地课件操作权限。手机锁屏/没电时，
+      // 大屏仍应能切换已授权课件、关闭课件并返回主页；教师恢复后再同步状态。
+      if (state.syncedFromTeacher && state.teacherToken) {
+        state.directTeach = true;
+        elements.directTeachUser.textContent = '已登录（手机暂时断开）';
+        elements.directTeachUser.hidden = false;
+        elements.directTeachLogout.hidden = false;
       }
       cleanupPeerConnection();
       showDirectTeachUI();
@@ -1390,7 +1390,7 @@ function showCoursewareViewForImage(info) {
   elements.panToolButton.hidden = false;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
-  if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
+  if ((state.teacherToken || state.downloadOriginalUrl) && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
 
   // 打开新图片时复位缩放/平移，并裁剪溢出部分（避免沿用上一张的视口）
   elements.imagePlayerOverlay.style.overflow = 'hidden';
@@ -1511,7 +1511,7 @@ function showCoursewareViewForVideo(info) {
   elements.panToolButton.hidden = true;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
-  if (state.teacherToken && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
+  if ((state.teacherToken || state.downloadOriginalUrl) && elements.coursewareDropdown) elements.coursewareDropdown.hidden = false;
 
   // 先绑定事件（内部会 cloneNode 替换元素），再设置 src 避免被 cloneNode(false) 丢弃
   hideVideoPlayerError();
