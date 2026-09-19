@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check websocket.js && node --check roomManager.js"
+    "check": "node --check server.js && node --check websocket.js && node --check roomManager.js && node --check coursewareStore.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"

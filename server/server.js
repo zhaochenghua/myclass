@@ -10,6 +10,7 @@ const multer = require('multer');
 const QRCode = require('qrcode');
 const setupWebSocket = require('./websocket');
 const { RoomManager } = require('./roomManager');
+const { createCoursewareStore } = require('./coursewareStore');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
 const HOST = process.env.HOST || '0.0.0.0';
@@ -118,8 +119,7 @@ const webRoot = path.resolve(__dirname, '..', 'web');
 const publicRoot = path.join(webRoot, 'public');
 const apkPath = path.join(publicRoot, 'myclass.apk');
 const windowsInstallerPath = path.join(publicRoot, 'myclass-windows.exe');
-const coursewareRoot = path.join(publicRoot, 'courseware');
-const coursewareIndexPath = path.join(coursewareRoot, 'index.json');
+const coursewareRoot = path.resolve(process.env.COURSEWARE_ROOT || path.join(publicRoot, 'courseware'));
 const tempRoot = path.join(__dirname, 'tmp', 'courseware');
 const COURSEWARE_MAX_BYTES = Number(process.env.COURSEWARE_MAX_BYTES || 2 * 1024 * 1024 * 1024);
 const COURSEWARE_REQUEST_TIMEOUT_MS = Number(
@@ -134,6 +134,19 @@ const upload = multer({
 
 fs.mkdirSync(coursewareRoot, { recursive: true });
 fs.mkdirSync(tempRoot, { recursive: true });
+const coursewareStore = createCoursewareStore({
+  root: coursewareRoot,
+  prefix: PATH_PREFIX,
+  convertOfficeToPdf,
+  listLimit: Number(process.env.COURSEWARE_LIST_LIMIT || 0)
+});
+const {
+  list: listStoredCourseware,
+  remember: rememberCourseware,
+  remove: deleteStoredCourseware,
+  rename: renameStoredCourseware,
+  readIndex: readCoursewareIndex
+} = coursewareStore;
 
 server.requestTimeout = COURSEWARE_REQUEST_TIMEOUT_MS;
 server.timeout = COURSEWARE_REQUEST_TIMEOUT_MS;
@@ -494,7 +507,9 @@ app.post(`${PATH_PREFIX}/api/courseware`, requireAuth, upload.single('file'), as
     next(error);
   } finally {
     if (req.file?.path) {
-      fs.promises.unlink(req.file.path).catch(() => {});
+      await fs.promises.rm(req.file.path, { force: true }).catch(error => {
+        console.warn('清理课件上传临时文件失败:', error.message);
+      });
     }
   }
 });
@@ -570,6 +585,32 @@ app.use(
   })
 );
 
+// Keep public file URLs stable when courseware is stored on a separate volume.
+// Metadata and the shared object pool must not be served as public assets.
+app.use(PATH_PREFIX, (req, res, next) => {
+  let normalized;
+  try {
+    normalized = path.posix.normalize(decodeURIComponent(req.path).replace(/\\/g, '/'));
+  } catch {
+    res.sendStatus(400);
+    return;
+  }
+  // express.static decodes paths too; reject alternate encodings that would
+  // otherwise bypass the dedicated courseware mount and fall through to webRoot.
+  if ((normalized === '/public/courseware' || normalized.startsWith('/public/courseware/')) && normalized !== req.path) {
+    res.sendStatus(404);
+    return;
+  }
+  next();
+});
+app.use(`${PATH_PREFIX}/public/courseware`, (req, res, next) => {
+  if (!/^\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.(pdf|zip|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)$/i.test(req.path)) {
+    res.sendStatus(404);
+    return;
+  }
+  next();
+}, express.static(coursewareRoot, { index: false, fallthrough: false, etag: true, maxAge: '1h' }));
+
 // Also serve .mjs from web root for bundled pdfjs
 app.use(
   PATH_PREFIX,
@@ -631,7 +672,7 @@ app.use((error, req, res, next) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`MyClass server listening on http://${HOST}:${PORT}${PATH_PREFIX}/`);
+  console.log(`MyClass server listening on http://${HOST}:${server.address().port}${PATH_PREFIX}/`);
   console.log(`APK QR points to ${getApkUrl()}`);
 });
 
@@ -684,111 +725,15 @@ function safeDownloadVersion(value) {
 }
 
 async function publishCourseware(file, fields = {}, userId) {
-  const originalName = preferredCoursewareName(file, fields);
-  const ext = path.extname(originalName).toLowerCase();
-  const id = crypto.randomUUID();
-  const pdfName = `${id}.pdf`;
-  const pdfPath = path.join(coursewareRoot, pdfName);
-
-  let originalPath = null;
-  let originalUrl = null;
-  let originalSize = 0;
-  let downloadOnly = false;
-
-  if (ext === '.pdf') {
-    await fs.promises.copyFile(file.path, pdfPath);
-    originalPath = pdfPath;
-    originalUrl = `${PATH_PREFIX}/public/courseware/${pdfName}`;
-  } else if (ext === '.ppt' || ext === '.pptx' || ext === '.doc' || ext === '.docx') {
-    const originalSavePath = path.join(coursewareRoot, `${id}${ext}`);
-    await fs.promises.copyFile(file.path, originalSavePath);
-    originalPath = originalSavePath;
-    originalUrl = `${PATH_PREFIX}/public/courseware/${id}${ext}`;
-
-    const originalStat = await fs.promises.stat(originalPath);
-    originalSize = originalStat.size;
-
-    await convertOfficeToPdf(file.path, ext, pdfPath, id);
-  } else if (ext === '.zip') {
-    const zipPath = path.join(coursewareRoot, `${id}.zip`);
-    await fs.promises.copyFile(file.path, zipPath);
-    const stat = await fs.promises.stat(zipPath);
-    downloadOnly = true;
-    const result = {
-      id,
-      userId: userId || 'legacy',
-      title: path.basename(originalName, ext),
-      fileName: originalName,
-      size: stat.size,
-      downloadOnly: true,
-      url: `${PATH_PREFIX}/public/courseware/${id}.zip`,
-      createdAt: new Date().toISOString()
-    };
-    await rememberCourseware(result);
-    return result;
-  } else if (ext === '.mp4' || ext === '.mov' || ext === '.avi' || ext === '.webm' || ext === '.mkv' || ext === '.3gp') {
-    const videoPath = path.join(coursewareRoot, `${id}${ext}`);
-    await fs.promises.copyFile(file.path, videoPath);
-    const stat = await fs.promises.stat(videoPath);
-    downloadOnly = true;
-    const result = {
-      id,
-      userId: userId || 'legacy',
-      title: path.basename(originalName, ext),
-      fileName: originalName,
-      size: stat.size,
-      downloadOnly: false,
-      videoUrl: `${PATH_PREFIX}/public/courseware/${id}${ext}`,
-      url: `${PATH_PREFIX}/public/courseware/${id}${ext}`,
-      createdAt: new Date().toISOString()
-    };
-    await rememberCourseware(result);
-    return result;
-  } else if (ext === '.jpg' || ext === '.jpeg' || ext === '.png' || ext === '.gif' || ext === '.webp' || ext === '.bmp') {
-    // 图片：无需转换，直接保存原图并以 <img> 方式在大屏端渲染，保证清晰度
-    const imagePath = path.join(coursewareRoot, `${id}${ext}`);
-    await fs.promises.copyFile(file.path, imagePath);
-    const stat = await fs.promises.stat(imagePath);
-    const result = {
-      id,
-      userId: userId || 'legacy',
-      title: path.basename(originalName, ext),
-      fileName: originalName,
-      size: stat.size,
-      downloadOnly: false,
-      imageUrl: `${PATH_PREFIX}/public/courseware/${id}${ext}`,
-      url: `${PATH_PREFIX}/public/courseware/${id}${ext}`,
-      createdAt: new Date().toISOString()
-    };
-    await rememberCourseware(result);
-    return result;
-  } else {
-    throw publicError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP、图片、视频文件');
-  }
-
-  const stat = await fs.promises.stat(pdfPath);
-  const result = {
-    id,
-    userId: userId || 'legacy',
-    title: path.basename(originalName, ext),
-    fileName: originalName,
-    size: stat.size,
-    originalUrl: originalUrl || `${PATH_PREFIX}/public/courseware/${pdfName}`,
-    originalSize: originalSize,
-    createdAt: new Date().toISOString(),
-    url: `${PATH_PREFIX}/public/courseware/${pdfName}`
-  };
-  await rememberCourseware(result);
-  return result;
+  return coursewareStore.publish(file, preferredCoursewareName(file, fields), userId);
 }
 
 async function convertOfficeToPdf(inputPath, ext, outputPdfPath, id) {
   const sourcePath = path.join(tempRoot, `${id}${ext}`);
   const outputDir = path.join(tempRoot, id);
   await fs.promises.mkdir(outputDir, { recursive: true });
-  await fs.promises.copyFile(inputPath, sourcePath);
-
   try {
+    await fs.promises.copyFile(inputPath, sourcePath);
     await runLibreOffice([
       '--headless',
       '--nologo',
@@ -804,10 +749,11 @@ async function convertOfficeToPdf(inputPath, ext, outputPdfPath, id) {
     if (!fs.existsSync(convertedPath)) {
       throw publicError(500, 'LibreOffice 未生成 PDF，请检查课件格式');
     }
-    await fs.promises.rename(convertedPath, outputPdfPath);
+    // The configured courseware directory may be on a different filesystem.
+    await fs.promises.copyFile(convertedPath, outputPdfPath);
   } finally {
-    fs.promises.rm(outputDir, { recursive: true, force: true }).catch(() => {});
-    fs.promises.unlink(sourcePath).catch(() => {});
+    await fs.promises.rm(outputDir, { recursive: true, force: true });
+    await fs.promises.rm(sourcePath, { force: true });
   }
 }
 
@@ -818,9 +764,10 @@ function runLibreOffice(args) {
       windowsHide: true
     });
     let stderr = '';
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGKILL');
-      reject(publicError(504, 'LibreOffice 转换超时'));
     }, Number(process.env.COURSEWARE_CONVERT_TIMEOUT_MS || 120000));
 
     child.stderr.on('data', (chunk) => {
@@ -836,7 +783,10 @@ function runLibreOffice(args) {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0) {
+      // Wait for the converter to exit before cleaning its working directory.
+      if (timedOut) {
+        reject(publicError(504, 'LibreOffice 转换超时'));
+      } else if (code === 0) {
         resolve();
       } else {
         reject(publicError(500, `LibreOffice 转换失败：${stderr.trim() || code}`));
@@ -922,183 +872,6 @@ function sanitizeCoursewareName(value) {
 function formatBytes(bytes) {
   const mb = bytes / 1024 / 1024;
   return `${Math.round(mb)}MB`;
-}
-
-async function listStoredCourseware(userId) {
-  const indexedItems = await readCoursewareIndex();
-  const knownIds = new Set(indexedItems.map((item) => item.id));
-  const discoveredItems = [];
-  const files = await fs.promises.readdir(coursewareRoot, { withFileTypes: true });
-
-  for (const file of files) {
-    if (!file.isFile() || path.extname(file.name).toLowerCase() !== '.pdf') {
-      continue;
-    }
-    const id = path.basename(file.name, '.pdf');
-    if (knownIds.has(id)) {
-      continue;
-    }
-    const stat = await fs.promises.stat(path.join(coursewareRoot, file.name));
-    discoveredItems.push({
-      id,
-      userId: 'legacy',
-      title: id,
-      fileName: file.name,
-      size: stat.size,
-      createdAt: stat.birthtime.toISOString(),
-      url: `${PATH_PREFIX}/public/courseware/${file.name}`
-    });
-  }
-
-  const items = [...indexedItems, ...discoveredItems]
-    .filter((item) => item && item.id && item.url)
-    .filter((item) => !userId || !item.userId || item.userId === 'admin' || item.userId === userId || item.userId === 'legacy')
-    .filter((item) => {
-      // 链接类型课件不需要检查磁盘文件
-      if (item.linkUrl) return true;
-      const fileExt = path.extname(new URL(item.url, 'http://localhost').pathname);
-      return fs.existsSync(path.join(coursewareRoot, `${item.id}${fileExt}`));
-    })
-    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-    .slice(0, Number(process.env.COURSEWARE_LIST_LIMIT || 60));
-
-  return items;
-}
-
-async function rememberCourseware(item) {
-  const currentItems = await readCoursewareIndex();
-  const nextItems = [
-    item,
-    ...currentItems.filter((existing) => existing.id !== item.id)
-  ].slice(0, Number(process.env.COURSEWARE_INDEX_LIMIT || 100));
-  await fs.promises.writeFile(
-    coursewareIndexPath,
-    JSON.stringify(nextItems, null, 2),
-    'utf8'
-  );
-}
-
-async function deleteStoredCourseware(id, userId) {
-  if (!isSafeCoursewareId(id)) {
-    const error = new Error('无效课件编号');
-    error.status = 400;
-    throw error;
-  }
-
-  const currentItems = await readCoursewareIndex();
-  const targetItem = currentItems.find((item) => item.id === id);
-  // userId 为 null 时表示管理员，可删除任意课件
-  if (targetItem && targetItem.userId && userId !== null && userId && targetItem.userId !== userId) {
-    return false; // 不属于当前用户
-  }
-  const wasIndexed = currentItems.some((item) => item.id === id);
-  let fileDeleted = false;
-
-  // 删除所有可能的关联文件（PDF、原始 Office 文件、ZIP）
-  for (const ext of ['.pdf', '.zip', '.pptx', '.ppt', '.docx', '.doc']) {
-    const filePath = path.join(coursewareRoot, `${id}${ext}`);
-    const resolvedFilePath = path.resolve(filePath);
-    if (!resolvedFilePath.startsWith(`${path.resolve(coursewareRoot)}${path.sep}`)) {
-      const error = new Error('无效课件路径');
-      error.status = 400;
-      throw error;
-    }
-    try {
-      await fs.promises.unlink(resolvedFilePath);
-      fileDeleted = true;
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        throw error;
-      }
-    }
-  }
-
-  if (wasIndexed) {
-    await fs.promises.writeFile(
-      coursewareIndexPath,
-      JSON.stringify(currentItems.filter((item) => item.id !== id), null, 2),
-      'utf8'
-    );
-  }
-
-  return wasIndexed || fileDeleted;
-}
-
-async function renameStoredCourseware(id, newTitle, userId) {
-  if (!isSafeCoursewareId(id)) {
-    const error = new Error('无效课件编号');
-    error.status = 400;
-    throw error;
-  }
-
-  const currentItems = await readCoursewareIndex();
-  const targetItem = currentItems.find((item) => item.id === id);
-
-  // 权限检查：userId 为 null 表示管理员
-  if (targetItem && targetItem.userId && userId !== null && userId && targetItem.userId !== userId) {
-    return false;
-  }
-
-  if (targetItem) {
-    targetItem.title = newTitle;
-  } else {
-    // 课件不在索引中（legacy 课件），添加到索引
-    // 先确认磁盘上存在对应文件
-    const possibleExts = ['.pdf', '.zip', '.pptx', '.ppt', '.docx', '.doc'];
-    let found = false;
-    let fileName = '';
-    let size = 0;
-    for (const ext of possibleExts) {
-      const filePath = path.join(coursewareRoot, `${id}${ext}`);
-      try {
-        const stat = await fs.promises.stat(filePath);
-        found = true;
-        fileName = `${id}${ext}`;
-        size = stat.size;
-        break;
-      } catch {}
-    }
-    if (!found) return false;
-    currentItems.push({
-      id,
-      userId: userId || 'legacy',
-      title: newTitle,
-      fileName,
-      size,
-      createdAt: new Date().toISOString(),
-      url: `${PATH_PREFIX}/public/courseware/${fileName}`
-    });
-  }
-
-  await fs.promises.writeFile(
-    coursewareIndexPath,
-    JSON.stringify(currentItems, null, 2),
-    'utf8'
-  );
-  return true;
-}
-
-async function readCoursewareIndex() {
-  try {
-    const text = await fs.promises.readFile(coursewareIndexPath, 'utf8');
-    if (!text.trim()) return [];
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      return [];
-    }
-    // 空文件或 JSON 解析失败时返回空数组，避免阻断上传
-    if (error instanceof SyntaxError) {
-      console.warn('课件索引文件格式异常，已重置为空数组:', error.message);
-      return [];
-    }
-    throw error;
-  }
-}
-
-function isSafeCoursewareId(id) {
-  return typeof id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id);
 }
 
 function isAllowedHost(hostHeader) {
