@@ -12,6 +12,7 @@ const state = {
   roomCode: null,
 
   presentationMode: 'waiting',
+  lockedVideoPan: { x: 0, y: 0, scale: 1, pointers: new Map() },
   courseware: null,
   pendingTeacherViewport: null,
   presentationRevision: 0,
@@ -411,6 +412,9 @@ async function bootstrap() {
     elements.annotationCanvas.addEventListener('pointermove', continueAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointerup', finishAnnotationStroke);
     elements.annotationCanvas.addEventListener('pointercancel', finishAnnotationStroke);
+    elements.annotationCanvas.addEventListener('lostpointercapture', finishLockedVideoPan);
+    elements.annotationCanvas.addEventListener('wheel', zoomLockedVideoWheel, { passive: false });
+    elements.annotationCanvas.addEventListener('dblclick', resetLockedVideoOnDoubleClick);
     // 投屏图片的滚轮缩放与双击复位
     elements.annotationCanvas.addEventListener('wheel', handleImageWheel, { passive: false });
     elements.annotationCanvas.addEventListener('dblclick', handleImageDoubleClick);
@@ -2942,11 +2946,18 @@ function handleTeacherOrientation(message) {
 }
 
 function updateVideoPresentation() {
+  if (!state.framePresentation.frameLocked) resetLockedVideoPan();
+  if (state.presentationMode === 'video') {
+    elements.panToolButton.hidden = !state.framePresentation.frameLocked;
+    elements.panToolButton.title = '拖动画面，双指或滚轮缩放，双击复位';
+    if (!state.framePresentation.frameLocked && state.annotations.tool === 'pan') setAnnotationTool('pen');
+  }
   elements.videoView.dataset.orientation = state.videoOrientation.orientation;
   elements.videoView.dataset.lockedZoomed =
     state.framePresentation.frameLocked && state.framePresentation.lockedFrameZoomRatio > 1.03
       ? 'true'
       : 'false';
+  if (state.presentationMode === 'video' && state.framePresentation.frameLocked) applyLockedVideoView();
   resizeAnnotationCanvas();
   drawAnnotations();
   updateAnnotationButtons();
@@ -3019,6 +3030,7 @@ function resizeAnnotationCanvas() {
 }
 
 function beginAnnotationStroke(event) {
+  if (beginLockedVideoPan(event)) return;
   // 投屏图片 + 手型工具：走图片自身的平移/捏合，与 PDF 课件的 coursewarePan 分开
   if (beginImageGesture(event)) return;
   // 课件模式 + 手型工具：记录指针位置供捏合检测
@@ -3058,6 +3070,7 @@ function beginAnnotationStroke(event) {
 }
 
 function continueAnnotationStroke(event) {
+  if (continueLockedVideoPan(event)) return;
   // 投屏图片：正在平移/捏合时优先处理，避免中途切工具导致手势错乱
   if (continueImageGesture(event)) return;
   // 课件模式 + 手型工具：持续更新指针位置，处理捏合/平移
@@ -3104,6 +3117,7 @@ function continueAnnotationStroke(event) {
 }
 
 function finishAnnotationStroke(event) {
+  if (finishLockedVideoPan(event)) return;
   // 投屏图片：清理本次手势的指针缓存，结束平移或捏合
   if (finishImageGesture(event)) return;
   // 课件模式 + 手型工具：清理指针并处理捏合结束
@@ -3140,6 +3154,117 @@ function finishAnnotationStroke(event) {
   if (stroke.lineMode) hideAngleIndicator();
   drawAnnotations();
   updateAnnotationButtons();
+}
+
+function finishLockedVideoPan(event) {
+  const pointers = state.lockedVideoPan.pointers;
+  const ids = event ? [event.pointerId] : [...pointers.keys()];
+  let handled = false;
+  for (const id of ids) {
+    if (!pointers.delete(id)) continue;
+    handled = true;
+    runCatching(() => elements.annotationCanvas.releasePointerCapture(id));
+  }
+  if (!pointers.size) elements.annotationCanvas.classList.remove('is-panning');
+  return handled;
+}
+
+function resetLockedVideoPan() {
+  finishLockedVideoPan();
+  Object.assign(state.lockedVideoPan, { x: 0, y: 0, scale: 1 });
+  for (const key of ['width', 'height', 'left', 'top', 'right', 'bottom', 'objectFit', 'objectPosition']) {
+    elements.remoteVideo.style[key] = '';
+  }
+}
+
+function lockedVideoContentRect() {
+  const viewport = elements.videoView.getBoundingClientRect();
+  const pan = state.lockedVideoPan;
+  const vw = elements.remoteVideo.videoWidth || viewport.width || 1;
+  const vh = elements.remoteVideo.videoHeight || viewport.height || 1;
+  const cover = state.videoOrientation.orientation === 'landscape' || state.framePresentation.lockedFrameZoomRatio > 1.03;
+  const fit = (cover ? Math.max : Math.min)(viewport.width / vw, viewport.height / vh);
+  const width = vw * fit * pan.scale;
+  const height = vh * fit * pan.scale;
+  return { left: viewport.left + (viewport.width - width) / 2 + pan.x,
+    top: viewport.top + (viewport.height - height) / 2 + pan.y, width, height };
+}
+
+function applyLockedVideoView() {
+  const viewport = elements.videoView.getBoundingClientRect();
+  const pan = state.lockedVideoPan;
+  let rect = lockedVideoContentRect();
+  // 允许双向自由移动，包括画面尚未超出屏幕时；至少保留一部分画面可见。
+  const maxX = Math.max(0, (viewport.width + rect.width) / 2 - Math.min(64, rect.width / 2));
+  const maxY = Math.max(0, (viewport.height + rect.height) / 2 - Math.min(64, rect.height / 2));
+  pan.x = clamp(pan.x, -maxX, maxX);
+  pan.y = clamp(pan.y, -maxY, maxY);
+  rect = lockedVideoContentRect();
+  Object.assign(elements.remoteVideo.style, { width: `${rect.width}px`, height: `${rect.height}px`,
+    left: `${rect.left - viewport.left}px`, top: `${rect.top - viewport.top}px`, right: 'auto', bottom: 'auto',
+    objectFit: 'contain', objectPosition: '50% 50%' });
+  drawAnnotations();
+}
+
+function zoomLockedVideo(factor, from, to = from) {
+  const pan = state.lockedVideoPan;
+  const viewport = elements.videoView.getBoundingClientRect();
+  const scale = clamp(pan.scale * factor, 0.25, 5);
+  const ratio = scale / pan.scale;
+  pan.x = to.x - (viewport.left + viewport.width / 2) - (from.x - (viewport.left + viewport.width / 2) - pan.x) * ratio;
+  pan.y = to.y - (viewport.top + viewport.height / 2) - (from.y - (viewport.top + viewport.height / 2) - pan.y) * ratio;
+  pan.scale = scale;
+  applyLockedVideoView();
+}
+
+function canControlLockedVideo() {
+  return state.presentationMode === 'video' && state.framePresentation.frameLocked && state.annotations.tool === 'pan';
+}
+
+function zoomLockedVideoWheel(event) {
+  if (!canControlLockedVideo()) return;
+  event.preventDefault();
+  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1);
+  zoomLockedVideo(Math.exp(-clamp(delta, -500, 500) * 0.002), { x: event.clientX, y: event.clientY });
+}
+
+function resetLockedVideoOnDoubleClick(event) {
+  if (!canControlLockedVideo()) return;
+  event.preventDefault();
+  resetLockedVideoPan();
+  applyLockedVideoView();
+}
+
+function beginLockedVideoPan(event) {
+  if (state.presentationMode !== 'video' || state.annotations.tool !== 'pan') return false;
+  // 手型不能落入画笔分支；只有锁定的视频允许移动。
+  event.preventDefault();
+  if (!state.framePresentation.frameLocked) return true;
+  elements.annotationCanvas.setPointerCapture(event.pointerId);
+  state.lockedVideoPan.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  elements.annotationCanvas.classList.add('is-panning');
+  return true;
+}
+
+function continueLockedVideoPan(event) {
+  const pan = state.lockedVideoPan;
+  const previous = pan.pointers.get(event.pointerId);
+  if (!previous) return false;
+  event.preventDefault();
+  const before = [...pan.pointers.values()];
+  pan.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const after = [...pan.pointers.values()];
+  if (before.length >= 2) {
+    const distance = p => Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+    const center = p => ({ x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 });
+    const oldDistance = distance(before);
+    if (oldDistance > 1) zoomLockedVideo(distance(after) / oldDistance, center(before), center(after));
+  } else {
+    pan.x += event.clientX - previous.x;
+    pan.y += event.clientY - previous.y;
+    applyLockedVideoView();
+  }
+  return true;
 }
 
 function beginCoursewarePan(event) {
@@ -3356,6 +3481,7 @@ function setAnnotationTool(tool) {
   state.annotations.tool = (tool === 'pan' || tool === 'eraser') ? tool : 'pen';
   // 离开手型工具时清理可能残留的图片平移/捏合，避免指针缓存影响后续画笔
   if (state.annotations.tool !== 'pan') {
+    finishLockedVideoPan();
     abortImagePan();
     state.imageView._activePointers.clear();
     state.imageView._pinch.active = false;
@@ -3531,6 +3657,7 @@ function currentFrameCrop() {
 }
 
 function currentVideoContentRect() {
+  if (state.presentationMode === 'video' && state.framePresentation.frameLocked) return lockedVideoContentRect();
   if (state.presentationMode === 'courseware') {
     // 图片课件：标注绑定到图片内容区域（其 transform 已随手机端视口放大/平移，
     // getBoundingClientRect 会返回变换后的实际区域，笔迹自动跟随图片移动）
@@ -3580,6 +3707,7 @@ function sendMessage(payload) {
 }
 
 function showJoinView() {
+  resetLockedVideoPan();
   hideDownloadButton();
   destroyCoursewareDocument(state.courseware);
   state.presentationMode = 'waiting';
@@ -3597,6 +3725,7 @@ function showJoinView() {
 }
 
 function showVideoView() {
+  resetLockedVideoPan();
   state.presentationMode = 'video';
   setAnnotationTool('pen');
   elements.coursewareCanvas.hidden = true;
@@ -3605,10 +3734,11 @@ function showVideoView() {
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
   elements.videoView.hidden = false;
-  elements.panToolButton.hidden = true;
+  elements.panToolButton.hidden = !state.framePresentation.frameLocked;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   elements.videoStatus.hidden = false;
+  updateVideoPresentation();
 }
 
 function showCoursewareView() {
