@@ -33,6 +33,8 @@ const TEACHER_ONLY_MESSAGE_TYPES = new Set([
   'webrtc.offer',
   'teacher.orientation',
   'student.roll',
+  'student.selection.set',
+  'student.selection.get',
   'teacher.stop'
 ]);
 
@@ -40,6 +42,7 @@ const TEACHER_ONLY_MESSAGE_TYPES = new Set([
 const VIEWER_ONLY_MESSAGE_TYPES = new Set([
   'viewer.annotation',
   'student.roll.result',
+  'student.selection.state',
   'viewer.courseware.open',
   'viewer.courseware.close'
 ]);
@@ -152,6 +155,9 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'viewer.annotation':
     case 'student.roll':
     case 'student.roll.result':
+    case 'student.selection.set':
+    case 'student.selection.get':
+    case 'student.selection.state':
       handleForward(socket, message, roomManager, options);
       break;
     default:
@@ -204,6 +210,7 @@ async function handleTeacherJoin(socket, message, roomManager, options) {
   let teacherInfo = null;
   if (typeof message.token === 'string' && message.token && typeof options.verifyTeacherToken === 'function') {
     teacherInfo = await options.verifyTeacherToken(message.token);
+    if (teacherInfo) teacherInfo = { ...teacherInfo, supportsStudentSelection: message.supportsStudentSelection === true };
   }
 
   const result = roomManager.joinAsTeacher(code, socket, teacherInfo);
@@ -246,6 +253,28 @@ function handleForward(socket, message, roomManager, options) {
   // viewer.* 仅允许大屏端发送
   if (VIEWER_ONLY_MESSAGE_TYPES.has(message.type) && binding.role !== 'viewer') {
     sendJson(socket, { type: 'error', message: '只有教室端可以发送该消息' });
+    return;
+  }
+
+  if (message.type.startsWith('student.selection.')) {
+    if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{0,64}$/.test(message.requestId)) return;
+    const payload = { type: message.type, requestId: message.requestId };
+    if (message.type !== 'student.selection.get') {
+      if (typeof message.classId !== 'string' || !/^[a-zA-Z0-9-]{0,64}$/.test(message.classId) ||
+          !['name', 'number'].includes(message.mode) || !Number.isInteger(message.count) || message.count < 1 || message.count > 80) {
+        sendJson(socket, { type: 'error', message: '无效的班级设置' });
+        return;
+      }
+      Object.assign(payload, { classId: message.classId, mode: message.mode, count: message.count });
+    }
+    if (message.type === 'student.selection.state') {
+      payload.confirmed = message.confirmed === true;
+      payload.error = String(message.error || '').slice(0, 160);
+    }
+    if (!roomManager.forward(socket, payload) && binding.role === 'teacher') {
+      sendJson(socket, { type: 'student.selection.state', requestId: message.requestId, classId: '', mode: 'name', count: 50,
+        confirmed: false, error: '大屏暂时未连接，请恢复连接后重试' });
+    }
     return;
   }
 

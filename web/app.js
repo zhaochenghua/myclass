@@ -726,11 +726,12 @@ function setupStudentRoller() {
     classModal.hidden = true;
     result.textContent = '??';
     updateClassControls();
+    reportSelection();
   };
   document.getElementById('classPickerConfirm').addEventListener('click', () => applySelection(true));
   document.getElementById('classPickerCancel').addEventListener('click', () => applySelection(false));
 
-  async function setTeacher(nextToken) {
+  async function setTeacher(nextToken, offerPicker = true) {
     if (nextToken === token) return;
     token = nextToken;
     const currentGeneration = ++generation;
@@ -762,7 +763,7 @@ function setupStudentRoller() {
         classes = data.items;
         classButton.hidden = !classes.length;
         positionControls();
-        if (classes.length) { renderClassOptions(); classError.hidden = true; classModal.hidden = false; }
+        if (classes.length) { renderClassOptions(); classError.hidden = true; classModal.hidden = !offerPicker; }
       } catch (error) {
         if (generation === currentGeneration) feedback(`班级加载失败：${error.message}。可点班级按钮重试。`, 'error');
       }
@@ -810,7 +811,46 @@ function setupStudentRoller() {
       }
     }
   }
-  studentRoller = { setTeacher, requestRoll };
+  function reportSelection(remoteId = '', error = '') {
+    sendMessage({ type: 'student.selection.state', requestId: remoteId, classId: selectedClassId,
+      mode: displayMode, count: studentCount, confirmed: selectionConfirmed && (!!selectedClassId || countConfigured), error });
+  }
+
+  async function receiveSelection(message) {
+    const currentGeneration = generation;
+    if (message.type === 'student.selection.get') {
+      await classesLoading;
+      if (generation === currentGeneration) reportSelection(message.requestId);
+      return;
+    }
+    if (rolling || preparing) { reportSelection(message.requestId, '正在抽取，请结束后再切换班级'); return; }
+    preparing = true;
+    btn.disabled = classButton.disabled = true;
+    try {
+      await classesLoading;
+      if (generation !== currentGeneration) return;
+      const selected = message.classId ? (await classRequest(`/${encodeURIComponent(message.classId)}`)).item : null;
+      if (generation !== currentGeneration) return;
+      if (selected) {
+        classes = classes.filter(item => item.id !== selected.id).concat(selected);
+        classButton.hidden = false;
+      }
+      selectedClassId = selected?.id || '';
+      displayMode = message.mode;
+      studentCount = message.count;
+      selectionConfirmed = countConfigured = true;
+      classModal.hidden = true;
+      closeCountModal();
+      result.textContent = '??';
+      updateClassControls();
+      reportSelection(message.requestId);
+    } catch (error) {
+      if (generation === currentGeneration) reportSelection(message.requestId, error.message);
+    } finally {
+      if (generation === currentGeneration) { preparing = false; btn.disabled = classButton.disabled = false; }
+    }
+  }
+  studentRoller = { setTeacher, requestRoll, receiveSelection };
 
   function renderCount(value) {
     value = Math.max(MIN_NO, Math.min(MAX_NO, value));
@@ -899,6 +939,8 @@ function setupStudentRoller() {
     // 确定即采纳当前 studentCount（已通过滑块/按钮实时更新）
     closeCountModal();
     countConfigured = true;
+    selectionConfirmed = true;
+    reportSelection();
     if (cb) cb();
   });
   cancelBtn.addEventListener('click', () => {
@@ -1102,7 +1144,7 @@ async function handleSignalMessage(message) {
         // 教师手机端已登录，大屏同步登录态（使用真实 token）
         // 不自动弹出课件列表，保留"打开课件"按钮供教师主动操作
         state.teacherToken = message.token;
-        studentRoller?.setTeacher(message.token);
+        studentRoller?.setTeacher(message.token, !message.supportsStudentSelection);
         state.syncedFromTeacher = true;
         state.directTeach = true;
         elements.directTeachUser.textContent = `已登录：${message.username}`;
@@ -1117,6 +1159,10 @@ async function handleSignalMessage(message) {
       break;
     case 'student.roll':
       studentRoller?.requestRoll(message.requestId);
+      break;
+    case 'student.selection.set':
+    case 'student.selection.get':
+      studentRoller?.receiveSelection(message);
       break;
     case 'teacher.offline':
       setConnectionNotice('手机连接中断，等待自动重连…');

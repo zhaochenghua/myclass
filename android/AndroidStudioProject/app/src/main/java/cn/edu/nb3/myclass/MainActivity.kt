@@ -141,6 +141,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var torchButton: MaterialButton? = null
     private var rollStudentCameraButton: MaterialButton? = null
     private var pendingStudentRollId: String? = null
+    private data class TeachingClass(val id: String, val name: String, val size: Int)
+    private var teachingClasses = emptyList<TeachingClass>()
+    private var selectedTeachingClassId = ""
+    private var studentDrawMode = "name"
+    private var studentDrawCount = 50
+    private var studentSelectionConfirmed = false
+    private var pendingSelectionId: String? = null
+    private var classPickerDialog: AlertDialog? = null
+    private var classPickerLoading = false
+    private var classPickerRoom: String? = null
+    private var classSettingsButton: MaterialButton? = null
+    private var networkGateShowing = false
+    private var campusCheckRunning = false
+    private var campusCheckGeneration = 0
     private var audioToggleButton: MaterialButton? = null
     private var cameraControls: LinearLayout? = null
     private var cameraVersionLabel: TextView? = null
@@ -252,8 +266,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var reconnectRetryRunnable: Runnable? = null
     private var networkCallbackRegistered = false
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLost(network: Network) {
+            runOnUiThread {
+                if (appInForeground && currentScreen == Screen.Auth && !campusCheckRunning) checkCampusAccess()
+            }
+        }
         override fun onAvailable(network: Network) {
             runOnUiThread {
+                if (appInForeground && networkGateShowing) checkCampusAccess()
                 // 网络恢复且有可用连接码但未连接时，立即重连
                 if (appInForeground && activeRoomCode != null &&
                     !roomJoined && !signalReconnectInProgress
@@ -288,8 +308,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         .build()
 
     private val authHttpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .callTimeout(6, TimeUnit.SECONDS)
+        .build()
+
+    private val campusHttpClient = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .callTimeout(4, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
         .build()
 
     private val prefs: SharedPreferences
@@ -315,12 +343,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         loadAuth()
         ExternalFileReceiver.restoreQueue(this)
         UpdateManager(this).checkForUpdate()
-        if (authToken != null) {
-            showAuthScreen() // show immediately to avoid black screen
-            verifyTokenThenProceed()
-        } else {
-            showAuthScreen()
-        }
+        checkCampusAccess()
         if (!initialIntentProcessed) {
             initialIntentProcessed = true
             val capturedIntent = intent
@@ -364,7 +387,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         super.onConfigurationChanged(newConfig)
         // 横竖屏切换时重建当前页面布局
         when (currentScreen) {
-            Screen.Auth -> showAuthScreen()
+            Screen.Auth -> if (networkGateShowing) showCampusNetworkScreen(
+                if (campusCheckRunning) "请稍候，正在检测校园投屏服务…" else campusNetworkMessage(), campusCheckRunning
+            ) else showAuthScreen()
             Screen.Connect -> showConnectScreen()
             Screen.Menu -> showMenuScreen()
             Screen.Camera -> {
@@ -404,6 +429,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onResume() {
         super.onResume()
         appInForeground = true
+        if (networkGateShowing) checkCampusAccess()
         if (currentScreen == Screen.Camera && cameraPausedForBackground) {
             val shouldRestartLive = restartLiveOnResume
             val roomCode = activeRoomCode
@@ -483,6 +509,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     override fun onDestroy() {
+        campusCheckGeneration += 1
+        classPickerDialog?.dismiss()
         unregisterNetworkCallback()
         cancelReconnectTimeout()
         cancelReconnectRetry()
@@ -534,6 +562,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     signalingClient?.close()
                     signalingClient = null
                     activeRoomCode = null
+                    classPickerRoom = null
+                    studentSelectionConfirmed = false
                     roomJoined = false
                     showConnectScreen()
                 }
@@ -566,6 +596,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         authGeneration += 1
         authToken = null
         authUsername = null
+        teachingClasses = emptyList()
+        selectedTeachingClassId = ""
+        studentSelectionConfirmed = false
+        classPickerRoom = null
         prefs.edit().remove("token").remove("username").apply()
     }
 
@@ -612,7 +646,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         clearAuth()
                         updateStatus("登录已过期，请重新登录")
                     } else {
-                        updateStatus("无法连接服务器，请确认已连接教室网络")
+                        showCampusNetworkScreen(campusNetworkMessage())
                     }
                 }
             }
@@ -620,6 +654,65 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private class TokenExpiredException : IOException()
+    private class AuthResponseException(message: String) : IOException(message)
+
+    private fun campusNetworkMessage(): String {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val network = manager?.activeNetwork
+        val capabilities = network?.let { manager.getNetworkCapabilities(it) }
+        return when {
+            network == null -> "手机当前没有网络。请连接校园 Wi-Fi 后重试。"
+            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true ->
+                "当前无法连接校园服务器，请先连接校园 Wi-Fi。移动数据通常无法访问课堂投屏服务。"
+            else -> "已连接 Wi-Fi，但无法访问校园服务器。请确认连接的是校园 Wi-Fi；若已连接，请检查校园网络或服务器状态。"
+        }
+    }
+
+    private fun showCampusNetworkScreen(message: String, checking: Boolean = false) {
+        if (isDestroyed || isFinishing) return
+        currentScreen = Screen.Auth
+        networkGateShowing = true
+        val root = baseColumn().apply { setPadding(dp(28), dp(32), dp(28), dp(32)) }
+        root.addView(titleText(if (checking) "正在连接校园服务器" else "请连接校园网络", 24f))
+        statusText = bodyText(message).apply { gravity = Gravity.CENTER }
+        root.addView(statusText)
+        root.addView(primaryButton("打开 Wi-Fi 设置").apply {
+            setOnClickListener { startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)) }
+        })
+        root.addView(secondaryButton(if (checking) "正在检测…" else "重新检测").apply {
+            isEnabled = !checking
+            setOnClickListener { checkCampusAccess() }
+        })
+        root.addView(versionLabel())
+        setContentView(root)
+    }
+
+    private fun checkCampusAccess() {
+        if (campusCheckRunning || isDestroyed) return
+        campusCheckRunning = true
+        val generation = ++campusCheckGeneration
+        showCampusNetworkScreen("请稍候，正在检测校园投屏服务…", checking = true)
+        Thread {
+            val available = runCatching {
+                val request = Request.Builder().url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/health").build()
+                campusHttpClient.newCall(request).execute().use { response ->
+                    response.isSuccessful && JSONObject(response.body?.string().orEmpty()).optString("service") == "myclass"
+                }
+            }.getOrDefault(false)
+            runOnUiThread {
+                if (isDestroyed || generation != campusCheckGeneration) return@runOnUiThread
+                campusCheckRunning = false
+                if (available) {
+                    networkGateShowing = false
+                    showAuthScreen()
+                    if (authToken != null) {
+                        updateStatus("校园网络已连接，正在恢复登录…")
+                        verifyTokenThenProceed()
+                    }
+                } else showCampusNetworkScreen(campusNetworkMessage())
+            }
+        }.start()
+    }
 
     fun onAuthenticationExpired(rejectedToken: String?) {
         runOnUiThread {
@@ -643,6 +736,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showAuthScreen() {
+        networkGateShowing = false
         currentScreen = Screen.Auth
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
@@ -724,6 +818,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ).apply { topMargin = dp(18) }
         }
 
+        statusText = statusView
         if (isLandscape) {
             // 横屏：左右结构
             val root = landscapeRoot().apply {
@@ -805,7 +900,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         val error = runCatching {
                             JSONObject(respBody).optString("error")
                         }.getOrNull().orEmpty()
-                        throw IOException(error.ifBlank { "HTTP ${response.code}" })
+                        throw AuthResponseException(error.ifBlank { "服务器返回 HTTP ${response.code}" })
                     }
                     val resp = JSONObject(respBody)
                     val token = resp.getString("token")
@@ -819,8 +914,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    toast(error.message ?: "认证失败")
-                    showAuthScreen()
+                    if (isDestroyed) return@runOnUiThread
+                    if (error is AuthResponseException) {
+                        showAuthScreen()
+                        updateStatus(error.message ?: "认证失败")
+                    } else showCampusNetworkScreen(campusNetworkMessage())
                 }
             }
         }.start()
@@ -1398,6 +1496,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
             leftPanel.addView(titleText("功能菜单", 22f))
+            leftPanel.addView(buildClassSettingsButton())
             leftPanel.addView(statusText)
             leftPanel.addView(versionLabel())
 
@@ -1419,6 +1518,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
             }
             root.addView(titleText("功能菜单", 28f))
+            root.addView(buildClassSettingsButton())
             root.addView(cameraBtn)
             root.addView(mediaBtn)
             root.addView(screenBtn)
@@ -1429,15 +1529,159 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    private fun buildClassSettingsButton(): MaterialButton = secondaryButton(classSettingsLabel()).apply {
+        classSettingsButton = this
+        setOnClickListener { loadTeachingClassesForPhone(automatic = false) }
+    }
+
+    private fun classSettingsLabel(): String {
+        val selected = teachingClasses.find { it.id == selectedTeachingClassId }
+        return if (selected != null) "班级：${selected.name} · ${if (studentDrawMode == "name") "抽姓名" else "抽学号"}"
+        else "班级/抽取设置：不选择班级"
+    }
+
+    private fun loadTeachingClassesForPhone(automatic: Boolean) {
+        if (classPickerLoading || classPickerDialog?.isShowing == true) return
+        val token = authToken ?: return
+        val room = activeRoomCode ?: return
+        classPickerLoading = true
+        Thread {
+            val loaded = runCatching {
+                val request = Request.Builder().url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/classes")
+                    .header("Authorization", "Bearer $token").build()
+                authHttpClient.newCall(request).execute().use { response ->
+                    if (response.code == 401) throw TokenExpiredException()
+                    if (!response.isSuccessful) throw IOException("班级加载失败（${response.code}）")
+                    val items = JSONObject(response.body?.string().orEmpty()).getJSONArray("items")
+                    List(items.length()) { i -> items.getJSONObject(i).let {
+                        TeachingClass(it.getString("id"), it.getString("name"), it.getJSONArray("students").length())
+                    } }
+                }
+            }
+            runOnUiThread {
+                classPickerLoading = false
+                if (isDestroyed || authToken != token || activeRoomCode != room || !roomJoined) return@runOnUiThread
+                loaded.onSuccess {
+                    teachingClasses = it
+                    classSettingsButton?.text = classSettingsLabel()
+                    if (!automatic || (it.isNotEmpty() && !studentSelectionConfirmed)) showPhoneClassPicker()
+                }.onFailure {
+                    if (it is TokenExpiredException) onAuthenticationExpired(token)
+                    else toast("无法加载任教班级，请检查校园网络后点击班级设置重试")
+                }
+            }
+        }.start()
+    }
+
+    private fun showPhoneClassPicker() {
+        if (classPickerDialog?.isShowing == true) return
+        val entries = teachingClasses.toList()
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(12), dp(24), dp(12))
+        }
+        val classes = android.widget.Spinner(this).apply {
+            contentDescription = "上课班级"
+            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("不选择班级（按人数抽学号）") + entries.map { "${it.name}（${it.size} 人）" })
+            setSelection(entries.indexOfFirst { it.id == selectedTeachingClassId }.let { if (it < 0) 0 else it + 1 })
+        }
+        val mode = android.widget.Spinner(this).apply {
+            contentDescription = "抽取时显示"
+            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("学生姓名", "学生学号"))
+            setSelection(if (studentDrawMode == "number") 1 else 0)
+        }
+        val count = EditText(this).apply {
+            contentDescription = "抽取人数"
+            hint = "人数（1–80）"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(studentDrawCount.toString())
+        }
+        val countLabel = bodyText("不选班级时，抽取 1 到以下人数的学号")
+        content.addView(bodyText("上课班级"))
+        content.addView(classes)
+        content.addView(bodyText("抽取时显示"))
+        content.addView(mode)
+        content.addView(countLabel)
+        content.addView(count)
+        content.addView(bodyText("上课中可长按“抽学生”修改班级与抽取方式。"))
+        classes.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                mode.isEnabled = position > 0
+                count.visibility = if (position == 0) View.VISIBLE else View.GONE
+                countLabel.visibility = count.visibility
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
+        val dialog = AlertDialog.Builder(this).setTitle("选择上课班级")
+            .setView(ScrollView(this).apply { addView(content) })
+            .setNegativeButton("稍后设置", null).setPositiveButton("同步到大屏", null).create()
+        classPickerDialog = dialog
+        dialog.setOnDismissListener { if (classPickerDialog === dialog) classPickerDialog = null }
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val selected = entries.getOrNull(classes.selectedItemPosition - 1)
+            val total = if (selected != null) studentDrawCount else count.text.toString().toIntOrNull()
+            if (total == null || total !in 1..80) { count.error = "请输入 1–80"; return@setOnClickListener }
+            if (selected?.size == 0) { toast("此班级还没有学生，请先在管理页面录入名单"); return@setOnClickListener }
+            sendPhoneClassSelection(selected?.id.orEmpty(), if (mode.selectedItemPosition == 1) "number" else "name", total)
+        }
+    }
+
+    private fun sendPhoneClassSelection(classId: String, mode: String, count: Int) {
+        if (!roomJoined || !viewerOnline) { toast("请等待大屏连接恢复后重试"); return }
+        if (pendingSelectionId != null) return
+        val requestId = java.util.UUID.randomUUID().toString()
+        pendingSelectionId = requestId
+        if (signalingClient?.sendStudentSelection(requestId, classId, mode, count) != true) {
+            pendingSelectionId = null
+            toast("班级设置发送失败，请重试")
+            return
+        }
+        classPickerDialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = false
+        reconnectHandler.postDelayed({
+            if (pendingSelectionId == requestId) {
+                pendingSelectionId = null
+                classPickerDialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
+                toast("大屏未确认班级设置，请刷新大屏后重试")
+            }
+        }, 8000L)
+    }
+
+    override fun onStudentSelectionState(message: JSONObject) {
+        runOnUiThread {
+            if (isDestroyed || !roomJoined) return@runOnUiThread
+            val requestId = message.optString("requestId")
+            if (requestId.isNotBlank() && requestId != pendingSelectionId) return@runOnUiThread
+            if (pendingSelectionId != null && requestId.isBlank()) return@runOnUiThread
+            val pending = pendingSelectionId != null
+            pendingSelectionId = null
+            classPickerDialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
+            val error = message.optString("error")
+            if (error.isNotBlank()) { toast(error); return@runOnUiThread }
+            selectedTeachingClassId = message.optString("classId")
+            studentDrawMode = message.optString("mode", "name")
+            studentDrawCount = message.optInt("count", 50).coerceIn(1, 80)
+            studentSelectionConfirmed = message.optBoolean("confirmed")
+            classSettingsButton?.text = classSettingsLabel()
+            if (pending) {
+                classPickerDialog?.dismiss()
+                toast("班级与抽取设置已同步到大屏")
+            }
+        }
+    }
+
     private fun studentRollButton(label: String = "抽学生回答"): MaterialButton = secondaryButton(label).apply {
         contentDescription = "抽学生回答问题"
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
             topMargin = dp(12)
         }
         setOnClickListener { requestStudentRoll() }
+        setOnLongClickListener { loadTeachingClassesForPhone(automatic = false); true }
     }
 
     private fun requestStudentRoll() {
+        if (pendingSelectionId != null) { toast("正在同步班级，请稍候"); return }
         if (!roomJoined || !viewerOnline) {
             toast("请先连接大屏，连接恢复后再抽取")
             return
@@ -1469,6 +1713,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (status != "started") {
                 pendingStudentRollId = null
                 toast(message)
+                if (status == "needs-setup") loadTeachingClassesForPhone(automatic = false)
             }
         }
     }
@@ -4973,6 +5218,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             textSize = 13f
             contentDescription = "抽学生回答问题"
             setOnClickListener { requestStudentRoll() }
+            setOnLongClickListener { loadTeachingClassesForPhone(automatic = false); true }
         }
         audioToggleButton = MaterialButton(this).apply {
             text = "🔇"
@@ -5160,6 +5406,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      * 注意：大屏端断开会删除房间、连接码永久失效，此时不能再用旧码重连。
      */
     private fun handleRoomInvalid(message: String? = null) {
+        classPickerDialog?.dismiss()
+        classPickerRoom = null
+        pendingSelectionId = null
+        studentSelectionConfirmed = false
         cancelReconnectTimeout()
         cancelReconnectRetry()
         reconnectAttempt = 0
@@ -5207,6 +5457,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             roomJoined = true
             signalReconnectInProgress = false
             onConnectionEstablished()
+            pendingSelectionId = null
+            if (classPickerRoom != activeRoomCode) {
+                classPickerRoom = activeRoomCode
+                studentSelectionConfirmed = false
+                selectedTeachingClassId = ""
+                loadTeachingClassesForPhone(automatic = true)
+            }
+            if (studentSelectionConfirmed) sendPhoneClassSelection(selectedTeachingClassId, studentDrawMode, studentDrawCount)
+            else signalingClient?.requestStudentSelection()
             val shouldResumeCamera = resumeCameraAfterJoin
             val shouldResumeLive = resumeLiveAfterJoin
             resumeCameraAfterJoin = false
@@ -5288,6 +5547,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         runOnUiThread {
             val changed = viewerOnline != online
             viewerOnline = online
+            if (online && changed && roomJoined) {
+                if (studentSelectionConfirmed) sendPhoneClassSelection(selectedTeachingClassId, studentDrawMode, studentDrawCount)
+                else signalingClient?.requestStudentSelection()
+            }
             viewerConnectionNotice?.visibility = if (online) View.GONE else View.VISIBLE
             if (currentScreen == Screen.Courseware && coursewareUrl.isNotBlank()) {
                 updateStatus(coursewareStatusText(coursewareTitle))

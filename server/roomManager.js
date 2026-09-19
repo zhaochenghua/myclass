@@ -124,7 +124,8 @@ class RoomManager {
 
     if (room.teacherInfo?.username !== teacherInfo?.username) room.presentation.reset();
     room.teacherSocket = teacherSocket;
-    room.teacherInfo = teacherInfo ? { username: teacherInfo.username, token: teacherInfo.token } : null;
+    room.teacherInfo = teacherInfo ? { username: teacherInfo.username, token: teacherInfo.token,
+      supportsStudentSelection: teacherInfo.supportsStudentSelection === true } : null;
     this.socketIndex.set(teacherSocket, { code, role: 'teacher' });
 
     // 通知大屏端教师上线，携带用户信息用于同步登录
@@ -132,6 +133,7 @@ class RoomManager {
     if (teacherInfo) {
       onlineMsg.username = teacherInfo.username;
       onlineMsg.token = teacherInfo.token;
+      onlineMsg.supportsStudentSelection = teacherInfo.supportsStudentSelection === true;
     }
     sendJson(room.viewerSocket, onlineMsg);
     sendJson(teacherSocket, { type: isOpen(room.viewerSocket) ? 'viewer.online' : 'viewer.reconnecting' });

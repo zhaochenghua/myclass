@@ -64,6 +64,30 @@ test('only the teacher may request a draw and only the viewer may report its res
   assert.equal((await f.teacher.take('student.roll.result')).status, 'error');
 });
 
+test('phone classroom selection enforces roles, validates fields, and reports offline viewers', async t => {
+  const f = await fixture(t);
+  const selection = { type: 'student.selection.set', requestId: 'selection-1', classId: 'class-1', mode: 'name', count: 50 };
+  f.viewer.sendJson(selection);
+  assert.match((await f.viewer.take('error')).message, /教师端/);
+  f.send({ ...selection, students: ['discard'] });
+  assert.deepEqual(await f.viewer.take('student.selection.set'), selection);
+  f.send({ ...selection, count: 0 });
+  assert.match((await f.teacher.take('error')).message, /无效/);
+  f.send({ ...selection, mode: 'invalid' });
+  assert.match((await f.teacher.take('error')).message, /无效/);
+  const response = { ...selection, type: 'student.selection.state', confirmed: true, error: '' };
+  f.send(response);
+  assert.match((await f.teacher.take('error')).message, /教室端/);
+  f.viewer.sendJson(response);
+  assert.deepEqual(await f.teacher.take('student.selection.state'), response);
+  f.send({ type: 'student.selection.get', requestId: '' });
+  assert.deepEqual(await f.viewer.take('student.selection.get'), { type: 'student.selection.get', requestId: '' });
+  f.viewer.close();
+  await f.teacher.take('viewer.reconnecting');
+  f.send(selection);
+  assert.match((await f.teacher.take('student.selection.state')).error, /未连接/);
+});
+
 test('viewer recovery restores offline page, zoom and unfinished ink; continuing the stroke does not duplicate it', async t => {
   const f = await fixture(t);
   f.send({ type: 'courseware.open', url: '/slides.pdf', page: 1 });

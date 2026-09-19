@@ -59,6 +59,7 @@ class SignalingClient(
         /** 服务器明确返回的错误（连接本身仍存活，例如旧版服务器不支持某条消息类型） */
         fun onServerError(message: String)
         fun onStudentRollResult(requestId: String, status: String, message: String)
+        fun onStudentSelectionState(message: JSONObject)
         fun onSignalError(message: String)
         /** 大屏端画笔回传的标注动作（板擦、撤销、清空与大屏本地笔画） */
         fun onViewerAnnotation(payload: RemoteAnnotationPayload)
@@ -105,6 +106,13 @@ class SignalingClient(
 
     fun sendStudentRoll(requestId: String): Boolean =
         sendJson(JSONObject().put("type", "student.roll").put("requestId", requestId))
+
+    fun sendStudentSelection(requestId: String, classId: String, mode: String, count: Int): Boolean =
+        sendJson(JSONObject().put("type", "student.selection.set").put("requestId", requestId)
+            .put("classId", classId).put("mode", mode).put("count", count))
+
+    fun requestStudentSelection(): Boolean =
+        sendJson(JSONObject().put("type", "student.selection.get").put("requestId", ""))
 
     fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1, linkUrl: String? = null): Boolean =
         sendJson(
@@ -283,6 +291,7 @@ class SignalingClient(
         // 手机端连接成功后立即提交 4 位连接码。
         val joinMsg = JSONObject()
             .put("type", "teacher.join")
+            .put("supportsStudentSelection", true)
             .put("code", roomCode)
         // 携带登录 token，服务端据此识别教师身份并同步登录态到大屏端
         authToken?.let { joinMsg.put("token", it) }
@@ -325,6 +334,7 @@ class SignalingClient(
             "student.roll.result" -> callback.onStudentRollResult(
                 message.optString("requestId"), message.optString("status"), message.optString("message")
             )
+            "student.selection.state" -> callback.onStudentSelectionState(message)
             "error" -> callback.onServerError(message.optString("message", "信令错误"))
         }
     }
