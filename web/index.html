@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>上课投屏平台</title>
-    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./style.css?v=20260919a">
   </head>
   <body>
     <main class="stage" aria-live="polite">
@@ -164,16 +164,39 @@
             </div>
           </div>
           <div class="toolbar-divider"></div>
-          <button class="annotation-button" id="rollStudentButton" type="button">抽学号</button>
-          <span class="roll-student-result" id="rollStudentResult">??</span>
+          <span id="studentRollToolbarSlot">
+            <span class="student-roll-controls" id="studentRollControls">
+              <button class="annotation-button" id="classPickerButton" type="button" hidden>班级：不选择</button>
+              <button class="annotation-button" id="rollStudentButton" type="button">抽学号</button>
+              <span class="roll-student-result" id="rollStudentResult" role="button" tabindex="0" aria-label="设置抽取人数">??</span>
+            </span>
+          </span>
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="annotationFullscreenButton" type="button">全屏</button>
           <button class="annotation-button blackboard-toggle-btn" id="blackboardToggleButton" type="button">黑板</button>
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
         <span class="relay-badge" id="relayBadge" hidden>中继模式</span>
-        <div class="roll-student-big" id="rollStudentBig" aria-hidden="true"><div class="roll-student-big-bg"></div><span class="roll-student-big-num">??</span></div>
       </section>
+      <div id="studentRollDock" class="student-roll-dock"></div>
+      <div class="roll-student-big" id="rollStudentBig" aria-hidden="true"><div class="roll-student-big-bg"></div><span class="roll-student-big-num">??</span><span class="roll-student-detail" id="rollStudentDetail"></span></div>
+      <div id="studentRollNotice" class="student-roll-notice" role="status" hidden></div>
+
+      <div class="modal-overlay" id="classPickerModal" hidden>
+        <div class="modal-card class-picker-card" role="dialog" aria-modal="true" aria-labelledby="classPickerTitle">
+          <h3 id="classPickerTitle">选择上课班级</h3>
+          <label for="teachingClassSelect">任教班级</label>
+          <select id="teachingClassSelect"><option value="">不选择班级（按人数抽学号）</option></select>
+          <label for="studentDrawMode">抽取时显示</label>
+          <select id="studentDrawMode"><option value="name">学生姓名</option><option value="number">学生学号</option></select>
+          <p class="student-count-hint">选择班级后从真实名单中抽取；不选班级，沿用原来的设置人数、抽学号方式。</p>
+          <p id="classPickerError" class="form-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="classPickerCancel">不选择班级</button>
+            <button type="button" class="btn-primary" id="classPickerConfirm">确定</button>
+          </div>
+        </div>
+      </div>
 
       <!-- 视频播放器覆盖层 -->
       <div class="video-player-overlay" id="videoPlayerOverlay" hidden>
@@ -286,6 +309,7 @@
       <span class="courseware-conn-code" id="coursewareConnCode">----</span>
     </div>
 
-    <script defer src="./app.js?v=20260915a"></script>
+    <script defer src="./studentRoster.js?v=20260919a"></script>
+    <script defer src="./app.js?v=20260919a"></script>
   </body>
 </html>

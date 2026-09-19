@@ -1,6 +1,10 @@
 const API_BASE = './api';
 let token = localStorage.getItem('admin_token') || '';
 let currentUser = null; // { id, username, role }
+let teachingClasses = [];
+let editingClass = null;
+let rosterDirty = false;
+let classBusy = false;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -22,12 +26,14 @@ async function bootstrap() {
 }
 
 function showLogin() {
+  resetClassEditor();
   $('#loginPanel').hidden = false;
   $('#mainPanel').hidden = true;
   $('#adminUser').textContent = '';
 }
 
 function showMain(user) {
+  resetClassEditor();
   currentUser = user;
   $('#loginPanel').hidden = true;
   $('#mainPanel').hidden = false;
@@ -49,6 +55,7 @@ function renderTabs(role) {
   } else {
     items.push({ id: 'courseware', label: '我的课件' });
   }
+  items.push({ id: 'classes', label: '任教班级' });
   items.push({ id: 'account', label: '账户设置' });
 
   tabs.innerHTML = items.map((t, i) =>
@@ -57,15 +64,19 @@ function renderTabs(role) {
 
   tabs.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
+      if (classBusy || (rosterDirty && !confirm('名单尚未保存，确定离开并放弃修改吗？'))) return;
+      rosterDirty = false;
       tabs.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('is-active'));
       btn.classList.add('is-active');
       const tab = btn.dataset.tab;
       $('#tab-users').hidden = tab !== 'users';
       $('#tab-courseware').hidden = tab !== 'courseware';
       $('#tab-account').hidden = tab !== 'account';
+      $('#tab-classes').hidden = tab !== 'classes';
       if (tab === 'users') loadUsers();
       if (tab === 'courseware') loadCourseware();
       if (tab === 'account') loadProfile();
+      if (tab === 'classes') loadTeachingClasses();
     });
   });
 }
@@ -504,6 +515,125 @@ async function uploadCourseware(file) {
     fill.style.width = '0%';
   }
 }
+
+// --- 任教班级 / 学生名单 ---
+function resetClassEditor() {
+  teachingClasses = [];
+  editingClass = null;
+  rosterDirty = false;
+  $('#teachingClassList').replaceChildren();
+  $('#classEditor').hidden = true;
+  $('#classEditorEmpty').hidden = false;
+  $('#classRoster').value = '';
+  $('#editClassName').value = '';
+}
+
+async function classApi(route, method = 'GET', body) {
+  const requestToken = token;
+  const response = await fetch(`${API_BASE}/classes${route}`, {
+    method, cache: 'no-store', headers: { Authorization: `Bearer ${requestToken}`, 'Content-Type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  });
+  if (requestToken !== token) throw new Error('登录用户已改变，请重试');
+  const data = await response.json();
+  if (response.status === 401) { token = ''; localStorage.removeItem('admin_token'); showLogin(); }
+  if (!response.ok) throw new Error(data.error || '班级操作失败');
+  return data;
+}
+
+function selectTeachingClass(item) {
+  editingClass = item;
+  rosterDirty = false;
+  $('#classEditor').hidden = !item;
+  $('#classEditorEmpty').hidden = !!item;
+  $('#classEditorError').hidden = true;
+  $('#editClassName').value = item?.name || '';
+  $('#classRoster').value = (item?.students || []).map(student => `${student.number}\t${student.name}`).join('\n');
+  updateRosterCount();
+  renderTeachingClasses();
+}
+
+function renderTeachingClasses() {
+  const list = $('#teachingClassList');
+  list.replaceChildren();
+  teachingClasses.forEach(item => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `teaching-class-button${editingClass?.id === item.id ? ' is-active' : ''}`;
+    button.textContent = `${item.name} · ${item.students.length} 人`;
+    button.setAttribute('aria-pressed', String(editingClass?.id === item.id));
+    button.addEventListener('click', () => {
+      if (classBusy || (rosterDirty && !confirm('名单尚未保存，确定切换并放弃修改吗？'))) return;
+      selectTeachingClass(item);
+    });
+    list.appendChild(button);
+  });
+}
+
+async function loadTeachingClasses(selectedId = editingClass?.id) {
+  try {
+    const data = await classApi('');
+    teachingClasses = data.items;
+    selectTeachingClass(teachingClasses.find(item => item.id === selectedId) || teachingClasses[0] || null);
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+function updateRosterCount() {
+  try {
+    $('#classStudentCount').textContent = `（${StudentRoster.parse($('#classRoster').value).length} 人${rosterDirty ? '，未保存' : ''}）`;
+  } catch { $('#classStudentCount').textContent = '（名单有待检查，保存时会提示）'; }
+}
+$('#classEditor').addEventListener('input', () => { rosterDirty = true; updateRosterCount(); });
+$('#refreshClassesButton').addEventListener('click', () => {
+  if (classBusy || (rosterDirty && !confirm('刷新将放弃未保存的名单修改，是否继续？'))) return;
+  loadTeachingClasses();
+});
+$('#createClassForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (classBusy || (rosterDirty && !confirm('名单尚未保存，确定添加班级并放弃修改吗？'))) return;
+  classBusy = true;
+  try {
+    const { item } = await classApi('', 'POST', { name: $('#newClassName').value.trim() });
+    $('#newClassName').value = '';
+    await loadTeachingClasses(item.id);
+    toast('班级已添加，请录入学生名单', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { classBusy = false; }
+});
+$('#classEditor').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (classBusy || !editingClass) return;
+  $('#classEditorError').hidden = true;
+  classBusy = true;
+  $('#saveClassButton').disabled = true;
+  try {
+    const students = StudentRoster.parse($('#classRoster').value);
+    if (!students.length && editingClass.students.length && !confirm('保存后将清空这个班级的学生名单，确定继续吗？')) return;
+    const { item } = await classApi(`/${editingClass.id}`, 'PUT', {
+      name: $('#editClassName').value.trim(), students, revision: editingClass.revision
+    });
+    teachingClasses = teachingClasses.map(existing => existing.id === item.id ? item : existing);
+    selectTeachingClass(item);
+    toast('班级与名单已保存', 'success');
+  } catch (error) {
+    $('#classEditorError').textContent = error.message;
+    $('#classEditorError').hidden = false;
+  } finally { classBusy = false; $('#saveClassButton').disabled = false; }
+});
+$('#deleteClassButton').addEventListener('click', async () => {
+  if (classBusy || !editingClass || !confirm(`确定删除“${editingClass.name}”及其全部学生名单？`)) return;
+  classBusy = true;
+  try {
+    await classApi(`/${editingClass.id}?revision=${editingClass.revision}`, 'DELETE');
+    rosterDirty = false;
+    await loadTeachingClasses(null);
+    toast('班级已删除', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { classBusy = false; }
+});
+window.addEventListener('beforeunload', event => {
+  if (rosterDirty) { event.preventDefault(); event.returnValue = ''; }
+});
 
 // --- Toast 提示 ---
 function toast(message, type = 'info') {

@@ -842,6 +842,16 @@ video {
 }
 
 /* ---- 抽学号（工具栏内，童趣糖果配色） ---- */
+.student-roll-controls { display: inline-flex; align-items: center; gap: 0.5rem; }
+.student-roll-controls [hidden] { display: none; }
+#classPickerButton { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.student-roll-dock { position: fixed; z-index: 26; top: 5.8rem; left: 1.2rem; padding: 0.5rem; border-radius: 8px; background: rgba(10, 14, 23, 0.88); max-width: calc(100vw - 2.4rem); }
+.student-roll-dock[hidden] { display: none; }
+.student-roll-notice { position: fixed; bottom: 5rem; left: 50%; transform: translateX(-50%); z-index: 110; background: #101b24; color: white; padding: 0.7rem 1rem; border: 1px solid var(--line); border-radius: 8px; max-width: 80vw; text-align: center; }
+.class-picker-card select { width: 100%; margin: 0.5rem 0 1rem; padding: 0.7rem; font: inherit; color: var(--text); background: #101b24; border: 1px solid var(--line); border-radius: 6px; }
+.roll-student-detail { z-index: 1; max-width: 85%; text-align: center; color: #fff; font-size: clamp(16px, 3vmin, 30px); overflow-wrap: anywhere; margin-top: 1rem; }
+.roll-student-result.has-roster { width: auto; min-width: 2.4rem; max-width: 8rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-radius: 8px; padding-inline: 0.5rem; }
+.roll-student-result.has-roster::before { border-radius: 8px; }
 .roll-student-result {
   position: relative;
   display: inline-block;
@@ -934,6 +944,7 @@ video {
 
 /* ---- 抽学号居中超大显示层（童趣糖果配色） ---- */
 .roll-student-big {
+  flex-direction: column;
   position: fixed;
   z-index: 30;
   /* 默认缩回右下角（与工具栏对齐） */
@@ -957,6 +968,7 @@ video {
 
 /* 学号数字（彩虹渐变文字，置于磨砂层之上） */
 .roll-student-big-num {
+  white-space: nowrap;
   position: relative;
   z-index: 1;
   color: transparent;

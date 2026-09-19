@@ -58,6 +58,7 @@ class SignalingClient(
         fun onViewerCoursewareClose()
         /** 服务器明确返回的错误（连接本身仍存活，例如旧版服务器不支持某条消息类型） */
         fun onServerError(message: String)
+        fun onStudentRollResult(requestId: String, status: String, message: String)
         fun onSignalError(message: String)
         /** 大屏端画笔回传的标注动作（板擦、撤销、清空与大屏本地笔画） */
         fun onViewerAnnotation(payload: RemoteAnnotationPayload)
@@ -101,6 +102,9 @@ class SignalingClient(
 
     fun sendStop(): Boolean =
         sendJson(JSONObject().put("type", "teacher.stop"))
+
+    fun sendStudentRoll(requestId: String): Boolean =
+        sendJson(JSONObject().put("type", "student.roll").put("requestId", requestId))
 
     fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1, linkUrl: String? = null): Boolean =
         sendJson(
@@ -318,6 +322,9 @@ class SignalingClient(
             )
             "viewer.courseware.close" -> callback.onViewerCoursewareClose()
             "viewer.annotation" -> callback.onViewerAnnotation(parseViewerAnnotation(message))
+            "student.roll.result" -> callback.onStudentRollResult(
+                message.optString("requestId"), message.optString("status"), message.optString("message")
+            )
             "error" -> callback.onServerError(message.optString("message", "信令错误"))
         }
     }

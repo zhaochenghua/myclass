@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管理后台 - 上课投屏平台</title>
   <link rel="stylesheet" href="./style.css">
-  <link rel="stylesheet" href="./admin.css">
+  <link rel="stylesheet" href="./admin.css?v=20260919a">
 </head>
 <body>
   <main class="admin-page">
@@ -107,6 +107,39 @@
         </div>
       </div>
 
+      <div class="tab-panel" id="tab-classes" hidden>
+        <div class="panel-header">
+          <h2>任教班级与学生</h2>
+          <button class="btn-secondary" id="refreshClassesButton" type="button">刷新班级</button>
+        </div>
+        <p class="class-help">名单仅对当前教师可见。上课时可选班级，按姓名或学号抽取；不选班级仍按原来的班级人数抽学号。</p>
+        <div class="class-management">
+          <aside>
+            <form id="createClassForm" class="class-create-form">
+              <label for="newClassName">新增任教班级</label>
+              <input id="newClassName" maxlength="40" required placeholder="例如：七年级（1）班" autocomplete="off">
+              <button class="btn-primary" type="submit">添加班级</button>
+            </form>
+            <div id="teachingClassList" class="teaching-class-list" aria-label="任教班级列表"></div>
+          </aside>
+          <div>
+            <p id="classEditorEmpty" class="class-help">添加或选择一个班级后，开始录入学生。</p>
+            <form id="classEditor" hidden>
+              <label for="editClassName">班级名称</label>
+              <input id="editClassName" maxlength="40" required autocomplete="off">
+              <label for="classRoster">学生名单 <span id="classStudentCount"></span></label>
+              <p id="classRosterHelp" class="class-help">每行一位学生，格式为“学号 姓名”。可直接粘贴 Excel 的学号、姓名两列；编辑或删除对应行后点保存。学号可保留前导 0，同班不能重复。</p>
+              <textarea id="classRoster" rows="14" maxlength="40000" spellcheck="false" aria-describedby="classRosterHelp" placeholder="01 张三&#10;02 李四&#10;03 王五"></textarea>
+              <p class="form-error" id="classEditorError" role="alert" hidden></p>
+              <div class="class-editor-actions">
+                <button class="btn-primary" id="saveClassButton" type="submit">保存班级与名单</button>
+                <button class="btn-danger" id="deleteClassButton" type="button">删除班级</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
       <!-- 账户设置 -->
       <div class="tab-panel" id="tab-account" hidden>
         <div class="account-sections">
@@ -188,6 +221,7 @@
     <div class="toast-container" id="toastContainer"></div>
   </main>
 
-  <script src="./admin.js?v=20260705c"></script>
+  <script src="./studentRoster.js?v=20260919a"></script>
+  <script src="./admin.js?v=20260919a"></script>
 </body>
 </html>

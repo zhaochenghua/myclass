@@ -1,3 +1,4 @@
+let studentRoller = null;
 const state = {
   socket: null,
   peerConnection: null,
@@ -347,6 +348,7 @@ async function bootstrap() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '登录失败');
         state.teacherToken = data.token;
+        studentRoller?.setTeacher(data.token);
         state.syncedFromTeacher = false;
         state.directTeach = true;
         elements.directTeachButton.hidden = true;
@@ -365,6 +367,7 @@ async function bootstrap() {
     });
     elements.directTeachLogout.addEventListener('click', () => {
       state.teacherToken = null;
+      studentRoller?.setTeacher(null);
       state.syncedFromTeacher = false;
       state.directTeach = false;
       elements.directTeachButton.hidden = false;
@@ -394,7 +397,7 @@ async function bootstrap() {
     window.addEventListener('resize', handleViewportResize);
     // 首次点击页面任意位置自动全屏（排除下载按钮、考试平台链接）
     const autoFullscreen = (e) => {
-      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, .action-btn-exam, .action-btn-exit')) return;
+      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, #studentRollControls, #classPickerModal, #studentCountModal, .action-btn-exam, .action-btn-exit')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
@@ -584,8 +587,26 @@ function setupStudentRoller() {
   const result = document.getElementById('rollStudentResult');
   const big = document.getElementById('rollStudentBig');
   const bigNum = big.querySelector('.roll-student-big-num');
+  const detail = document.getElementById('rollStudentDetail');
+  const classButton = document.getElementById('classPickerButton');
+  const classModal = document.getElementById('classPickerModal');
+  const classSelect = document.getElementById('teachingClassSelect');
+  const modeSelect = document.getElementById('studentDrawMode');
+  const notice = document.getElementById('studentRollNotice');
+  const classError = document.getElementById('classPickerError');
   let rolling = false;
+  let preparing = false;
   let timer = null;
+  let hideTimer = null;
+  let noticeTimer = null;
+  let token = null;
+  let generation = 0;
+  let classes = [];
+  let selectedClassId = '';
+  let displayMode = 'name';
+  let selectionConfirmed = false;
+  let classesLoading = Promise.resolve();
+  let requestId = null;
   // 班级人数，首次使用抽学号时设置，默认 50
   let studentCount = 50;
   let countConfigured = false;
@@ -606,6 +627,174 @@ function setupStudentRoller() {
   let pendingRoll = null;
   // 打开模态框时的人数快照，用于取消时还原
   let openedCount = studentCount;
+
+  // Reuse the same controls on the waiting page, blackboard and video player.
+  const controls = document.getElementById('studentRollControls');
+  const dock = document.getElementById('studentRollDock');
+  const slot = document.getElementById('studentRollToolbarSlot');
+  const positionControls = () => {
+    const toolbarVisible = !elements.videoView.hidden && !elements.annotationToolbar.hidden && elements.blackboardOverlay.hidden;
+    const teaching = !elements.videoView.hidden || !elements.blackboardOverlay.hidden || !elements.videoPlayerOverlay.hidden;
+    const parent = toolbarVisible ? slot : dock;
+    if (controls.parentElement !== parent) parent.appendChild(controls);
+    btn.hidden = result.hidden = !teaching;
+    dock.hidden = toolbarVisible || (!teaching && classButton.hidden);
+  };
+  const observer = new MutationObserver(positionControls);
+  [elements.videoView, elements.annotationToolbar, elements.blackboardOverlay, elements.videoPlayerOverlay].forEach(element => observer.observe(element, { attributes: true, attributeFilter: ['hidden'] }));
+  positionControls();
+
+  function feedback(message, status, remoteId = requestId) {
+    notice.textContent = message;
+    notice.hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { notice.hidden = true; }, 5000);
+    if (remoteId) sendMessage({ type: 'student.roll.result', requestId: remoteId, status, message });
+  }
+
+  function updateClassControls() {
+    const selected = classes.find(item => item.id === selectedClassId);
+    classButton.textContent = selected ? `班级：${selected.name}` : '班级：不选择';
+    classButton.title = selected?.name || '选择任教班级或按人数抽学号';
+    btn.textContent = selectedClassId ? (displayMode === 'name' ? '抽姓名' : '抽学号') : '抽学号';
+    result.classList.toggle('has-roster', !!selectedClassId);
+    result.setAttribute('aria-label', selectedClassId ? '设置班级与抽取方式' : '设置抽取人数');
+    result.title = selectedClassId ? '点击选择班级或切换姓名／学号' : '点击设置/修改班级人数';
+    positionControls();
+  }
+
+  async function classRequest(route = '') {
+    const currentToken = token;
+    const response = await fetch(`./api/classes${route}`, { cache: 'no-store', headers: { Authorization: `Bearer ${currentToken}` } });
+    const data = await response.json();
+    if (currentToken !== token) throw new Error('教师已切换，请重新选择班级');
+    if (!response.ok) throw new Error(data.error || '班级加载失败，请重试');
+    return data;
+  }
+
+  function renderClassOptions() {
+    classSelect.replaceChildren(new Option('不选择班级（按人数抽学号）', ''));
+    classes.forEach(item => classSelect.add(new Option(`${item.name}（${item.students.length} 人）`, item.id)));
+    classSelect.value = selectedClassId;
+    modeSelect.value = displayMode;
+    modeSelect.disabled = !classSelect.value;
+  }
+
+  async function openClassPicker() {
+    if (rolling || preparing || !token) return;
+    const currentGeneration = generation;
+    classModal.hidden = false;
+    classError.hidden = true;
+    document.getElementById('classPickerConfirm').disabled = true;
+    renderClassOptions();
+    try {
+      const data = await classRequest();
+      if (generation !== currentGeneration) return;
+      classes = data.items;
+      renderClassOptions();
+    } catch (error) {
+      if (generation !== currentGeneration) return;
+      classError.textContent = error.message;
+      classError.hidden = false;
+    } finally {
+      if (generation === currentGeneration) document.getElementById('classPickerConfirm').disabled = !classError.hidden;
+    }
+  }
+
+  classSelect.addEventListener('change', () => { modeSelect.disabled = !classSelect.value; });
+  classButton.addEventListener('click', openClassPicker);
+  const applySelection = useSelected => {
+    selectedClassId = useSelected ? classSelect.value : '';
+    displayMode = modeSelect.value;
+    selectionConfirmed = true;
+    classModal.hidden = true;
+    result.textContent = '??';
+    updateClassControls();
+  };
+  document.getElementById('classPickerConfirm').addEventListener('click', () => applySelection(true));
+  document.getElementById('classPickerCancel').addEventListener('click', () => applySelection(false));
+
+  async function setTeacher(nextToken) {
+    if (nextToken === token) return;
+    token = nextToken;
+    const currentGeneration = ++generation;
+    clearTimeout(timer);
+    clearTimeout(hideTimer);
+    if (requestId) feedback('教师已切换，本次抽取已取消', 'error');
+    requestId = null;
+    rolling = preparing = false;
+    btn.disabled = false;
+    classButton.disabled = false;
+    classes = [];
+    selectedClassId = '';
+    selectionConfirmed = false;
+    studentCount = 50;
+    countConfigured = false;
+    classModal.hidden = modal.hidden = true;
+    document.getElementById('classPickerConfirm').disabled = false;
+    big.classList.remove('show', 'rolling', 'done');
+    big.setAttribute('aria-hidden', 'true');
+    result.classList.remove('rolling', 'done');
+    result.textContent = '??';
+    classButton.hidden = !token;
+    updateClassControls();
+    if (!token) return;
+    classesLoading = (async () => {
+      try {
+        const data = await classRequest();
+        if (generation !== currentGeneration) return;
+        classes = data.items;
+        classButton.hidden = !classes.length;
+        positionControls();
+        if (classes.length) { renderClassOptions(); classError.hidden = true; classModal.hidden = false; }
+      } catch (error) {
+        if (generation === currentGeneration) feedback(`班级加载失败：${error.message}。可点班级按钮重试。`, 'error');
+      }
+    })();
+    await classesLoading;
+  }
+
+  async function requestRoll(remoteId = null) {
+    if (elements.videoView.hidden && elements.blackboardOverlay.hidden && elements.videoPlayerOverlay.hidden) {
+      feedback('请先开始投屏或打开课件，再抽学生回答', 'error', remoteId);
+      return;
+    }
+    if (rolling || preparing) { feedback('正在抽取，请稍候', 'busy', remoteId); return; }
+    preparing = true;
+    btn.disabled = classButton.disabled = true;
+    requestId = remoteId;
+    const currentGeneration = generation;
+    try {
+      await classesLoading;
+      if (generation !== currentGeneration) return;
+      if (classes.length && !selectionConfirmed) {
+        renderClassOptions();
+        classModal.hidden = false;
+        feedback('请先在大屏选择班级，或点击“不选择班级”', 'needs-setup');
+        return;
+      }
+      if (!classModal.hidden) { feedback('请先在大屏确认班级设置', 'needs-setup'); return; }
+      if (!selectedClassId && !countConfigured) {
+        openCountModal(null);
+        feedback('请先在大屏设置班级人数，确定后再点抽学号', 'needs-setup');
+        return;
+      }
+      if (!modal.hidden) { feedback('请先在大屏确认班级人数', 'needs-setup'); return; }
+      const selected = selectedClassId ? (await classRequest(`/${encodeURIComponent(selectedClassId)}`)).item : null;
+      if (generation !== currentGeneration) return;
+      const candidates = StudentRoster.candidates(selected, displayMode, studentCount);
+      startRoll(candidates);
+      feedback('正在抽取…', 'started');
+    } catch (error) {
+      if (generation === currentGeneration) feedback(error.message, 'error');
+    } finally {
+      if (generation === currentGeneration) {
+        preparing = false;
+        if (!rolling) { btn.disabled = classButton.disabled = false; requestId = null; }
+      }
+    }
+  }
+  studentRoller = { setTeacher, requestRoll };
 
   function renderCount(value) {
     value = Math.max(MIN_NO, Math.min(MAX_NO, value));
@@ -702,11 +891,19 @@ function setupStudentRoller() {
     closeCountModal();
   });
 
-  function startRoll() {
+  function startRoll(candidates) {
     if (rolling) return;
     rolling = true;
     btn.disabled = true;
     const startTime = Date.now();
+    clearTimeout(hideTimer);
+    big.setAttribute('aria-hidden', 'false');
+    const pick = () => candidates[Math.floor(Math.random() * candidates.length)];
+    const showCandidate = candidate => {
+      result.textContent = bigNum.textContent = candidate.text;
+      detail.textContent = candidate.detail;
+      bigNum.style.fontSize = `min(${Math.min(34, 50 / Math.max(2, Array.from(candidate.text).length))}vmin, 34vh)`;
+    };
 
     result.classList.remove('done');
     result.classList.add('rolling');
@@ -720,24 +917,22 @@ function setupStudentRoller() {
       if (elapsed >= DURATION) {
         result.classList.remove('rolling');
         big.classList.remove('rolling');
-        const final = Math.floor(Math.random() * studentCount) + 1;
-        const text = String(final).padStart(2, '0');
-        result.textContent = text;
-        bigNum.textContent = text;
+        const final = pick();
+        showCandidate(final);
         result.classList.add('done');
         big.classList.add('done');
         // 抽完后缩回右下角（保留短暂展示再隐藏）
-        setTimeout(() => {
+        hideTimer = setTimeout(() => {
           big.classList.remove('show');
+          big.setAttribute('aria-hidden', 'true');
         }, 1400);
+        feedback(`抽中：${final.text}${final.detail ? `（${final.detail}）` : ' 号'}`, 'done');
+        requestId = null;
         rolling = false;
-        btn.disabled = false;
+        btn.disabled = classButton.disabled = false;
         return;
       }
-      const n = Math.floor(Math.random() * studentCount) + 1;
-      const text = String(n).padStart(2, '0');
-      result.textContent = text;
-      bigNum.textContent = text;
+      showCandidate(pick());
       const interval = elapsed < 200 ? 50 : elapsed < 800 ? 100 : elapsed < 1400 ? 180 : 280;
       timer = setTimeout(tick, interval);
     };
@@ -745,15 +940,7 @@ function setupStudentRoller() {
     tick();
   }
 
-  btn.addEventListener('click', () => {
-    if (rolling) return;
-    if (!countConfigured) {
-      // 首次使用：弹出设置人数模态框，确定后仅保存人数（不自动抽号）
-      openCountModal(null);
-    } else {
-      startRoll();
-    }
-  });
+  btn.addEventListener('click', () => requestRoll());
 
   // 圆圈始终可点击修改人数（?? 状态与已设置状态均可）
   result.classList.add('configured');
@@ -761,8 +948,12 @@ function setupStudentRoller() {
 
   // 点击抽学号右侧圆圈：仅设置/修改班级人数，确定后不自动抽号
   result.addEventListener('click', () => {
-    if (rolling) return;
-    openCountModal(null);
+    if (rolling || preparing) return;
+    if (selectedClassId) openClassPicker();
+    else openCountModal(null);
+  });
+  result.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); result.click(); }
   });
 }
 
@@ -895,16 +1086,21 @@ async function handleSignalMessage(message) {
         // 教师手机端已登录，大屏同步登录态（使用真实 token）
         // 不自动弹出课件列表，保留"打开课件"按钮供教师主动操作
         state.teacherToken = message.token;
+        studentRoller?.setTeacher(message.token);
         state.syncedFromTeacher = true;
         state.directTeach = true;
         elements.directTeachUser.textContent = `已登录：${message.username}`;
         elements.directTeachUser.hidden = false;
         elements.directTeachLogout.hidden = false;
       } else {
+        studentRoller?.setTeacher(null);
         hideDirectTeachUI();
       }
       updateCoursewareConnectionIndicator();
       setWaitingStatus('教师已连接，等待直播...');
+      break;
+    case 'student.roll':
+      studentRoller?.requestRoll(message.requestId);
       break;
     case 'teacher.offline':
       setConnectionNotice('手机连接中断，等待自动重连…');

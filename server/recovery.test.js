@@ -44,6 +44,26 @@ async function fixture(t) {
   return { connect, viewer, teacher, room, manager, send, barrier, annotation };
 }
 
+test('only the teacher may request a draw and only the viewer may report its result', async t => {
+  const f = await fixture(t);
+  f.viewer.sendJson({ type: 'student.roll', requestId: 'invalid-role' });
+  assert.match((await f.viewer.take('error')).message, /教师端/);
+  f.send({ type: 'student.roll', requestId: 'draw-1', students: ['untrusted'] });
+  assert.deepEqual(await f.viewer.take('student.roll'), { type: 'student.roll', requestId: 'draw-1' });
+  f.send({ type: 'student.roll.result', requestId: 'draw-1', status: 'done' });
+  assert.match((await f.teacher.take('error')).message, /教室端/);
+  f.viewer.sendJson({ type: 'student.roll.result', requestId: 'draw-1', status: 'done', message: '抽中：张三', extra: 'discard' });
+  assert.deepEqual(await f.teacher.take('student.roll.result'), {
+    type: 'student.roll.result', requestId: 'draw-1', status: 'done', message: '抽中：张三'
+  });
+  f.send({ type: 'student.roll', requestId: '<bad>' });
+  assert.match((await f.teacher.take('error')).message, /无效/);
+  f.viewer.close();
+  await f.teacher.take('viewer.reconnecting');
+  f.send({ type: 'student.roll', requestId: 'offline' });
+  assert.equal((await f.teacher.take('student.roll.result')).status, 'error');
+});
+
 test('viewer recovery restores offline page, zoom and unfinished ink; continuing the stroke does not duplicate it', async t => {
   const f = await fixture(t);
   f.send({ type: 'courseware.open', url: '/slides.pdf', page: 1 });

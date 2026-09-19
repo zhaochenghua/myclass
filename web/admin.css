@@ -7,6 +7,22 @@
   color: var(--text);
 }
 
+.class-help { color: var(--muted); line-height: 1.7; }
+.class-management { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 2rem; }
+.class-create-form, #classEditor { display: flex; flex-direction: column; gap: 0.8rem; }
+#classEditor[hidden] { display: none; }
+.class-management input, .class-management textarea {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 6px;
+  padding: 0.7rem; color: var(--text); background: #101b24; font: inherit;
+}
+.class-management textarea { resize: vertical; line-height: 1.8; tab-size: 6; min-height: 200px; }
+.teaching-class-list { display: grid; gap: 0.6rem; margin-top: 1.5rem; }
+.teaching-class-button { padding: 0.8rem; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--text); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.teaching-class-button.is-active { border-color: var(--accent); background: rgba(101, 240, 200, 0.1); }
+.class-editor-actions { display: flex; gap: 1rem; align-items: center; }
+.class-editor-actions .btn-primary { width: auto; padding-inline: 1.2rem; }
+@media (max-width: 700px) { .class-management { grid-template-columns: 1fr; gap: 1.2rem; } }
+
 .admin-header {
   display: flex;
   align-items: center;

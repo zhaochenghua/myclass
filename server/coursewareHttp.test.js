@@ -13,7 +13,7 @@ test('HTTP upload/list/download/range/delete work on a separate storage root', {
   const serverRoot = path.join(directory, 'server');
   const storageRoot = path.join(directory, 'separate-storage');
   await fs.mkdir(path.join(serverRoot, 'data'), { recursive: true });
-  for (const name of ['server.js', 'coursewareStore.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js']) {
+  for (const name of ['server.js', 'coursewareStore.js', 'classStore.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js']) {
     await fs.copyFile(path.join(__dirname, name), path.join(serverRoot, name));
   }
   await fs.writeFile(path.join(serverRoot, 'data', 'users.json'), JSON.stringify([

@@ -32,12 +32,14 @@ const TEACHER_ONLY_MESSAGE_TYPES = new Set([
   'courseware.video.control',
   'webrtc.offer',
   'teacher.orientation',
+  'student.roll',
   'teacher.stop'
 ]);
 
 // 仅允许大屏端（viewer）发送，用于把大屏本地画笔回传给教师手机端
 const VIEWER_ONLY_MESSAGE_TYPES = new Set([
   'viewer.annotation',
+  'student.roll.result',
   'viewer.courseware.open',
   'viewer.courseware.close'
 ]);
@@ -148,6 +150,8 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'viewer.courseware.open':
     case 'viewer.courseware.close':
     case 'viewer.annotation':
+    case 'student.roll':
+    case 'student.roll.result':
       handleForward(socket, message, roomManager, options);
       break;
     default:
@@ -242,6 +246,24 @@ function handleForward(socket, message, roomManager, options) {
   // viewer.* 仅允许大屏端发送
   if (VIEWER_ONLY_MESSAGE_TYPES.has(message.type) && binding.role !== 'viewer') {
     sendJson(socket, { type: 'error', message: '只有教室端可以发送该消息' });
+    return;
+  }
+
+  if (message.type === 'student.roll' || message.type === 'student.roll.result') {
+    if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(message.requestId)) {
+      sendJson(socket, { type: 'error', message: '无效的抽学生请求' });
+      return;
+    }
+    const payload = { type: message.type, requestId: message.requestId };
+    if (message.type === 'student.roll.result') {
+      if (!['started', 'done', 'busy', 'needs-setup', 'error'].includes(message.status)) return;
+      payload.status = message.status;
+      payload.message = String(message.message || '').slice(0, 160);
+    }
+    if (!roomManager.forward(socket, payload) && binding.role === 'teacher') {
+      sendJson(socket, { type: 'student.roll.result', requestId: message.requestId,
+        status: 'error', message: '大屏暂时未连接，请稍后重试' });
+    }
     return;
   }
 

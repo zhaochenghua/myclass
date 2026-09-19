@@ -139,6 +139,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var switchCameraButton: MaterialButton? = null
     private var frameLockButton: MaterialButton? = null
     private var torchButton: MaterialButton? = null
+    private var rollStudentCameraButton: MaterialButton? = null
+    private var pendingStudentRollId: String? = null
     private var audioToggleButton: MaterialButton? = null
     private var cameraControls: LinearLayout? = null
     private var cameraVersionLabel: TextView? = null
@@ -1427,6 +1429,50 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    private fun studentRollButton(label: String = "抽学生回答"): MaterialButton = secondaryButton(label).apply {
+        contentDescription = "抽学生回答问题"
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
+            topMargin = dp(12)
+        }
+        setOnClickListener { requestStudentRoll() }
+    }
+
+    private fun requestStudentRoll() {
+        if (!roomJoined || !viewerOnline) {
+            toast("请先连接大屏，连接恢复后再抽取")
+            return
+        }
+        if (pendingStudentRollId != null) {
+            toast("正在等待大屏抽取，请稍候")
+            return
+        }
+        val requestId = java.util.UUID.randomUUID().toString()
+        if (signalingClient?.sendStudentRoll(requestId) != true) {
+            toast("发送失败，请等待连接恢复后重试")
+            return
+        }
+        pendingStudentRollId = requestId
+        updateStatus("正在请大屏抽学生…")
+        reconnectHandler.postDelayed({
+            if (pendingStudentRollId == requestId) {
+                pendingStudentRollId = null
+                updateStatus("大屏未返回抽取结果，请查看大屏后再试")
+                toast("大屏未响应，请检查大屏连接或更新大屏页面")
+            }
+        }, 10000L)
+    }
+
+    override fun onStudentRollResult(requestId: String, status: String, message: String) {
+        runOnUiThread {
+            if (requestId != pendingStudentRollId || isDestroyed) return@runOnUiThread
+            updateStatus(message)
+            if (status != "started") {
+                pendingStudentRollId = null
+                toast(message)
+            }
+        }
+    }
+
     private fun requestScreenSharePermission() {
         val manager = getSystemService(MediaProjectionManager::class.java)
         screenCaptureLauncher.launch(manager.createScreenCaptureIntent())
@@ -1474,6 +1520,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 stopScreenShareAndReturnMenu()
             }
         })
+        root.addView(studentRollButton())
         root.addView(versionLabel())
         setContentView(root)
         startOrientationTracking()
@@ -2948,6 +2995,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             rightPanel.addView(pageRow)
             rightPanel.addView(buildCoursewareJumpRow(isUploading))
+            if (!isUploading) rightPanel.addView(studentRollButton())
             if (isUploading) {
                 rightPanel.addView(secondaryButton("返回菜单").apply {
                     layoutParams = LinearLayout.LayoutParams(
@@ -2985,6 +3033,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(statusText)
             root.addView(pageRow)
             root.addView(buildCoursewareJumpRow(isUploading))
+            if (!isUploading) root.addView(studentRollButton())
 
             if (isUploading) {
                 root.addView(secondaryButton("返回菜单").apply {
@@ -3112,6 +3161,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         modeBar.addView(modeButton)
 
         // 手势模式工具栏：旋转 / 返回主菜单 / 结束投屏
+        modeBar.addView(compactButton(studentRollButton("抽学生"), 12f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(80), dp(40)).apply { marginStart = dp(6) }
+        })
         val gestureBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -3478,6 +3530,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             layoutParams = LinearLayout.LayoutParams(dp(96), dp(40))
         }
         modeBar.addView(modeButton)
+
+        modeBar.addView(compactButton(studentRollButton("抽学生"), 12f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(80), dp(40)).apply { marginStart = dp(6) }
+        })
 
         // 翻页栏：手势与画笔模式下都常驻，翻页同时更新手机预览与大屏
         val pageBar = LinearLayout(this).apply {
@@ -4223,6 +4279,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         })
 
         // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
+        root.addView(studentRollButton())
         if (mediaQueue.size > 1) {
             root.addView(buildMediaQueueRow())
         }
@@ -4912,6 +4969,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 )
             }
         }
+        rollStudentCameraButton = cameraSecondaryButton("抽学生").apply {
+            textSize = 13f
+            contentDescription = "抽学生回答问题"
+            setOnClickListener { requestStudentRoll() }
+        }
         audioToggleButton = MaterialButton(this).apply {
             text = "🔇"
             textSize = 20f
@@ -5104,6 +5166,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         signalReconnectInProgress = false
         roomJoined = false
         activeRoomCode = null
+        pendingStudentRollId = null
         resumeCameraAfterJoin = false
         resumeLiveAfterJoin = false
         pendingCoursewareCloseAfterJoin = false
@@ -5419,6 +5482,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         switchCameraButton = null
         frameLockButton = null
         torchButton = null
+        rollStudentCameraButton = null
 
         audioToggleButton = null
         cameraControls = null
@@ -5572,10 +5636,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val switchButton = switchCameraButton ?: return
         val lockButton = frameLockButton ?: return
         val lightButton = torchButton ?: return
+        val rollButton = rollStudentCameraButton ?: return
         val version = cameraVersionLabel ?: return
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        listOf(startButton, stopButton, switchButton, lockButton, lightButton, version).forEach { view ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, rollButton, version).forEach { view ->
             (view.parent as? ViewGroup)?.removeView(view)
         }
         controls.removeAllViews()
@@ -5590,7 +5655,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         )
 
         if (isLandscape) {
-            listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
+            listOf(startButton, stopButton, switchButton, lockButton, lightButton, rollButton).forEach { button ->
                 setCameraButtonTextRotation(button, 0f)
                 button.ellipsize = TextUtils.TruncateAt.END
                 button.maxLines = 2
@@ -5608,7 +5673,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
 
-        listOf(startButton, stopButton, switchButton, lockButton, lightButton).forEach { button ->
+        listOf(startButton, stopButton, switchButton, lockButton, lightButton, rollButton).forEach { button ->
             setCameraButtonTextRotation(button, 0f)
             button.ellipsize = TextUtils.TruncateAt.END
             button.maxLines = 1
@@ -5651,6 +5716,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         toolsRow.addView(switchButton)
         toolsRow.addView(lockButton)
         toolsRow.addView(lightButton)
+        rollButton.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
+        toolsRow.addView(rollButton)
 
         version.visibility = View.VISIBLE
         controls.addView(liveRow)

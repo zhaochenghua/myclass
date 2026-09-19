@@ -11,6 +11,7 @@ const QRCode = require('qrcode');
 const setupWebSocket = require('./websocket');
 const { RoomManager } = require('./roomManager');
 const { createCoursewareStore } = require('./coursewareStore');
+const { createClassStore } = require('./classStore');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
 const HOST = process.env.HOST || '0.0.0.0';
@@ -112,6 +113,7 @@ if (!AUTH_SECRET) {
 const INACTIVE_USER_DELETE_DAYS = Number(process.env.INACTIVE_USER_DELETE_DAYS || 60);
 const usersPath = path.join(dataDir, 'users.json');
 const { readUsers, writeUsers } = require('./userStore').createUserStore(usersPath);
+const classStore = createClassStore(path.join(dataDir, 'classes.json'));
 
 const app = express();
 const server = http.createServer(app);
@@ -153,7 +155,7 @@ server.timeout = COURSEWARE_REQUEST_TIMEOUT_MS;
 server.headersTimeout = Math.min(120000, COURSEWARE_REQUEST_TIMEOUT_MS);
 
 app.disable('x-powered-by');
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
 
 app.use((req, res, next) => {
   if (!isAllowedHost(req.headers.host)) {
@@ -171,8 +173,8 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
     res.setHeader('Vary', 'Origin');
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.sendStatus(204);
@@ -427,8 +429,33 @@ app.delete(`${PATH_PREFIX}/api/admin/users/:id`, requireAuth, requireAdmin, asyn
     const index = users.findIndex((u) => u.id === req.params.id);
     if (index === -1) { res.status(404).json({ error: '用户不存在' }); return; }
     const removed = users.splice(index, 1)[0];
+    await classStore.removeOwner(removed.id);
     await writeUsers(users);
 
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+// Each teacher manages only their own rosters, including administrator accounts.
+app.get(`${PATH_PREFIX}/api/classes`, requireAuth, async (req, res, next) => {
+  try { res.set('Cache-Control', 'no-store').json({ items: await classStore.list(req.user.id) }); }
+  catch (error) { next(error); }
+});
+app.post(`${PATH_PREFIX}/api/classes`, requireAuth, async (req, res, next) => {
+  try { res.status(201).json({ item: await classStore.create(req.user.id, req.body) }); }
+  catch (error) { next(error); }
+});
+app.get(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) => {
+  try { res.set('Cache-Control', 'no-store').json({ item: await classStore.get(req.user.id, req.params.id) }); }
+  catch (error) { next(error); }
+});
+app.put(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) => {
+  try { res.json({ item: await classStore.update(req.user.id, req.params.id, req.body) }); }
+  catch (error) { next(error); }
+});
+app.delete(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) => {
+  try {
+    await classStore.remove(req.user.id, req.params.id, Number(req.query.revision));
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
@@ -945,7 +972,10 @@ async function cleanupInactiveUsers() {
       }
     }
     for (let i = users.length - 1; i >= 0; i -= 1) {
-      if (inactiveIds.has(users[i].id)) users.splice(i, 1);
+      if (inactiveIds.has(users[i].id)) {
+        await classStore.removeOwner(users[i].id);
+        users.splice(i, 1);
+      }
     }
     await writeUsers(users);
     console.log(`清理了 ${inactive.length} 个不活跃用户及课件`);
