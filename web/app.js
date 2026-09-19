@@ -626,6 +626,7 @@ function setupStudentRoller() {
   // 班级人数，首次使用抽学号时设置，默认 50
   let studentCount = 50;
   let countConfigured = false;
+  const drawRounds = StudentRoster.createRoundDraw();
 
   // ---- 设置人数模态框 ----
   const modal = document.getElementById('studentCountModal');
@@ -800,7 +801,7 @@ function setupStudentRoller() {
       const selected = selectedClassId ? (await classRequest(`/${encodeURIComponent(selectedClassId)}`)).item : null;
       if (generation !== currentGeneration) return;
       const candidates = StudentRoster.candidates(selected, displayMode, studentCount);
-      startRoll(candidates);
+      startRoll(candidates, JSON.stringify([token, selectedClassId || 'numbers']));
       feedback('正在抽取…', 'started');
     } catch (error) {
       if (generation === currentGeneration) feedback(error.message, 'error');
@@ -949,14 +950,15 @@ function setupStudentRoller() {
     closeCountModal();
   });
 
-  function startRoll(candidates) {
+  function startRoll(candidates, scope) {
     if (rolling) return;
     rolling = true;
     btn.disabled = true;
     const startTime = Date.now();
     clearTimeout(hideTimer);
     big.setAttribute('aria-hidden', 'false');
-    const pick = () => candidates[Math.floor(Math.random() * candidates.length)];
+    const previewPool = drawRounds.preview(scope, candidates);
+    const pick = () => previewPool[Math.floor(Math.random() * previewPool.length)];
     const showCandidate = candidate => {
       result.textContent = bigNum.textContent = candidate.text;
       detail.textContent = candidate.detail;
@@ -975,8 +977,11 @@ function setupStudentRoller() {
       if (elapsed >= DURATION) {
         result.classList.remove('rolling');
         big.classList.remove('rolling');
-        const final = pick();
+        const outcome = drawRounds.draw(scope, candidates);
+        const final = outcome.candidate;
         showCandidate(final);
+        const progress = `第 ${outcome.round} 轮 · ${outcome.remaining ? `剩余 ${outcome.remaining} 人` : '已抽完，下次开始新一轮'}`;
+        detail.textContent = [final.detail, progress].filter(Boolean).join(' · ');
         result.classList.add('done');
         big.classList.add('done');
         // 抽完后缩回右下角（保留短暂展示再隐藏）
@@ -984,7 +989,7 @@ function setupStudentRoller() {
           big.classList.remove('show');
           big.setAttribute('aria-hidden', 'true');
         }, 1400);
-        feedback(`抽中：${final.text}${final.detail ? `（${final.detail}）` : ' 号'}`, 'done');
+        feedback(`抽中：${final.text}${final.detail ? `（${final.detail}）` : ' 号'}；${progress}`, 'done');
         requestId = null;
         rolling = false;
         btn.disabled = classButton.disabled = false;

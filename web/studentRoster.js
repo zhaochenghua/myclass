@@ -20,14 +20,43 @@
     return students;
   }
   function candidates(classItem, mode, count) {
-    if (!classItem) return Array.from({ length: count }, (_, i) => ({ text: String(i + 1).padStart(2, '0'), detail: '' }));
+    if (!classItem) return Array.from({ length: count }, (_, i) => ({ id: String(i + 1), text: String(i + 1).padStart(2, '0'), detail: '' }));
     if (!classItem.students.length) throw new Error('这个班级还没有学生，请先在管理界面录入名单');
     return classItem.students.map(student => ({
+      id: student.number,
       text: mode === 'number' ? student.number : student.name,
       detail: `${classItem.name} · ${mode === 'number' ? student.name : `学号 ${student.number}`}`
     }));
   }
-  const api = { parse, candidates };
+  // Keep only student numbers in each round; names/display mode may change.
+  // The caller supplies a teacher + class scope, independent of the display mode.
+  function createRoundDraw(random = Math.random) {
+    const rounds = new Map();
+    function remaining(scope, items) {
+      if (!items.length) throw new Error('没有可抽取的学生');
+      let round = rounds.get(scope);
+      if (!round) { round = { drawn: new Set(), number: 1 }; rounds.set(scope, round); }
+      const ids = new Set(items.map(item => item.id));
+      round.drawn.forEach(id => { if (!ids.has(id)) round.drawn.delete(id); });
+      return items.filter(item => !round.drawn.has(item.id));
+    }
+    return {
+      // Animation previews must not consume a student or start a new round.
+      preview(scope, items) {
+        const pool = remaining(scope, items);
+        return pool.length ? pool : items;
+      },
+      draw(scope, items) {
+        let pool = remaining(scope, items);
+        const round = rounds.get(scope);
+        if (!pool.length) { round.drawn.clear(); round.number++; pool = items; }
+        const candidate = pool[Math.floor(random() * pool.length)];
+        round.drawn.add(candidate.id);
+        return { candidate, round: round.number, remaining: pool.length - 1, total: items.length };
+      }
+    };
+  }
+  const api = { parse, candidates, createRoundDraw };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.StudentRoster = api;
 })(typeof window === 'undefined' ? globalThis : window);
