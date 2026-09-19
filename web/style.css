@@ -492,6 +492,9 @@ video {
   bottom: 0.5rem;
   z-index: 5;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: calc(100% - 2rem);
   align-items: center;
   gap: 0.6rem;
   padding: 0.5rem;
@@ -500,6 +503,9 @@ video {
   background: rgba(0, 0, 0, 0.46);
   backdrop-filter: blur(12px);
 }
+
+.annotation-toolbar > * { flex-shrink: 0; }
+#studentRollToolbarSlot { min-width: 0; max-width: 100%; }
 
 .annotation-modes {
   display: flex;
@@ -842,7 +848,8 @@ video {
 }
 
 /* ---- 抽学号（工具栏内，童趣糖果配色） ---- */
-.student-roll-controls { display: inline-flex; align-items: center; gap: 0.5rem; }
+.student-roll-controls { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; max-width: 100%; }
+.student-roll-controls > * { flex-shrink: 0; }
 .student-roll-controls [hidden] { display: none; }
 #classPickerButton { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .student-roll-dock { position: fixed; z-index: 26; top: 5.8rem; left: 1.2rem; padding: 0.5rem; border-radius: 8px; background: rgba(10, 14, 23, 0.88); max-width: calc(100vw - 2.4rem); }
