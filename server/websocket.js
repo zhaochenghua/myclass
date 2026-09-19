@@ -193,7 +193,7 @@ function handleViewerJoin(socket, message, roomManager, options) {
     ttlSeconds: Math.floor((room.expiresAt - Date.now()) / 1000),
     apkUrl: options.apkUrl
   });
-  if (resumed) roomManager.restoreViewer(room);
+  if (resumed) roomManager.restoreViewer(room, { freshPage: message.freshPage === true });
 }
 
 async function handleTeacherJoin(socket, message, roomManager, options) {

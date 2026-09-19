@@ -127,6 +127,64 @@ test('a recovery key can replace a half-open viewer; knowing the four-digit code
   assert(f.manager.rooms.get(f.room.code).teacherSocket);
 });
 
+test('a fresh page returns home when the phone is offline, clearing the previous lesson', async t => {
+  const f = await fixture(t);
+  f.send({ type: 'courseware.open', url: '/previous.pdf', page: 2 });
+  await f.viewer.take('courseware.open');
+  f.annotation('begin', 2, 'old-ink', [{ x: .1, y: .2 }]);
+  f.annotation('end', 2, 'old-ink');
+  await f.barrier();
+  f.teacher.close();
+  await f.viewer.take('teacher.offline');
+  const room = f.manager.rooms.get(f.room.code);
+  room.teacherInfo = { username: 'previous', token: 'previous-token' };
+  const revision = room.presentationRevision;
+  const next = await f.connect();
+  next.sendJson({ type: 'viewer.join', roomCode: f.room.code, recoveryKey: f.room.recoveryKey,
+    supportsRecovery: true, freshPage: true });
+  assert.equal((await next.take('room.created')).code, f.room.code);
+  assert.equal((await next.take('room.snapshot')).presentation, null);
+  assert.equal(room.teacherInfo, null);
+  assert.equal(room.presentationRevision, revision + 1);
+  assert.equal(room.presentation.snapshot(), null);
+});
+
+test('reopening a disconnected viewer goes home without requiring a session recovery key', async t => {
+  const f = await fixture(t);
+  f.send({ type: 'courseware.open', url: '/previous.pdf', page: 2 });
+  await f.viewer.take('courseware.open');
+  f.teacher.close();
+  await f.viewer.take('teacher.offline');
+  f.viewer.close();
+  await once(f.viewer, 'close');
+  for (let i = 0; i < 100 && f.manager.rooms.get(f.room.code).viewerSocket; i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  const next = await f.connect();
+  next.sendJson({ type: 'viewer.join', roomCode: f.room.code, supportsRecovery: true, freshPage: true });
+  assert.equal((await next.take('room.created')).code, f.room.code);
+  assert.equal((await next.take('room.snapshot')).presentation, null);
+});
+
+test('fresh page with an online phone and automatic reconnect with an offline phone both preserve lessons', async t => {
+  const f = await fixture(t);
+  f.send({ type: 'courseware.open', url: '/current.pdf', page: 3 });
+  await f.viewer.take('courseware.open');
+  const next = await f.connect();
+  next.sendJson({ type: 'viewer.join', roomCode: f.room.code, recoveryKey: f.room.recoveryKey,
+    supportsRecovery: true, freshPage: true });
+  await next.take('room.created');
+  await next.take('teacher.online');
+  assert.equal((await next.take('room.snapshot')).presentation.open.page, 3);
+  f.teacher.close();
+  await next.take('teacher.offline');
+  const reconnect = await f.connect();
+  reconnect.sendJson({ type: 'viewer.join', roomCode: f.room.code, recoveryKey: f.room.recoveryKey,
+    supportsRecovery: true, freshPage: false });
+  await reconnect.take('room.created');
+  assert.equal((await reconnect.take('room.snapshot')).presentation.open.page, 3);
+});
+
 test('clear and undo respect explicit pages; a delayed render acknowledgement cannot roll back the page', async t => {
   const f = await fixture(t);
   f.send({ type: 'courseware.open', url: '/slides.pdf', page: 1 });

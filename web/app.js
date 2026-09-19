@@ -1,4 +1,6 @@
 let studentRoller = null;
+// A document reload starts a new visit; a socket reconnect does not.
+let viewerJoinedThisPage = false;
 const state = {
   socket: null,
   peerConnection: null,
@@ -1080,7 +1082,8 @@ function connectSignaling() {
     const savedCode = readStoredRoomCode();
     let recoveryKey = null;
     try { recoveryKey = sessionStorage.getItem('myclass.viewerRecoveryKey'); } catch {}
-    sendMessage({ type: 'viewer.join', roomCode: savedCode, recoveryKey, supportsRecovery: true });
+    sendMessage({ type: 'viewer.join', roomCode: savedCode, recoveryKey, supportsRecovery: true,
+      freshPage: !viewerJoinedThisPage });
     setWaitingStatus(savedCode ? '正在恢复课堂...' : '正在创建课堂...');
     heartbeat = setInterval(() => {
       if (state.socket !== socket) { clearInterval(heartbeat); return; }
@@ -1132,6 +1135,7 @@ async function handleSignalMessage(message) {
       setConnectionNotice(message.presentation?.truncated ? '笔迹过多，较早的笔迹未能恢复' : '');
       break;
     case 'room.created':
+      viewerJoinedThisPage = true;
       setConnectionNotice('');
       if (message.recoveryKey) {
         try { sessionStorage.setItem('myclass.viewerRecoveryKey', message.recoveryKey); } catch {}

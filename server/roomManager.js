@@ -93,7 +93,15 @@ class RoomManager {
     return { room, resumed: true };
   }
 
-  restoreViewer(room) {
+  restoreViewer(room, { freshPage = false } = {}) {
+    // A deliberate new page with no phone connected starts at the home screen.
+    // Keep the room/code, but do not carry the previous teacher's lesson forward.
+    // Automatic network recovery still preserves an offline teacher's lesson.
+    if (freshPage && !isOpen(room.teacherSocket)) {
+      room.presentation.reset();
+      room.presentationRevision++;
+      room.teacherInfo = null;
+    }
     if (isOpen(room.teacherSocket)) {
       sendJson(room.viewerSocket, { type: 'teacher.online', ...room.teacherInfo });
     }
