@@ -6,13 +6,18 @@
 // 这样代码更新即时生效，同时断网/弱网也能打开界面。
 // API、WebSocket、课件文件不在本页面路径下，不会被缓存。
 
-const CACHE_NAME = 'myclass-ios-v6';
+const CACHE_NAME = 'myclass-ios-v7-classroom';
 const SHELL_FILES = [
   './',
   './index.html',
   './style.css',
+  './style.css?v=20260919f',
   './manifest.webmanifest',
   './js/app.js',
+  './js/app.js?v=20260919f',
+  './js/classroom.js?v=20260919f',
+  './js/signaling.js?v=20260919f',
+  './js/util.js?v=20260919f',
   './js/util.js',
   './js/signaling.js',
   './js/publisher.js',

@@ -16,8 +16,9 @@ import {
   deviceAngle,
   isStandalone,
   isIos
-} from './util.js';
-import { SignalingClient, resolveWebSocketUrl } from './signaling.js';
+} from './util.js?v=20260919f';
+import { SignalingClient, resolveWebSocketUrl } from './signaling.js?v=20260919f';
+import { createClassroom } from './classroom.js?v=20260919f';
 import { LivePublisher } from './publisher.js';
 import { MediaPipeline } from './pipeline.js';
 import { CoursewareClient, coursewareFormatLabel } from './courseware.js';
@@ -74,6 +75,20 @@ const state = {
 };
 
 // ---------------------------------------------------------------- 引导
+const classroom = createClassroom(state);
+let campusChecking = false;
+async function campusFetch(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try { return await fetch(url, { ...options, signal: controller.signal }); }
+  finally { clearTimeout(timer); }
+}
+
+function showNetwork(message = '') {
+  state.screen = 'Network';
+  showView('Network');
+  $('networkMessage').textContent = message || (navigator.onLine === false ? '当前没有网络，请连接校园 Wi-Fi 后重试。' : '无法访问校园服务器，请确认已连接校园 Wi-Fi；若已连接，请检查网络或服务器状态。');
+}
 
 async function bootstrap() {
   // 标注画板只依赖 DOM，最先初始化：即使后续配置/登录失败，画笔相关代码也不会拿到空画板
@@ -81,18 +96,30 @@ async function bootstrap() {
   bindStaticEvents();
   renderQualityOptions();
   registerServiceWorker();
+  $('networkRetry').addEventListener('click', connectCampus);
+  window.addEventListener('online', () => { if (state.screen === 'Network') connectCampus(); });
+  window.addEventListener('offline', () => { if (['Auth', 'Connect'].includes(state.screen)) showNetwork(); });
+  await connectCampus();
+}
 
+async function connectCampus() {
+  if (campusChecking) return;
+  campusChecking = true;
+  $('networkRetry').disabled = true;
+  showNetwork('正在检测校园投屏服务…');
   try {
+    const health = await campusFetch('../health', { cache: 'no-store' });
+    if (!health.ok || (await health.json()).service !== 'myclass') throw new Error('服务器不可达');
     state.config = await loadConfig();
   } catch (error) {
-    toast(`无法连接服务器：${error.message}`, { warn: true, duration: 4000 });
-    showView('Auth');
+    showNetwork();
+    campusChecking = false;
+    $('networkRetry').disabled = false;
     return;
   }
-
   state.apiBase = new URL('../api', window.location.href).href.replace(/\/$/, '');
   state.coursewareClient = new CoursewareClient({ apiBase: state.apiBase, token: null });
-  setupPipeline();
+  if (!state.pipeline) setupPipeline();
 
   const version = state.config.iosVersion || state.config.apkVersion || '';
   const versionText = version ? `v${version}` : '';
@@ -103,42 +130,48 @@ async function bootstrap() {
 
   const token = storage.get('token');
   if (!token) {
+    campusChecking = false;
+    $('networkRetry').disabled = false;
     showAuth();
     return;
   }
 
   state.token = token;
   state.coursewareClient.setToken(token);
-  // 先显示连接页避免黑屏，再后台校验 token
-  showConnect();
+  showNetwork('校园网络已连接，正在恢复登录…');
   try {
     const me = await apiMe();
     state.username = me.username;
     storage.set('username', me.username);
     $('menuVersion').textContent = `已登录：${me.username}${versionText ? ` · ${versionText}` : ''}`;
-  } catch {
-    clearAuth();
-    showAuth();
-    toast('登录已过期，请重新登录', { warn: true });
+    showConnect();
+  } catch (error) {
+    if (error.status === 401) {
+      clearAuth(); showAuth(); toast('登录已过期，请重新登录', { warn: true });
+    } else showNetwork();
+  } finally {
+    campusChecking = false;
+    $('networkRetry').disabled = false;
   }
 }
 
 async function loadConfig() {
-  const response = await fetch('../api/config', { cache: 'no-store' });
+  const response = await campusFetch('../api/config', { cache: 'no-store' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }
 
 async function apiMe() {
-  const response = await fetch(`${state.apiBase}/auth/me`, {
+  const response = await campusFetch(`${state.apiBase}/auth/me`, {
     headers: { Authorization: `Bearer ${state.token}` },
     cache: 'no-store'
   });
-  if (!response.ok) throw new Error('未登录');
+  if (!response.ok) throw Object.assign(new Error('验证登录失败'), { status: response.status });
   return response.json();
 }
 
 function clearAuth() {
+  classroom.reset();
   state.token = null;
   state.username = null;
   storage.remove('token');
@@ -166,13 +199,13 @@ async function performAuth(isRegister) {
   button.textContent = isRegister ? '注册中...' : '登录中...';
 
   try {
-    const response = await fetch(`${state.apiBase}/auth/${isRegister ? 'register' : 'login'}`, {
+    const response = await campusFetch(`${state.apiBase}/auth/${isRegister ? 'register' : 'login'}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(payload.error || `HTTP ${response.status}`), { status: response.status });
 
     state.token = payload.token;
     state.username = payload.username;
@@ -183,7 +216,8 @@ async function performAuth(isRegister) {
     showConnect();
     toast(isRegister ? '注册成功' : '登录成功');
   } catch (error) {
-    toast(error.message || '操作失败', { warn: true });
+    if (error.status) toast(error.message || '操作失败', { warn: true });
+    else showNetwork();
   } finally {
     button.disabled = false;
     button.textContent = original;
@@ -205,6 +239,8 @@ function showConnect() {
 function showMenu() {
   state.screen = 'Menu';
   showView('Menu');
+  const version = state.config?.iosVersion || state.config?.apkVersion || '';
+  $('menuVersion').textContent = `已登录：${state.username || ''}${version ? ` · v${version}` : ''}`;
   $('menuStatus').textContent = `已连接课堂 ${state.roomCode || ''}`;
   // 离开投屏/课件页时收起画笔，避免回到菜单后工具栏残留
   setMediaPenMode(false);
@@ -220,7 +256,12 @@ function ensureSignaling() {
     wsUrl: resolveWebSocketUrl(state.config?.wsPath),
     handlers: {
       onJoinAccepted: handleJoinAccepted,
+      onStudentSelection: classroom.receive,
+      onStudentRoll: classroom.result,
+      onViewerConnection: classroom.viewer,
       onJoinRejected: (message) => {
+        state.joined = false;
+        classroom.reset();
         toast(message, { warn: true });
         state.roomCode = null;
         showConnect();
@@ -253,6 +294,7 @@ function ensureSignaling() {
       onSignalError: (message) => toast(message, { warn: true }),
       onDisconnected: () => {
         if (state.joined) $('connectHint').textContent = '连接已断开，正在重新连接...';
+        state.joined = false;
       }
     }
   });
@@ -264,6 +306,7 @@ function ensureSignaling() {
 
 function handleJoinAccepted() {
   state.joined = true;
+  classroom.joined();
   $('connectHint').textContent = '连接成功';
   toast('连接成功');
 
@@ -321,6 +364,7 @@ function connectToRoom(code) {
 }
 
 function leaveRoom() {
+  classroom.reset();
   state.joined = false;
   state.roomCode = null;
   state.resumeLiveAfterJoin = false;
@@ -2804,7 +2848,8 @@ function bindStaticEvents() {
       state.lastHiddenAt = Date.now();
       return;
     }
-    handleResume();
+    if (state.screen === 'Network') connectCampus();
+    else handleResume();
   });
 
   document.addEventListener('gesturestart', (event) => event.preventDefault());

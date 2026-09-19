@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./style.css?v=20260919f" />
   </head>
   <body>
     <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
@@ -30,6 +30,12 @@
     </div>
 
     <main class="app">
+      <section class="view view-center" id="viewNetwork">
+        <div class="panel"><div class="panel-side"><h1 class="title">连接校园网络</h1>
+          <p class="subtitle" id="networkMessage">正在检测校园投屏服务…</p></div>
+          <div class="panel-main"><p>请在 iPhone 设置中连接校园 Wi-Fi，然后返回本页面。</p>
+            <button class="btn btn-primary" id="networkRetry" type="button">重新检测</button></div></div>
+      </section>
       <!-- ============ 登录 / 注册 ============ -->
       <section class="view view-center" id="viewAuth" hidden>
         <!-- 横屏时 panel-side / panel-main 变成左右两栏；竖屏用 display:contents 保持原有单列顺序 -->
@@ -103,6 +109,7 @@
           <div class="panel-side">
             <h1 class="title">功能菜单</h1>
             <p class="subtitle" id="menuStatus">已连接课堂</p>
+            <button class="btn btn-ghost" id="menuClassroom" data-classroom-settings type="button">班级 / 抽取设置</button>
             <p class="footnote" id="menuVersion"></p>
           </div>
           <div class="panel-main">
@@ -140,6 +147,7 @@
             <button class="tool" id="resetZoomButton" type="button">复位</button>
           </div>
           <button class="btn btn-primary btn-live" id="liveToggle" type="button">开始直播</button>
+          <div class="classroom-actions"><button class="tool" data-student-roll type="button">抽学生</button><button class="tool" data-classroom-settings type="button">班级设置</button></div>
         </footer>
       </section>
 
@@ -190,6 +198,7 @@
         </div>
 
         <footer class="list-footer">
+          <div class="classroom-actions"><button class="tool" data-student-roll type="button">抽学生</button><button class="tool" data-classroom-settings type="button">班级设置</button></div>
           <p class="subtitle" id="mediaStatus">正在准备...</p>
           <div class="annotation-bar" id="mediaAnnotationBar" hidden>
             <div class="annotation-colors" id="mediaAnnotationColors">
@@ -294,6 +303,7 @@
           </div>
 
           <footer class="list-footer cw-footer">
+            <div class="classroom-actions"><button class="tool" data-student-roll type="button">抽学生</button><button class="tool" data-classroom-settings type="button">班级设置</button></div>
             <p class="subtitle" id="cwPlayStatus">正在打开...</p>
             <div class="page-row">
               <button class="btn btn-nav" id="cwPrevPage" type="button">上一页</button>
@@ -318,6 +328,22 @@
       </section>
     </main>
 
+    <div class="classroom-modal" id="classroomDialog" hidden>
+      <section class="classroom-card" role="dialog" aria-modal="true" aria-labelledby="classroomTitle">
+        <h2 id="classroomTitle">选择上课班级</h2>
+        <div class="classroom-fields">
+          <label>上课班级<select id="classroomClass"><option value="">不选择班级（按人数抽学号）</option></select></label>
+          <div><label>抽取时显示<select id="classroomMode"><option value="name">学生姓名</option><option value="number">学生学号</option></select></label>
+            <div id="classroomCountGroup"><label for="classroomCount">抽取人数：<output id="classroomCountValue">50 人</output></label>
+              <div class="classroom-range"><button id="classroomMinus" aria-label="人数减一" type="button">−</button><input id="classroomCount" type="range" min="1" max="80" value="50"><button id="classroomPlus" aria-label="人数加一" type="button">＋</button></div>
+            </div>
+          </div>
+        </div>
+        <p id="classroomError" role="status"></p>
+        <footer class="classroom-actions"><button class="tool" id="classroomRetry" type="button">刷新班级</button><button class="tool" id="classroomCancel" type="button">稍后设置</button><button class="btn btn-primary" id="classroomApply" type="button">同步到大屏</button></footer>
+      </section>
+    </div>
+
     <!-- 通用遮罩 -->
     <div class="overlay" id="overlay" hidden>
       <div class="overlay-card">
@@ -332,6 +358,6 @@
 
     <div class="toast" id="toast" hidden></div>
 
-    <script type="module" src="./js/app.js"></script>
+    <script type="module" src="./js/app.js?v=20260919f"></script>
   </body>
 </html>

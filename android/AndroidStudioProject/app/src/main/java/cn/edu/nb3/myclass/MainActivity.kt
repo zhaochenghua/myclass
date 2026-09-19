@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.database.Cursor
 import android.graphics.Bitmap
@@ -149,6 +150,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var studentSelectionConfirmed = false
     private var pendingSelectionId: String? = null
     private var classPickerDialog: AlertDialog? = null
+    private var classPickerDraft: Triple<String, String, Int>? = null
     private var classPickerLoading = false
     private var classPickerRoom: String? = null
     private var classSettingsButton: MaterialButton? = null
@@ -335,6 +337,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        applyOrientationPreference()
         rawDeviceRotationDegrees = displayRotationDegrees()
         currentDeviceOrientation = createDeviceOrientationPayload(rawDeviceRotationDegrees)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -385,6 +388,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        val reopenClassPicker = classPickerDialog?.isShowing == true
+        if (reopenClassPicker) classPickerDialog?.dismiss()
         // 横竖屏切换时重建当前页面布局
         when (currentScreen) {
             Screen.Auth -> if (networkGateShowing) showCampusNetworkScreen(
@@ -423,6 +428,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
         }
+        if (reopenClassPicker) showPhoneClassPicker()
         syncDeviceRotationFromDisplay(force = true)
     }
 
@@ -600,6 +606,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         selectedTeachingClassId = ""
         studentSelectionConfirmed = false
         classPickerRoom = null
+        classPickerDraft = null
         prefs.edit().remove("token").remove("username").apply()
     }
 
@@ -1425,6 +1432,46 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }.start()
     }
 
+    private fun applyOrientationPreference() {
+        requestedOrientation = when (prefs.getString("screen_orientation", "auto")) {
+            "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        }
+    }
+
+    private fun buildOrientationSelector(): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply {
+                topMargin = dp(12)
+            }
+        }
+        val selected = prefs.getString("screen_orientation", "auto")
+        val choices = listOf("landscape" to "锁定横屏", "auto" to "自动感应", "portrait" to "锁定竖屏")
+        choices.forEachIndexed { index, (value, label) ->
+            val button = (if (value == selected) primaryButton(label) else secondaryButton(label)).apply {
+                textSize = 13f
+                setPadding(dp(2), 0, dp(2), 0)
+                minWidth = 0
+                maxLines = 1
+                isSelected = value == selected
+                contentDescription = "$label，${if (isSelected) "已选择" else "未选择"}"
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    if (index > 0) marginStart = dp(4)
+                }
+                setOnClickListener {
+                    prefs.edit().putString("screen_orientation", value).apply()
+                    applyOrientationPreference()
+                    showMenuScreen()
+                }
+            }
+            row.addView(button)
+        }
+        return row
+    }
+
     private fun showMenuScreen() {
         currentScreen = Screen.Menu
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -1496,6 +1543,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
             leftPanel.addView(titleText("功能菜单", 22f))
+            leftPanel.addView(buildOrientationSelector())
             leftPanel.addView(buildClassSettingsButton())
             leftPanel.addView(statusText)
             leftPanel.addView(versionLabel())
@@ -1518,6 +1566,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
             }
             root.addView(titleText("功能菜单", 28f))
+            root.addView(buildOrientationSelector())
             root.addView(buildClassSettingsButton())
             root.addView(cameraBtn)
             root.addView(mediaBtn)
@@ -1576,53 +1625,91 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun showPhoneClassPicker() {
         if (classPickerDialog?.isShowing == true) return
         val entries = teachingClasses.toList()
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val draft = classPickerDraft
         val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(12), dp(24), dp(12))
+            orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), dp(4))
         }
+        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        listOf(left, right).forEach { column ->
+            content.addView(column, if (landscape) LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                else LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        if (landscape) right.setPadding(dp(16), 0, 0, 0)
         val classes = android.widget.Spinner(this).apply {
             contentDescription = "上课班级"
             adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
                 listOf("不选择班级（按人数抽学号）") + entries.map { "${it.name}（${it.size} 人）" })
-            setSelection(entries.indexOfFirst { it.id == selectedTeachingClassId }.let { if (it < 0) 0 else it + 1 })
+            setSelection(entries.indexOfFirst { it.id == (draft?.first ?: selectedTeachingClassId) }.let { if (it < 0) 0 else it + 1 })
         }
         val mode = android.widget.Spinner(this).apply {
             contentDescription = "抽取时显示"
             adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("学生姓名", "学生学号"))
-            setSelection(if (studentDrawMode == "number") 1 else 0)
+            setSelection(if ((draft?.second ?: studentDrawMode) == "number") 1 else 0)
         }
-        val count = EditText(this).apply {
+        val countLabel = bodyText("").apply { setTextColor(Color.DKGRAY) }
+        val count = SeekBar(this).apply {
             contentDescription = "抽取人数"
-            hint = "人数（1–80）"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(studentDrawCount.toString())
+            max = 79
+            progress = (draft?.third ?: studentDrawCount) - 1
+            minimumHeight = dp(48)
         }
-        val countLabel = bodyText("不选班级时，抽取 1 到以下人数的学号")
-        content.addView(bodyText("上课班级"))
-        content.addView(classes)
-        content.addView(bodyText("抽取时显示"))
-        content.addView(mode)
-        content.addView(countLabel)
-        content.addView(count)
-        content.addView(bodyText("上课中可长按“抽学生”修改班级与抽取方式。"))
+        val countRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        countRow.addView(compactButton(primaryButton("−"), 22f).apply {
+            contentDescription = "人数减一"
+            setOnClickListener { count.progress -= 1 }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        countRow.addView(count, LinearLayout.LayoutParams(0, dp(48), 1f))
+        countRow.addView(compactButton(primaryButton("＋"), 22f).apply {
+            contentDescription = "人数加一"
+            setOnClickListener { count.progress += 1 }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        val rememberDraft = {
+            classPickerDraft = Triple(entries.getOrNull(classes.selectedItemPosition - 1)?.id.orEmpty(),
+                if (mode.selectedItemPosition == 1) "number" else "name", count.progress + 1)
+            countLabel.text = "抽取人数：${count.progress + 1} 人（1–80）"
+        }
+        count.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) { rememberDraft() }
+            override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+        })
+        val modeLabel = bodyText("抽取时显示").apply { setTextColor(Color.DKGRAY) }
+        left.addView(bodyText("上课班级").apply { setTextColor(Color.DKGRAY) })
+        left.addView(classes)
+        right.addView(modeLabel)
+        right.addView(mode)
+        right.addView(countLabel)
+        right.addView(countRow)
+        if (!landscape) left.addView(bodyText("上课中长按“抽学生”可修改设置。"))
+        mode.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { rememberDraft() }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
         classes.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                mode.isEnabled = position > 0
-                count.visibility = if (position == 0) View.VISIBLE else View.GONE
-                countLabel.visibility = count.visibility
+                mode.visibility = if (position > 0) View.VISIBLE else View.GONE
+                modeLabel.visibility = mode.visibility
+                countRow.visibility = if (position == 0) View.VISIBLE else View.GONE
+                countLabel.visibility = countRow.visibility
+                rememberDraft()
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
         val dialog = AlertDialog.Builder(this).setTitle("选择上课班级")
             .setView(ScrollView(this).apply { addView(content) })
-            .setNegativeButton("稍后设置", null).setPositiveButton("同步到大屏", null).create()
+            .setNegativeButton("稍后设置") { _, _ -> classPickerDraft = null }.setPositiveButton("同步到大屏", null).create()
         classPickerDialog = dialog
+        dialog.setOnCancelListener { classPickerDraft = null }
         dialog.setOnDismissListener { if (classPickerDialog === dialog) classPickerDialog = null }
         dialog.show()
+        dialog.window?.setLayout((resources.displayMetrics.widthPixels * if (landscape) 0.92 else 0.94).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = pendingSelectionId == null
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val selected = entries.getOrNull(classes.selectedItemPosition - 1)
-            val total = if (selected != null) studentDrawCount else count.text.toString().toIntOrNull()
-            if (total == null || total !in 1..80) { count.error = "请输入 1–80"; return@setOnClickListener }
+            val total = count.progress + 1
             if (selected?.size == 0) { toast("此班级还没有学生，请先在管理页面录入名单"); return@setOnClickListener }
             sendPhoneClassSelection(selected?.id.orEmpty(), if (mode.selectedItemPosition == 1) "number" else "name", total)
         }
@@ -1665,6 +1752,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             studentSelectionConfirmed = message.optBoolean("confirmed")
             classSettingsButton?.text = classSettingsLabel()
             if (pending) {
+                classPickerDraft = null
                 classPickerDialog?.dismiss()
                 toast("班级与抽取设置已同步到大屏")
             }
@@ -5406,6 +5494,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      * 注意：大屏端断开会删除房间、连接码永久失效，此时不能再用旧码重连。
      */
     private fun handleRoomInvalid(message: String? = null) {
+        classPickerDraft = null
         classPickerDialog?.dismiss()
         classPickerRoom = null
         pendingSelectionId = null

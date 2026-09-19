@@ -1052,6 +1052,26 @@ input::placeholder {
   }
 }
 
+.classroom-actions { display: flex; gap: 0.5rem; align-items: center; }
+.classroom-actions > button { flex: 1; min-width: 0; }
+.classroom-modal { position: fixed; inset: 0; z-index: 110; padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); display: grid; place-items: center; background: #000a; }
+.classroom-modal[hidden] { display: none; }
+.classroom-card { width: min(720px, 100%); max-height: 100%; overflow: auto; padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.classroom-card h2 { margin: 0 0 0.8rem; font-size: 1.2rem; }
+.classroom-fields { display: grid; gap: 0.75rem; }
+.classroom-card label { display: block; }
+.classroom-card select { display: block; width: 100%; min-height: 44px; margin: 0.4rem 0; font: inherit; background: #16282a; color: white; border: 1px solid var(--line); border-radius: 6px; }
+.classroom-range { display: flex; align-items: center; gap: 0.5rem; }
+.classroom-range input { min-width: 0; flex: 1; height: 44px; appearance: auto; -webkit-appearance: auto; padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
+.classroom-range button { width: 44px; height: 44px; font-size: 1.4rem; background: #16282a; color: white; border: 1px solid var(--line); border-radius: 6px; }
+#classroomError { margin: 0.4rem 0; color: #ffd166; }
+#menuClassroom { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (orientation: landscape) {
+  .classroom-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
+  .live-bottom { justify-content: flex-start; overflow-y: auto; }
+  .live-bottom .classroom-actions { flex-direction: column; }
+}
+
 /* 矮横屏（iPhone 横过来高度约 24rem）：进一步压缩纵向占用 */
 @media (orientation: landscape) and (max-height: 30rem) {
   .view {

@@ -222,6 +222,16 @@ export class SignalingClient {
       if (!message || typeof message.type !== 'string') return;
 
       switch (message.type) {
+        case 'student.selection.state':
+          this.handlers.onStudentSelection?.(message);
+          break;
+        case 'student.roll.result':
+          this.handlers.onStudentRoll?.(message);
+          break;
+        case 'viewer.online':
+        case 'viewer.reconnecting':
+          this.handlers.onViewerConnection?.(message.type === 'viewer.online');
+          break;
         case 'join.accepted':
           this.joined = true;
           this.handlers.onJoinAccepted?.(message);
@@ -289,7 +299,7 @@ export class SignalingClient {
 
   #sendJoin() {
     if (!this.joinPayload) return;
-    const payload = { type: 'teacher.join', code: this.joinPayload.code };
+    const payload = { type: 'teacher.join', code: this.joinPayload.code, supportsStudentSelection: true };
     if (this.joinPayload.token) payload.token = this.joinPayload.token;
     this.send(payload);
   }

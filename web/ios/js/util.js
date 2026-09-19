@@ -76,6 +76,7 @@ export function hideOverlay() {
 
 export function showView(name) {
   const views = [
+    'Network',
     'Auth',
     'Connect',
     'Menu',
