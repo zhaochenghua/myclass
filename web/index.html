@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>上课投屏平台</title>
-    <link rel="stylesheet" href="./style.css?v=20260919b">
+    <link rel="stylesheet" href="./style.css?v=20260919c">
   </head>
   <body>
     <main class="stage" aria-live="polite">
@@ -129,10 +129,13 @@
           <button class="annotation-button annotation-eraser-btn" id="annotationEraserButton" type="button">板擦</button>
           <div class="annotation-colors-dropdown" id="annotationColorsDropdown">
             <div class="annotation-colors" id="annotationColors" aria-label="画笔颜色">
-              <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
               <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
-              <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
               <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
+              <button class="annotation-color annotation-more-colors" id="annotationMoreColorsButton" type="button" aria-label="黄色及更多颜色" aria-expanded="false" aria-controls="annotationMoreColorsMenu" title="黄色、蓝色、白色"></button>
+            </div>
+            <div class="toolbar-dropdown-menu annotation-more-colors-menu" id="annotationMoreColorsMenu" aria-label="更多画笔颜色">
+              <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
+              <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
               <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
             </div>
             <div class="toolbar-dropdown-menu annotation-mode-menu" id="annotationModeMenu">
@@ -310,6 +313,6 @@
     </div>
 
     <script defer src="./studentRoster.js?v=20260919a"></script>
-    <script defer src="./app.js?v=20260919a"></script>
+    <script defer src="./app.js?v=20260919c"></script>
   </body>
 </html>

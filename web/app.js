@@ -170,7 +170,9 @@ const elements = {
   annotationColorsContainer: document.getElementById('annotationColors'),
   undoAnnotationButton: document.getElementById('undoAnnotationButton'),
   clearAnnotationButton: document.getElementById('clearAnnotationButton'),
-  annotationColorButtons: Array.from(document.querySelectorAll('.annotation-color')),
+  annotationColorButtons: Array.from(document.querySelectorAll('#annotationColorsDropdown .annotation-color[data-color]')),
+  annotationMoreColorsButton: document.getElementById('annotationMoreColorsButton'),
+  annotationMoreColorsMenu: document.getElementById('annotationMoreColorsMenu'),
   annotationColorsDropdown: document.getElementById('annotationColorsDropdown'),
   annotationModeMenu: document.getElementById('annotationModeMenu'),
   annotationLineToggle: document.getElementById('annotationLineToggle'),
@@ -527,9 +529,16 @@ async function bootstrap() {
     elements.prevPageButton.addEventListener('click', () => navigatePage(-1));
     elements.nextPageButton.addEventListener('click', () => navigatePage(1));
     document.addEventListener('fullscreenchange', updateFullscreenButton);
+    elements.annotationMoreColorsButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      elements.annotationModeMenu.classList.remove('is-open');
+      const open = !elements.annotationMoreColorsMenu.classList.contains('is-open');
+      setMoreColorsOpen(open);
+    });
     elements.annotationColorButtons.forEach((button) => {
       button.addEventListener('click', (e) => {
         e.stopPropagation();
+        setMoreColorsOpen(false);
         const menu = elements.annotationModeMenu;
         if (button.dataset.color === state.annotations.currentColor && menu.classList.contains('is-open')) {
           menu.classList.remove('is-open');
@@ -550,6 +559,13 @@ async function bootstrap() {
       const dropdown = elements.annotationColorsDropdown;
       if (dropdown && !dropdown.contains(e.target)) {
         elements.annotationModeMenu.classList.remove('is-open');
+        setMoreColorsOpen(false);
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        elements.annotationModeMenu.classList.remove('is-open');
+        setMoreColorsOpen(false);
       }
     });
     updateAnnotationButtons();
@@ -3247,6 +3263,7 @@ function beginAnnotationStroke(event) {
   event.preventDefault();
   // 开始画图的瞬间立即收起线型选择下拉，避免遮挡投屏画面
   elements.annotationModeMenu.classList.remove('is-open');
+  setMoreColorsOpen(false);
   elements.annotationCanvas.setPointerCapture(event.pointerId);
   const isEraser = state.annotations.tool === 'eraser';
   const isLine = !isEraser && state.annotations.lineMode;
@@ -3715,10 +3732,19 @@ function updateAnnotationButtons() {
   elements.clearAnnotationButton.disabled = !hasStrokes;
 }
 
+function setMoreColorsOpen(open) {
+  elements.annotationMoreColorsMenu.classList.toggle('is-open', open);
+  elements.annotationMoreColorsButton.setAttribute('aria-expanded', String(open));
+}
+
 function updateAnnotationColorButtons() {
   elements.annotationColorButtons.forEach((button) => {
     button.classList.toggle('is-active', button.dataset.color === state.annotations.currentColor);
   });
+  const extraColor = ['#ffd166', '#38bdf8', '#ffffff'].includes(state.annotations.currentColor);
+  elements.annotationMoreColorsButton.classList.toggle('is-active', extraColor);
+  const selected = elements.annotationColorButtons.find(button => button.dataset.color === state.annotations.currentColor);
+  elements.annotationMoreColorsButton.title = `黄色、蓝色、白色（当前：${selected?.getAttribute('aria-label') || '红色'}）`;
 }
 
 function pointerEventToSourcePoint(event) {

@@ -492,7 +492,6 @@ video {
   bottom: 0.5rem;
   z-index: 5;
   display: flex;
-  flex-wrap: wrap;
   justify-content: flex-end;
   max-width: calc(100% - 2rem);
   align-items: center;
@@ -706,6 +705,37 @@ video {
   display: flex;
 }
 
+.annotation-more-colors { --annotation-color: #ffd166; }
+.annotation-more-colors-menu { left: auto; right: 0; transform: none; flex-direction: row; gap: 0.5rem; padding: 0.6rem; min-width: 0; }
+
+/* Keep classroom controls on one line, including at 125%/150% display scaling. */
+@media (max-width: 1500px) {
+  .annotation-toolbar { gap: 0.4rem; }
+  .annotation-toolbar .annotation-button,
+  .annotation-toolbar .nav-page-button { min-width: 3.5rem; padding-inline: 0.6rem; }
+  .annotation-toolbar #classPickerButton { max-width: 8rem; }
+  .annotation-toolbar .roll-student-result.has-roster { max-width: 5.5rem; }
+}
+@media (max-width: 1100px) {
+  .annotation-toolbar { gap: 0.25rem; right: 0.5rem; max-width: calc(100% - 1rem); }
+  .annotation-toolbar .annotation-button,
+  .annotation-toolbar .nav-page-button { min-width: 2.75rem; padding-inline: 0.35rem; font-size: 0.875rem; }
+  .annotation-toolbar .annotation-mode { padding-inline: 0.45rem; }
+  .annotation-toolbar .annotation-colors { gap: 0.25rem; }
+  .annotation-toolbar .annotation-color { width: 2rem; height: 2rem; }
+  .annotation-toolbar #classPickerButton { max-width: 6rem; }
+  .annotation-toolbar .roll-student-result.has-roster { max-width: 4rem; }
+}
+@media (max-width: 900px) {
+  .annotation-toolbar { gap: 0.2rem; padding: 0.35rem; }
+  .annotation-toolbar .toolbar-divider { display: none; }
+  .annotation-toolbar .annotation-button,
+  .annotation-toolbar .nav-page-button { min-width: 0; padding-inline: 0.25rem; font-size: 0.8rem; }
+  .annotation-toolbar .student-roll-controls { gap: 0.25rem; }
+  .annotation-toolbar #classPickerButton { max-width: 4.5rem; }
+  .annotation-toolbar .roll-student-result.has-roster { max-width: 3rem; }
+}
+
 .toolbar-dropdown-item {
   display: block;
   width: 100%;
@@ -848,7 +878,7 @@ video {
 }
 
 /* ---- 抽学号（工具栏内，童趣糖果配色） ---- */
-.student-roll-controls { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; max-width: 100%; }
+.student-roll-controls { display: inline-flex; align-items: center; gap: 0.4rem; max-width: 100%; }
 .student-roll-controls > * { flex-shrink: 0; }
 .student-roll-controls [hidden] { display: none; }
 #classPickerButton { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
