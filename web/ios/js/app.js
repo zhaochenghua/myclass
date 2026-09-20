@@ -20,7 +20,8 @@ import {
 import { SignalingClient, resolveWebSocketUrl } from './signaling.js?v=20260919f';
 import { createClassroom } from './classroom.js?v=20260919f';
 import { LivePublisher } from './publisher.js';
-import { MediaPipeline } from './pipeline.js';
+import { MediaPipeline } from './pipeline.js?v=20260920a';
+import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
 import { CoursewareClient, coursewareFormatLabel } from './courseware.js';
 import { AnnotationBoard } from './annotation.js';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js';
@@ -921,12 +922,14 @@ function zoomByMedia(factor) {
   sendMediaViewport();
 }
 
-/** 单指拖动平移当前图片（dx/dy 为相对预览框的归一化位移，手指右移为正） */
+/** 屏幕像素位移转换成旋转后图片的归一化视口中心，单/双指共用。 */
 function panByMedia(dx, dy) {
   const item = state.media.queue[state.media.index];
   if (!item || item.kind !== 'image' || (item.scale || 1) <= 1.02) return;
-  item.panX = (item.panX || 0) - dx;
-  item.panY = (item.panY || 0) - dy;
+  const geometry = currentMediaGeometry(item);
+  if (!geometry.baseWidth || !geometry.baseHeight) return;
+  item.panX = (item.panX || 0) - dx / (geometry.baseWidth * item.scale);
+  item.panY = (item.panY || 0) - dy / (geometry.baseHeight * item.scale);
   clampMediaPan(item);
   applyMediaPreviewRotation();
   updateMediaZoomStatus();
@@ -965,6 +968,13 @@ function updateMediaZoomStatus() {
  * 预览图变换：旋转 + 缩放 + 平移（与大屏端 refit 思路一致）。
  * 90/270 时画面宽高互换，需要按容器重新适应，否则旋转后会超出预览区域。
  */
+function currentMediaGeometry(item) {
+  const img = $('mediaPreview');
+  const box = $('mediaPreviewBox').getBoundingClientRect();
+  return mediaPreviewGeometry(img.offsetWidth, img.offsetHeight, box.width, box.height,
+    img.naturalWidth, img.naturalHeight, item.rotation || 0);
+}
+
 function applyMediaPreviewRotation() {
   const img = $('mediaPreview');
   const item = state.media.queue[state.media.index];
@@ -973,19 +983,11 @@ function applyMediaPreviewRotation() {
   const scale = item.scale || 1;
   const panX = item.panX || 0;
   const panY = item.panY || 0;
-  const swapped = rotation === 90 || rotation === 270;
-  let adapt = 1;
-  const box = $('mediaPreviewBox')?.getBoundingClientRect();
-  if (swapped && img.naturalWidth && img.naturalHeight && box?.width && box?.height) {
-    const fitNormal = Math.min(box.width / img.naturalWidth, box.height / img.naturalHeight);
-    const fitRotated = Math.min(box.width / img.naturalHeight, box.height / img.naturalWidth);
-    if (fitNormal > 0) adapt = fitRotated / fitNormal;
-  }
+  const { refit, baseWidth, baseHeight } = currentMediaGeometry(item);
   img.style.transformOrigin = 'center center';
-  // 视口中心由 (0.5,0.5) 移到 (0.5+panX, 0.5+panY)，与大屏端 translate(-panX) 方向一致：
-  // 先缩放（含旋转后的适应修正），再按归一化中心反向平移，使视口对准图片对应区域
+  // 与大屏一致：最外层平移使用屏幕坐标，不能随图片一起旋转。
   img.style.transform =
-    `rotate(${rotation}deg) scale(${scale * adapt}) translate(${-panX * 100}%, ${-panY * 100}%)`;
+    `translate(${-panX * scale * baseWidth}px, ${-panY * scale * baseHeight}px) rotate(${rotation}deg) scale(${scale * refit})`;
   // 图片显示矩形变化后，标注画布要跟着重绘（笔迹坐标以图片显示矩形为基准）
   state.mediaBoard?.invalidate();
 }
@@ -1042,7 +1044,7 @@ function bindMediaGestures() {
       // 双指平移：按中点位移拖动画面（缩放状态下画笔模式也能用）
       const center = centerOf(pts);
       if (lastCenter && box.width && box.height) {
-        panByMedia((center.x - lastCenter.x) / box.width, (center.y - lastCenter.y) / box.height);
+        panByMedia(center.x - lastCenter.x, center.y - lastCenter.y);
       }
       lastCenter = center;
       lastSingle = null;
@@ -1055,7 +1057,7 @@ function bindMediaGestures() {
       const dx = pts[0].x - lastSingle.x;
       const dy = pts[0].y - lastSingle.y;
       const box = stage.getBoundingClientRect();
-      if (box.width && box.height) panByMedia(dx / box.width, dy / box.height);
+      if (box.width && box.height) panByMedia(dx, dy);
       lastSingle = { x: pts[0].x, y: pts[0].y };
       event.preventDefault();
     }
@@ -2724,7 +2726,9 @@ function bindStaticEvents() {
     }
   });
   $('lockFrameButton').addEventListener('click', () => {
-    const locked = state.pipeline.toggleLock();
+    let locked;
+    try { locked = state.pipeline.toggleLock(); }
+    catch (error) { toast(error.message || '锁定画面失败，请重试', { warn: true }); return; }
     setLiveMessage(locked ? '画面已锁定' : '画面已恢复实时');
     updateLiveUI();
     if (!locked) {
@@ -2910,7 +2914,8 @@ async function handleResume() {
         facing: state.pipeline.facing || 'back',
         width: preset.width,
         height: preset.height,
-        fps: preset.fps
+        fps: preset.fps,
+        preserveLockedFrame: true
       });
       if (state.liveActive) await restartLive();
       updateLiveStatus();

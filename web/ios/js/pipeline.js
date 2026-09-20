@@ -33,6 +33,7 @@ export class MediaPipeline {
     this.panX = 0;
     this.panY = 0;
     this.locked = false;
+    this.frozenFrame = null;
     // 画面方向：默认 0（直接跟随 video 正立画面，竖→横自动切换），
     // 仅在 iOS 个别机型画面角度不对时用"旋转"按钮手动叠加 90°
     this.manualRotation = 0;
@@ -50,7 +51,7 @@ export class MediaPipeline {
 
   // ---------------- 生命周期 ----------------
 
-  async openCamera({ facing = 'back', width = 1280, height = 960, fps = 24 } = {}) {
+  async openCamera({ facing = 'back', width = 1280, height = 960, fps = 24, preserveLockedFrame = false } = {}) {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error(
         '当前环境无法访问摄像头。iOS 要求通过 https 打开本页面，请在 Safari 中访问 https 地址后重试。'
@@ -88,9 +89,13 @@ export class MediaPipeline {
     await this.#waitForVideoSize();
 
     this.sourceKind = 'camera';
-    // 新采集的流已按当前屏幕方向正立，清除旧的手动旋转补偿
-    this.manualRotation = 0;
-    this.resetView({ silent: true });
+    // 新直播/切镜头重置视图；方向或后台恢复时保留已有锁定帧。
+    if (!preserveLockedFrame || !this.frozenFrame) {
+      this.locked = false;
+      this.frozenFrame = null;
+      this.manualRotation = 0;
+      this.resetView({ silent: true });
+    }
     this.#start();
     // 方向/尺寸已变化，主动上报一次（切换镜头、旋转重建时大屏端立即同步）
     this.#emitPresentation();
@@ -117,7 +122,7 @@ export class MediaPipeline {
     if (this.sourceKind !== 'camera') return false;
     const width = this.targetLongEdge;
     const height = Math.round((this.targetLongEdge * 3) / 4);
-    await this.openCamera({ facing: this.facing, width, height, fps: this.fps });
+    await this.openCamera({ facing: this.facing, width, height, fps: this.fps, preserveLockedFrame: true });
     return true;
   }
 
@@ -139,6 +144,8 @@ export class MediaPipeline {
 
     this.#stopCameraStream();
     this.sourceKind = 'image';
+    this.locked = false;
+    this.frozenFrame = null;
     this.resetView({ silent: true });
     this.#start();
     return { width: this.image.naturalWidth, height: this.image.naturalHeight };
@@ -161,6 +168,8 @@ export class MediaPipeline {
     this.#stopCameraStream();
     this.clearImage();
     this.sourceKind = 'none';
+    this.locked = false;
+    this.frozenFrame = null;
     if (this.track) {
       try {
         this.track.stop();
@@ -190,7 +199,25 @@ export class MediaPipeline {
   setLocked(locked) {
     const next = locked === true;
     if (this.locked === next) return this.locked;
+    if (next) {
+      const { width, height } = this.videoSize();
+      if (this.sourceKind !== 'camera' || !width || !height || this.video.readyState < 2) {
+        throw new Error('摄像头画面尚未就绪，请稍后再锁定');
+      }
+      // Store the original camera pixels, not the already cropped preview.
+      // All subsequent zoom/pan/keep-alive draws must use this immutable frame.
+      const frame = this.canvas.ownerDocument.createElement('canvas');
+      frame.width = width;
+      frame.height = height;
+      frame.getContext('2d', { alpha: false }).drawImage(this.video, 0, 0, width, height);
+      this.frozenFrame = frame;
+    } else {
+      this.frozenFrame = null;
+    }
     this.locked = next;
+    this._dirty = true;
+    this.#resizeCanvas();
+    this.#draw();
     // 出帧模式（自动/手动）切换：静态画面需要手动 requestFrame 驱动
     if (this.track && this.#isStaticContent() !== this._manualStreamMode) {
       this.#rebuildStream();
@@ -351,13 +378,14 @@ export class MediaPipeline {
   }
 
   #sourceElement() {
-    if (this.sourceKind === 'camera') return this.video;
+    if (this.sourceKind === 'camera') return this.locked && this.frozenFrame ? this.frozenFrame : this.video;
     if (this.sourceKind === 'image') return this.image;
     return null;
   }
 
   #sourceSize() {
     if (this.sourceKind === 'camera') {
+      if (this.locked && this.frozenFrame) return { width: this.frozenFrame.width, height: this.frozenFrame.height };
       return { width: this.video.videoWidth, height: this.video.videoHeight };
     }
     if (this.sourceKind === 'image') {
@@ -390,7 +418,6 @@ export class MediaPipeline {
       if (!this.track) {
         this.#rebuildStream();
       }
-      this._dirty = true;
       return;
     }
 
@@ -407,7 +434,7 @@ export class MediaPipeline {
   }
 
   #rebuildStream() {
-    // 静态画面用 captureStream(0) + 手动 requestFrame（标准做法，Safari 可靠）；
+    // 静态画面优先手动出帧；不支持 requestFrame 的 Safari 回退到定帧率。
     // 实时摄像头用 captureStream(fps)，由绘制操作自动出帧。
     const manual = this.#isStaticContent();
     this._manualStreamMode = manual;
@@ -417,8 +444,14 @@ export class MediaPipeline {
     } catch {
       stream = this.canvas.captureStream();
     }
-    const track = stream.getVideoTracks()[0];
+    let track = stream.getVideoTracks()[0];
     if (!track) return;
+    if (manual && typeof track.requestFrame !== 'function') {
+      track.stop();
+      stream = this.canvas.captureStream(this.fps);
+      track = stream.getVideoTracks()[0];
+      if (!track) return;
+    }
 
     const previous = this.track;
     this.stream = stream;
@@ -439,7 +472,7 @@ export class MediaPipeline {
       this._rafId = requestAnimationFrame(tick);
       if (this.sourceKind === 'none') return;
       if (this.sourceKind === 'camera') {
-        const size = this.videoSize();
+        const size = this.#sourceSize();
         if (!size.width || !size.height) return;
         if (this.canvas.width === 0 || this.canvas.height === 0) {
           this.#resizeCanvas();
@@ -447,7 +480,7 @@ export class MediaPipeline {
           // 旋转或分辨率变化会改变 canvas 需要的尺寸
           this.#resizeCanvas();
         }
-        if (this.locked) return;
+        if (this.locked && !this._dirty) return;
         this.#draw();
         this._dirty = false;
         return;
@@ -468,9 +501,8 @@ export class MediaPipeline {
   }
 
   /**
-   * 静态画面（图片 / 锁定帧）：canvas 内容不变化，自动模式的 captureStream 不会出帧。
-   * 此时轨道用 captureStream(0) 手动模式，必须定时 requestFrame() 才会输出一帧。
-   * 这里每 200ms 请求一帧（约 5fps，Android 静态图推送同为低频），大屏端能持续显示。
+   * 每 200ms 重绘图片或独立锁定帧，保持静态画面持续传输。
+   * 手动轨道再调用 requestFrame；没有该接口时由定帧率轨道捕获重绘。
    */
   #updateKeepAlive() {
     const needed = this.#isStaticContent();
