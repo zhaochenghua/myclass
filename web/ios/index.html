@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20260919f" />
+    <link rel="stylesheet" href="./style.css?v=20260920b" />
   </head>
   <body>
     <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
@@ -120,6 +120,7 @@
               <span>画质</span>
               <select id="qualitySelect"></select>
             </label>
+            <button class="btn btn-ghost" id="menuUpdate" type="button">检查更新</button>
             <button class="btn btn-ghost" id="menuDisconnect" type="button">断开连接</button>
           </div>
         </div>
@@ -344,6 +345,21 @@
       </section>
     </div>
 
+    <!-- 版本更新提示：启动时发现服务端版本变化即弹出，避免老师手动清理缓存 -->
+    <div class="classroom-modal" id="updateDialog" hidden>
+      <section class="classroom-card" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+        <h2 id="updateTitle">发现新版本</h2>
+        <p class="update-line">本机版本：<span id="updateCurrent">-</span></p>
+        <p class="update-line">最新版本：<span id="updateLatest">-</span></p>
+        <p class="update-hint" id="updateHint">建议点“重新加载”获取最新界面。</p>
+        <footer class="classroom-actions">
+          <button class="tool" id="updateLater" type="button">稍后</button>
+          <button class="btn btn-primary" id="updateReload" type="button">重新加载</button>
+          <button class="btn btn-ghost" id="updateClear" type="button">清除缓存并更新</button>
+        </footer>
+      </section>
+    </div>
+
     <!-- 通用遮罩 -->
     <div class="overlay" id="overlay" hidden>
       <div class="overlay-card">
@@ -358,6 +374,6 @@
 
     <div class="toast" id="toast" hidden></div>
 
-    <script type="module" src="./js/app.js?v=20260920a"></script>
+    <script type="module" src="./js/app.js?v=20260920b"></script>
   </body>
 </html>

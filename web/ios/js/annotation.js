@@ -167,11 +167,16 @@ export class AnnotationBoard {
   /** 第二根手指落下 / 退出画笔时结束当前笔画 */
   endActiveStroke(notify = true) {
     const stroke = this.activeStroke;
+    // 无论是否真正起笔，都必须释放指针占用并丢弃待定落点：
+    // 只丢弃落点而不清 activePointerId，会让 pointerdown 里的
+    // "if (this.activePointerId !== null) return" 一直命中，画笔从此再也起不了笔
+    // （课件模式下双指缩放/平移后画笔失效就是这么来的）。
+    this.activePointerId = null;
+    this.hasPendingStart = false;
+    this.pendingStart = null;
     if (!stroke) {
-      // 尚未真正起笔（只是落点）：直接丢弃落点，不产生孤立小点。
+      // 尚未真正起笔（只是落点）：丢弃落点，不产生孤立小点。
       // 双指缩放/平移时第二指落下走的就是这条路径。
-      this.hasPendingStart = false;
-      this.pendingStart = null;
       return;
     }
     this.#flushPendingPoints();
@@ -399,7 +404,10 @@ export class AnnotationBoard {
     canvas.addEventListener('pointerdown', (event) => {
       if (!this.penMode || !this.enabled) return;
       if (event.pointerType === 'mouse' && event.button !== 0) return;
-      if (this.activePointerId !== null) return; // 多指时交给手势处理
+      // 多指时交给手势处理；仅当同一指针确实还在进行中才忽略，
+      // 避免异常丢失 pointerup 时残留的 id 把画笔永久锁死。
+      if (this.activePointerId !== null && (this.activeStroke || this.hasPendingStart)) return;
+      this.activePointerId = null;
       const point = this.#toNormalized(event.clientX, event.clientY);
       if (!point) return;
       event.preventDefault();

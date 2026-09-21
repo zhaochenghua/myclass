@@ -583,7 +583,7 @@ input::placeholder {
 }
 
 /* hidden 属性的默认样式优先级低于上面的 display:flex，必须显式覆盖，
-   否则投图片时视频播放控件仍会显示，视频时也会显示“旋转 90°”按钮 */
+   否则投图片时视频播放控件仍会显示，视频时也会显示"旋转 90°"按钮 */
 .media-video[hidden],
 .media-row[hidden] {
   display: none;
@@ -1066,6 +1066,13 @@ input::placeholder {
 .classroom-range button { width: 44px; height: 44px; font-size: 1.4rem; background: #16282a; color: white; border: 1px solid var(--line); border-radius: 6px; }
 #classroomError { margin: 0.4rem 0; color: #ffd166; }
 #menuClassroom { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 版本更新弹窗 ---------- */
+.update-line { margin: 0.35rem 0; font-size: 0.95rem; color: var(--text); word-break: break-all; }
+.update-hint { margin: 0.6rem 0 0.9rem; font-size: 0.82rem; color: var(--muted); }
+#updateDialog .classroom-actions { flex-wrap: wrap; }
+#updateDialog .classroom-actions > button { flex: 1 1 7.5rem; }
+
 @media (orientation: landscape) {
   .classroom-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
   .live-bottom { justify-content: flex-start; overflow-y: auto; }

@@ -129,6 +129,9 @@ async function connectCampus() {
   $('menuVersion').textContent = `已登录：${state.username || ''}${versionText ? ` · ${versionText}` : ''}`;
   $('connectServerHint').textContent = `服务地址：${window.location.host}${state.config.wsPath || ''}`;
 
+  // 启动即做一次版本自检：服务端已升级而本机仍是旧代码时提示更新
+  checkForUpdate();
+
   const token = storage.get('token');
   if (!token) {
     campusChecking = false;
@@ -2701,6 +2704,10 @@ function bindStaticEvents() {
   $('menuMedia').addEventListener('click', () => showMediaSource());
   $('menuCourseware').addEventListener('click', () => showCoursewareSource());
   $('menuDisconnect').addEventListener('click', () => disconnectAndBack());
+  $('menuUpdate').addEventListener('click', () => manualCheckUpdate());
+  $('updateLater').addEventListener('click', () => dismissUpdateDialog());
+  $('updateReload').addEventListener('click', () => applyUpdate({ clearCache: false }));
+  $('updateClear').addEventListener('click', () => applyUpdate({ clearCache: true }));
   $('qualitySelect').addEventListener('change', (event) => {
     state.quality = event.target.value;
     storage.set('quality', state.quality);
@@ -2941,6 +2948,112 @@ function registerServiceWorker() {
       /* 注册失败不影响使用 */
     });
   });
+}
+
+// ---------------------------------------------------------------- 版本自检 / 更新
+
+// 本机“上次运行的版本号”。与服务端 /api/config 的 iosVersion 不一致，说明服务器已升级。
+const VERSION_STORAGE_KEY = 'seenVersion';
+let updatePromptDismissed = false;
+
+function serverVersion() {
+  return String(state.config?.iosVersion || state.config?.apkVersion || '').trim();
+}
+
+function seenVersion() {
+  return String(storage.get(VERSION_STORAGE_KEY) || '').trim();
+}
+
+/** 启动自检：服务端版本与本机上次运行的版本不一致时提示更新 */
+function checkForUpdate() {
+  const latest = serverVersion();
+  if (!latest) return;
+  const seen = seenVersion();
+  if (!seen) {
+    // 首次运行（或刚清过缓存）：只记录，不打扰
+    storage.set(VERSION_STORAGE_KEY, latest);
+    return;
+  }
+  if (seen === latest) return;
+  showUpdateDialog(seen, latest);
+}
+
+/** 菜单里的“检查更新”：主动拉取服务端版本对比，并始终给出清缓存入口 */
+async function manualCheckUpdate() {
+  try {
+    const response = await campusFetch('../api/config', { cache: 'no-store' });
+    if (response.ok) state.config = await response.json();
+  } catch {
+    /* 拉取失败则沿用已有配置 */
+  }
+  const latest = serverVersion();
+  if (!latest) {
+    toast('无法获取服务器版本，请检查网络', { warn: true });
+    return;
+  }
+  const seen = seenVersion() || latest;
+  updatePromptDismissed = false;
+  showUpdateDialog(seen, latest, { force: true });
+}
+
+function showUpdateDialog(current, latest, options = {}) {
+  if (updatePromptDismissed && options.force !== true) return;
+  const upToDate = current === latest;
+  $('updateTitle').textContent = upToDate ? '已是最新版本' : '发现新版本';
+  $('updateCurrent').textContent = `v${current}`;
+  $('updateLatest').textContent = `v${latest}`;
+  $('updateHint').textContent = upToDate
+    ? '若界面仍是旧版或显示异常，可点“清除缓存并更新”。'
+    : '建议点“重新加载”；若界面仍是旧版，请点“清除缓存并更新”。';
+  $('updateDialog').hidden = false;
+}
+
+function dismissUpdateDialog() {
+  updatePromptDismissed = true;
+  $('updateDialog').hidden = true;
+}
+
+/** 清空 Cache Storage 与 Service Worker：老师无需再手动进设置清理 */
+async function clearAppCaches() {
+  try {
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 让已注册的 Service Worker 立刻回源检查，避免继续命中旧缓存 */
+async function nudgeServiceWorker() {
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration?.();
+    await registration?.update?.();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 应用更新：记录最新版本号后带缓存穿透参数重新加载 */
+async function applyUpdate({ clearCache = false } = {}) {
+  const latest = serverVersion();
+  if (latest) storage.set(VERSION_STORAGE_KEY, latest);
+  $('updateDialog').hidden = true;
+  showOverlay(clearCache ? '正在清除缓存并更新…' : '正在重新加载…');
+  if (clearCache) await clearAppCaches();
+  else await nudgeServiceWorker();
+  const url = new URL(window.location.href);
+  if (latest) url.searchParams.set('v', latest);
+  window.location.replace(url.href);
 }
 
 // ---------------------------------------------------------------- 启动
