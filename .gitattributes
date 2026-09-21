@@ -1,0 +1,29 @@
+# 仓库内容一律使用 LF。工作区若被编辑器改写成 CRLF，git 比较时会先归一化，
+# 不会再把整份文件显示成"已修改"（此前 87 个文件的行尾假差异即源于此）。
+* text=auto eol=lf
+
+# 二进制资源不做文本/行尾转换
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.pdf binary
+*.zip binary
+*.apk binary
+*.exe binary
+*.msi binary
+*.dmg binary
+*.ipa binary
+*.mp4 binary
+*.mov binary
+*.avi binary
+*.webm binary
+*.mkv binary
+*.3gp binary
+*.bcmap binary
+*.ttf binary
+*.woff binary
+*.woff2 binary

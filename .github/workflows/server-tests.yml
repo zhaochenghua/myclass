@@ -1,0 +1,33 @@
+name: Server and PPT animation tests
+
+on:
+  push:
+    paths: ['server/**', 'web/studentRoster.js', 'web/ios/js/coursewarePages.mjs', '.github/workflows/server-tests.yml']
+  pull_request:
+    paths: ['server/**', 'web/studentRoster.js', 'web/ios/js/coursewarePages.mjs', '.github/workflows/server-tests.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install LibreOffice and Poppler
+        run: sudo apt-get update && sudo apt-get install -y libreoffice-impress poppler-utils
+      - run: npm ci
+        working-directory: server
+      - run: npm run check
+        working-directory: server
+      - run: npm test
+        working-directory: server
+        env:
+          RUN_LIBREOFFICE_TESTS: '1'

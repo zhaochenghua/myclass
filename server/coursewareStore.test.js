@@ -156,3 +156,32 @@ test('unsupported formats and path traversal cannot create or delete files', asy
   assert.throws(() => f.store.remove('../upload', null), { status: 400 });
   assert.equal(await fs.readFile(f.input, 'utf8'), 'same original bytes');
 });
+
+test('animation profiles do not reuse static previews; cached metadata and reference deletion stay independent', async t => {
+  let profile = '';
+  let conversions = 0;
+  const f = await fixture(t, { officeProfile: () => profile,
+    convertOfficeToPdf: async (source, ext, output) => {
+      conversions++;
+      await fs.writeFile(output, profile || 'static');
+      return profile ? { mode: 'animation-states', stateCount: 3, slideCount: 1, profile } : undefined;
+    } });
+  const old = await f.upload('same.pptx');
+  profile = 'expand-animations-v1';
+  const expanded = await f.upload('same.pptx');
+  const duplicate = await f.upload('same.pptx', 'bob');
+  assert.equal(conversions, 2);
+  assert.notEqual(old.storageKey, expanded.storageKey);
+  assert.equal(duplicate.storageKey, expanded.storageKey);
+  assert.deepEqual(duplicate.conversion, expanded.conversion);
+  assert.equal(duplicate.conversion.stateCount, 3);
+  assert.equal(await fs.readFile(f.local(old), 'utf8'), 'static');
+  await f.store.remove(expanded.id, 'alice');
+  await fs.access(f.bundle(duplicate));
+  await f.store.remove(duplicate.id, 'bob');
+  await assert.rejects(fs.access(f.bundle(duplicate)), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(f.local(old), 'utf8'), 'static');
+  profile = '';
+  assert.equal((await f.upload('same.pptx')).storageKey, old.storageKey);
+  assert.equal(conversions, 2);
+});

@@ -11,6 +11,7 @@ const QRCode = require('qrcode');
 const setupWebSocket = require('./websocket');
 const { RoomManager } = require('./roomManager');
 const { createCoursewareStore } = require('./coursewareStore');
+const { expandAnimations, PROFILE: ANIMATION_PROFILE } = require('./expandAnimations');
 const { createClassStore } = require('./classStore');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
@@ -136,10 +137,13 @@ const upload = multer({
 
 fs.mkdirSync(coursewareRoot, { recursive: true });
 fs.mkdirSync(tempRoot, { recursive: true });
+const PPT_ANIMATION_MODE = process.env.PPT_ANIMATION_MODE || 'expand';
+if (!['expand', 'static'].includes(PPT_ANIMATION_MODE)) throw new Error('PPT_ANIMATION_MODE must be expand or static');
 const coursewareStore = createCoursewareStore({
   root: coursewareRoot,
   prefix: PATH_PREFIX,
   convertOfficeToPdf,
+  officeProfile: ext => PPT_ANIMATION_MODE === 'expand' && ['.ppt', '.pptx'].includes(ext) ? ANIMATION_PROFILE : '',
   listLimit: Number(process.env.COURSEWARE_LIST_LIMIT || 0)
 });
 const {
@@ -630,6 +634,17 @@ app.use(PATH_PREFIX, (req, res, next) => {
   }
   next();
 });
+// Same public capability URL as the PDF; expose only its page mapping, never the index.
+app.get(`${PATH_PREFIX}/public/courseware/:file.metadata`, async (req, res, next) => {
+  try {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.pdf$/.test(req.params.file)) return res.sendStatus(404);
+    const url = `${PATH_PREFIX}/public/courseware/${req.params.file}`;
+    const item = (await readCoursewareIndex()).find(item => item.url === url);
+    if (!item) return res.sendStatus(404);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.json({ conversion: item.conversion || null });
+  } catch (error) { next(error); }
+});
 app.use(`${PATH_PREFIX}/public/courseware`, (req, res, next) => {
   if (!/^\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.(pdf|zip|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)$/i.test(req.path)) {
     res.sendStatus(404);
@@ -756,6 +771,13 @@ async function publishCourseware(file, fields = {}, userId) {
 }
 
 async function convertOfficeToPdf(inputPath, ext, outputPdfPath, id) {
+  if (PPT_ANIMATION_MODE === 'expand' && ['.ppt', '.pptx'].includes(ext)) {
+    return expandAnimations(inputPath, ext, outputPdfPath, {
+      executable: libreOfficeExecutable(), tempRoot,
+      timeoutMs: Number(process.env.PPT_ANIMATION_TIMEOUT_MS || 180000),
+      maxStates: Number(process.env.PPT_ANIMATION_MAX_STATES || 500)
+    });
+  }
   const sourcePath = path.join(tempRoot, `${id}${ext}`);
   const outputDir = path.join(tempRoot, id);
   await fs.promises.mkdir(outputDir, { recursive: true });

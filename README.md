@@ -133,6 +133,8 @@ COURSEWARE_LIST_LIMIT=0
 
 “播放课件”功能由手机 App 选择本机 PDF/PPT/PPTX 并上传到服务端。PDF 会直接发布，PPT/PPTX 会通过 LibreOffice headless 转换为 PDF 后在网页端自动打开，并写入服务器暂存课件列表；App 后续可直接选择或删除服务器课件，避免大课件重复上传。网页端使用本地 PDF.js 单页渲染课件；横向幻灯片整页显示，竖向 A4 文档按屏幕宽度铺满并支持上一屏/下一屏、长按快速定位页码与手型拖拽。画笔标注绑定在课件页坐标上，会跟随拖动画面移动。服务器需要安装 LibreOffice；如果不在默认路径，请设置 `LIBREOFFICE_PATH` 或 `SOFFICE_PATH`。
 
+PPT/PPTX 新上传时默认通过 ExpandAnimations 将“出现/消失”动画按点击展开成多个静态 PDF 页，网页及手机沿用原有翻页控制。无需 Windows 或 Microsoft Office。设置 `PPT_ANIMATION_MODE=static` 可恢复普通静态转换；旧课件需要重新上传才会展开。支持范围、Linux 实测对比、部署和回滚方式见 [PPT 动画展开说明](docs/ppt-animation-expansion.md)。
+
 HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认只允许 `10.30.13.1`、`localhost`、`127.0.0.1`。请不要把该服务直接暴露到公网。
 
 ### 任教班级与随机抽学生

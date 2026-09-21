@@ -11,10 +11,13 @@ async function startTestServer({ port = 0, withWeb = false } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'myclass-classroom-test-'));
   const serverRoot = path.join(directory, 'server');
   await fs.mkdir(path.join(serverRoot, 'data'), { recursive: true });
-  for (const name of ['server.js', 'classStore.js', 'coursewareStore.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js']) {
+  for (const name of ['server.js', 'classStore.js', 'coursewareStore.js', 'expandAnimations.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js']) {
     await fs.copyFile(path.join(__dirname, name), path.join(serverRoot, name));
   }
+  await fs.cp(path.join(__dirname, 'vendor'), path.join(serverRoot, 'vendor'), { recursive: true });
   if (withWeb) {
+    await fs.symlink(path.join(__dirname, 'node_modules'), path.join(serverRoot, 'node_modules'), 'junction');
+    await fs.cp(path.join(__dirname, '..', 'web', 'ios'), path.join(directory, 'web', 'ios'), { recursive: true });
     await fs.mkdir(path.join(directory, 'web'), { recursive: true });
     for (const name of ['index.html', 'app.js', 'style.css', 'studentRoster.js', 'admin.html', 'admin.js', 'admin.css']) {
       await fs.copyFile(path.join(__dirname, '..', 'web', name), path.join(directory, 'web', name));

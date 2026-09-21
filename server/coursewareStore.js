@@ -13,7 +13,7 @@ function storageError(status, message) {
 
 // One store per server process. All index mutations (including file publication
 // and removal) share this queue; readers see either the old or the new index.
-function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0 }) {
+function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0, officeProfile = () => '' }) {
   root = path.resolve(root);
   const indexPath = path.join(root, 'index.json');
   const objectsRoot = path.join(root, '.objects');
@@ -96,7 +96,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
   }
 
   function objectDirectory(key) {
-    if (!/^[a-f0-9]{64}\.(pdf|zip|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)$/.test(key)) {
+    if (!/^[a-f0-9]{64}\.(pdf|zip|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)(\.[a-z0-9-]{1,64})?$/.test(key)) {
       throw new Error('Invalid courseware storage key');
     }
     return path.join(objectsRoot, key.slice(0, 2), key);
@@ -125,7 +125,9 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
       throw storageError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP、图片、视频文件');
     }
     // Stream hashing keeps memory usage bounded even for multi-GB videos.
-    const storageKey = `${await hashFile(file.path)}${ext}`;
+    const profile = OFFICE.has(ext) ? officeProfile(ext) : '';
+    if (profile && !/^[a-z0-9-]{1,64}$/.test(profile)) throw new Error('Invalid Office conversion profile');
+    const storageKey = `${await hashFile(file.path)}${ext}${profile ? `.${profile}` : ''}`;
     return mutate(async () => {
       const items = await readIndex();
       const bundle = objectDirectory(storageKey);
@@ -143,7 +145,8 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
             const stagedOriginal = path.join(staging, `original${ext}`);
             await fs.promises.copyFile(file.path, stagedOriginal);
             if (OFFICE.has(ext)) {
-              await convertOfficeToPdf(stagedOriginal, ext, path.join(staging, 'preview.pdf'), crypto.randomUUID());
+              const conversion = await convertOfficeToPdf(stagedOriginal, ext, path.join(staging, 'preview.pdf'), crypto.randomUUID());
+              if (conversion) await fs.promises.writeFile(path.join(staging, 'conversion.json'), JSON.stringify(conversion));
             }
             await fs.promises.mkdir(path.dirname(bundle), { recursive: true });
             await fs.promises.rename(staging, bundle);
@@ -159,6 +162,10 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
         const result = { id, userId: userId || 'legacy', title: path.basename(originalName, path.extname(originalName)),
           fileName: originalName, size: previewStat.size, createdAt: new Date().toISOString(),
           url: urlFor(id, outputExt), storageKey };
+        if (OFFICE.has(ext)) {
+          try { result.conversion = JSON.parse(await fs.promises.readFile(path.join(bundle, 'conversion.json'), 'utf8')); }
+          catch (error) { if (error.code !== 'ENOENT') throw error; }
+        }
         const output = path.join(root, `${id}${outputExt}`);
         // Record before copying, so a partial fallback copy is cleaned up too.
         aliases.push(output);

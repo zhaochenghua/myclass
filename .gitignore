@@ -9,6 +9,7 @@ web/public/myclass.apk
 web/public/myclass-windows.exe
 web/public/*.exe
 web/public/*.apk
+web/public/*.apk.bak
 web/public/*.msi
 web/public/*.dmg
 web/public/*.ipa

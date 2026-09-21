@@ -1,3 +1,4 @@
+import { loadPageMapping, pageMapping, slidePage, slideCount, firstState } from './coursewarePages.mjs';
 // iPhone 网页版教师端主流程。
 // 界面状态机与 Android MainActivity 一致：
 //   auth -> connect -> menu -> (live | coursewareSource -> coursewareList -> coursewarePlay)
@@ -24,7 +25,7 @@ import { MediaPipeline } from './pipeline.js?v=20260920a';
 import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
 import { CoursewareClient, coursewareFormatLabel } from './courseware.js';
 import { AnnotationBoard } from './annotation.js';
-import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js';
+import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20260921';
 
 const QUALITY_PRESETS = {
   smooth: { label: '流畅 960×720', width: 960, height: 720, fps: 24, maxBitrate: 3000000 },
@@ -1777,6 +1778,7 @@ async function loadCoursewarePdf(cw) {
   $('cwPageImage').hidden = true;
 
   if (state.cwPdf.doc && state.cwPdf.url === cw.url) {
+    cw.mapping = state.cwPdf.mapping;
     hint.hidden = true;
     await renderCoursewarePage(state.courseware?.page || 1);
     return;
@@ -1786,12 +1788,14 @@ async function loadCoursewarePdf(cw) {
   hint.textContent = '正在加载课件预览...';
   try {
     const doc = await openPdfDocument(cw.url);
+    cw.mapping = await loadPageMapping(cw.url, doc.numPages);
     if (state.courseware !== cw) {
       destroyPdfDocument(doc);
       return;
     }
     destroyPdfDocument(state.cwPdf.doc);
     state.cwPdf.doc = doc;
+    state.cwPdf.mapping = cw.mapping;
     state.cwPdf.url = cw.url;
     state.cwPdf.pageCount = doc.numPages || 0;
     if (state.courseware && doc.numPages > 0 && state.courseware.pageCount !== doc.numPages) {
@@ -2487,12 +2491,13 @@ function updateCoursewareStatus() {
   const localText = local && local.count > 1 ? `，第 ${local.screen} / ${local.count} 屏` : '';
   const remoteText = cw.screenCount > 1 ? `，第 ${cw.screen} / ${cw.screenCount} 屏` : '';
   const zoomText = state.cwView.scale > 1.02 ? `，${state.cwView.scale.toFixed(1)}x` : '';
-  $('cwPlayStatus').textContent = `第 ${cw.page} / ${cw.pageCount} 页${localText || remoteText}${zoomText}`;
-  $('cwPageInput').placeholder = `1-${cw.pageCount}`;
+  $('cwPlayStatus').textContent = `第 ${slidePage(cw)} / ${slideCount(cw)} 页${localText || remoteText}${zoomText}`;
+  $('cwPageInput').placeholder = `1-${slideCount(cw)}`;
 }
 
 function handleCoursewareState(message) {
   if (!state.courseware) return;
+  if (message.url && message.url !== state.courseware.url) return;
   const remotePage = Math.max(1, Number(message.page) || 1);
   // 本地刚发起翻页时，大屏可能还没渲染完就回传了旧页码，
   // 直接采信会把 iPad 的页码改回去造成来回跳页（同安卓对 courseware.state 的处理）。
@@ -2506,6 +2511,7 @@ function handleCoursewareState(message) {
     Number(state.cwPdf.pageCount) || 0,
     Math.max(1, Number(message.pageCount) || 1)
   );
+  state.courseware.mapping = pageMapping(message.conversion, state.courseware.pageCount) || state.courseware.mapping;
   state.courseware.screen = Math.max(1, Number(message.screen) || 1);
   state.courseware.screenCount = Math.max(1, Number(message.screenCount) || 1);
   if (message.fitMode) state.courseware.fitMode = message.fitMode;
@@ -2602,10 +2608,12 @@ function gotoCoursewarePage() {
     return;
   }
   if (!state.joined || !state.courseware) return;
-  // 只有本地 PDF 已加载（知道真实页数）时才做范围收敛，否则照原样跳转
-  const knownTotal = Number(state.cwPdf.pageCount) || 0;
+  // 用户输入的是原始幻灯片页码；渲染和同步继续使用状态编号。
+  const knownTotal = slideCount(state.courseware);
   const target = knownTotal > 0 ? clamp(Math.floor(page), 1, knownTotal) : Math.floor(page);
-  jumpToCoursewarePage(target);
+  const physical = firstState(state.courseware, target);
+  if (!physical) { toast('该页是隐藏幻灯片，无法播放', { warn: true }); return; }
+  jumpToCoursewarePage(physical);
   $('cwPageInput').value = '';
 }
 

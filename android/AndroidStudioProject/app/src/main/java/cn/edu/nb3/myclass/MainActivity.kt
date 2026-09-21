@@ -173,6 +173,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var resumeCameraAfterJoin = false
     private var resumeLiveAfterJoin = false
     private var pendingCoursewareCloseAfterJoin = false
+    private val coursewareMappings = mutableMapOf<String, CoursewarePages>()
+    private fun coursewarePages() = coursewareMappings[coursewareUrl]
+    private fun displayedCoursewarePage() = coursewarePages()?.slide(coursewarePage) ?: coursewarePage
+    private fun displayedCoursewareCount() = coursewarePages()?.slideCount ?: coursewarePageCount.coerceAtLeast(1)
+    private fun coursewareStateForSlide(slide: Int) = coursewarePages()?.firstState(slide) ?: slide
     private var coursewarePage = 1
     private var coursewarePageCount = 1
     private var coursewareScreen = 1
@@ -3876,7 +3881,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52))
         }
         val pageFont = if (isLandscape) 13f else 14f
-        val prevButton = compactButton(secondaryButton("上一页"), pageFont).apply {
+        val prevButton = compactButton(secondaryButton("上一屏"), pageFont).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) }
         }
         val pageLabel = TextView(this).apply {
@@ -3889,7 +3894,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        val nextButton = compactButton(secondaryButton("下一页"), pageFont).apply {
+        val nextButton = compactButton(secondaryButton("下一屏"), pageFont).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(6) }
         }
         pageBar.addView(prevButton)
@@ -4104,8 +4109,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         fun updatePageBar() {
             val total = coursewarePdf?.pageCount?.takeIf { it > 0 } ?: coursewarePageCount
-            pageLabel.text = "第 $coursewarePage / $total 页"
-            pageInput.hint = "页码 1-$total"
+            pageLabel.text = "第 ${displayedCoursewarePage()} / ${displayedCoursewareCount()} 页"
+            pageInput.hint = "页码 1-${displayedCoursewareCount()}"
             val canPrev = coursewarePage > 1
             val canNext = coursewarePage < total
             prevButton.isEnabled = canPrev
@@ -4148,7 +4153,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 return
             }
             hintText.visibility = View.VISIBLE
-            hintText.text = "正在渲染第 $page 页…"
+            hintText.text = "正在渲染第 ${coursewarePages()?.slide(page) ?: page} 页…"
             renderPdfPageAsync(page) { bitmap ->
                 // 渲染完成前老师可能已经翻走或退出，此时直接丢弃结果
                 if (currentScreen != Screen.Courseware ||
@@ -4158,7 +4163,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     return@renderPdfPageAsync
                 }
                 if (bitmap == null) {
-                    hintText.text = "第 $page 页渲染失败，可重新翻页重试"
+                    hintText.text = "第 ${coursewarePages()?.slide(page) ?: page} 页渲染失败，可重新翻页重试"
                     return@renderPdfPageAsync
                 }
                 rememberPdfBitmap(page, bitmap)
@@ -4180,7 +4185,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         fun openAndShow() {
-            val absolute = absoluteCoursewareUrl(coursewareUrl)
+            val openingUrl = coursewareUrl
+            val absolute = absoluteCoursewareUrl(openingUrl)
             if (absolute.isNullOrBlank()) {
                 degradeToRemoteControl("课件地址无效，已切换为遥控模式")
                 return
@@ -4204,8 +4210,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }.onFailure { Log.w(logTag, "课件打开失败", it) }.getOrNull()
                 runOnUiThread {
                     if (currentScreen != Screen.Courseware ||
-                        coursewareSubScreen != CoursewareSubScreen.Playback
+                        coursewareSubScreen != CoursewareSubScreen.Playback || coursewareUrl != openingUrl
                     ) {
+                        opened?.close()
                         return@runOnUiThread
                     }
                     if (opened == null || opened.pageCount <= 0) {
@@ -4223,6 +4230,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     }
                     coursewarePdf?.close()
                     coursewarePdf = opened
+                    opened.pages?.let { coursewareMappings[openingUrl] = it }
                     coursewarePage = coursewarePage.coerceIn(1, opened.pageCount)
                     showPage(coursewarePage, notifyRemote = false)
                 }
@@ -4231,14 +4239,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         /** 读取输入框里的页码并跳转：本地换页 + 同步大屏 */
         fun jumpToInputPage() {
-            val total = coursewarePdf?.pageCount?.takeIf { it > 0 } ?: coursewarePageCount
+            val total = displayedCoursewareCount()
             val target = pageInput.text.toString().trim().toIntOrNull()
             if (target == null || target < 1 || target > total) {
                 toast("请输入 1 - $total 之间的页码")
                 return
             }
             pageInput.text?.clear()
-            showPage(target, notifyRemote = true)
+            val physical = coursewareStateForSlide(target)
+            if (physical == 0) { toast("该页是隐藏幻灯片，无法播放"); return }
+            showPage(physical, notifyRemote = true)
         }
 
         prevButton.setOnClickListener { pagingOrStep(-1) }
@@ -4909,7 +4919,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun coursewareStatusText(title: String): String {
-        val pageText = "第 $coursewarePage / $coursewarePageCount 页"
+        val pageText = "第 ${displayedCoursewarePage()} / ${displayedCoursewareCount()} 页"
         val screenText = if (coursewareScreenCount > 1) {
             "，第 $coursewareScreen / $coursewareScreenCount 屏"
         } else {
@@ -5027,7 +5037,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         cancelCoursewareFastSeek()
         coursewareFastSeekDirection = if (delta < 0) -1 else 1
-        coursewareFastSeekTargetPage = coursewarePage.coerceIn(1, coursewarePageCount.coerceAtLeast(1))
+        coursewareFastSeekTargetPage = displayedCoursewarePage()
         coursewareFastSeekConsumedClick = false
         stepCoursewareFastSeek()
     }
@@ -5036,7 +5046,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (coursewareFastSeekDirection == 0) {
             return
         }
-        val pageCount = coursewarePageCount.coerceAtLeast(1)
+        val pageCount = displayedCoursewareCount()
         val step = when {
             coursewareFastSeekTicks >= 45 -> 10
             coursewareFastSeekTicks >= 25 -> 5
@@ -5070,11 +5080,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             return
         }
-        if (targetPage == coursewarePage) {
+        if (coursewareStateForSlide(targetPage) == coursewarePage) {
             updateStatus(coursewareStatusText(coursewareTitle))
             return
         }
-        signalingClient?.sendCoursewarePage(targetPage)
+        val physical = coursewareStateForSlide(targetPage)
+        if (physical == 0) { toast("该页是隐藏幻灯片，无法播放"); return }
+        signalingClient?.sendCoursewarePage(physical)
         updateStatus("$coursewareTitle\n正在跳转到第 $targetPage 页...")
     }
 
@@ -5097,13 +5109,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             return
         }
-        val pageCount = coursewarePageCount.coerceAtLeast(1)
+        val pageCount = displayedCoursewareCount()
         val target = targetPage.coerceIn(1, pageCount)
-        if (target == coursewarePage) {
+        if (coursewareStateForSlide(target) == coursewarePage) {
             updateStatus(coursewareStatusText(coursewareTitle))
             return
         }
-        signalingClient?.sendCoursewarePage(target)
+        val physical = coursewareStateForSlide(target)
+        if (physical == 0) { toast("该页是隐藏幻灯片，无法播放"); return }
+        signalingClient?.sendCoursewarePage(physical)
         updateStatus("$coursewareTitle\n正在跳转到第 $target 页...")
     }
 
@@ -5111,7 +5125,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val pageInput = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
             imeOptions = EditorInfo.IME_ACTION_GO
-            hint = "页码 1-${coursewarePageCount.coerceAtLeast(1)}"
+            hint = "页码 1-${displayedCoursewareCount()}"
             gravity = Gravity.CENTER
             textSize = 18f
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
@@ -5712,6 +5726,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onCoursewareState(state: CoursewareStatePayload) {
         runOnUiThread {
+            if (state.url.isNotBlank() && state.url != coursewareUrl) return@runOnUiThread
+            state.pages?.let { coursewareMappings[coursewareUrl] = it }
             coursewarePageCount = state.pageCount
             coursewareScreen = state.screen
             coursewareScreenCount = state.screenCount

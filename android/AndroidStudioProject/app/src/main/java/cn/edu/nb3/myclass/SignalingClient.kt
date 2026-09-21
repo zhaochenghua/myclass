@@ -32,7 +32,9 @@ data class CoursewareStatePayload(
     val pageCount: Int,
     val screen: Int,
     val screenCount: Int,
-    val fitMode: String
+    val fitMode: String,
+    val url: String,
+    val pages: CoursewarePages?
 )
 
 class SignalingClient(
@@ -387,7 +389,9 @@ class SignalingClient(
             pageCount = message.optInt("pageCount", 1).coerceAtLeast(1),
             screen = message.optInt("screen", 1).coerceAtLeast(1),
             screenCount = message.optInt("screenCount", 1).coerceAtLeast(1),
-            fitMode = message.optString("fitMode", "fit-page")
+            fitMode = message.optString("fitMode", "fit-page"),
+            url = message.optString("url", ""),
+            pages = CoursewarePages.parse(message.optJSONObject("conversion"), message.optInt("pageCount", 1))
         )
     }
 
