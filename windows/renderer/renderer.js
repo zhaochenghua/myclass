@@ -50,6 +50,7 @@ const state = {
   peerConnection: null,
   pendingCandidates: [],
   joined: false,
+  viewerOnline: true,
   localAudioOutput: localStorage.getItem('myclass.localAudioOutput') !== 'false',
   localAudioMuted: false,
   micAmplify: localStorage.getItem('myclass.micAmplify') === 'true',
@@ -61,7 +62,21 @@ const state = {
     followingWindowProbe: false,
   switchingSource: false,
   sourceSwitchGeneration: 0,
-  stopping: false
+  stopping: false,
+  // 连接自愈相关（见「连接自愈」一节）
+  everConnected: false,
+  recovering: false,
+  recoveryAttempts: 0,
+  lastRecoveryAt: 0,
+  watchdogTimer: null,
+  watchdogBusy: false,
+  lastVideoProgress: null,
+  stallSince: 0,
+  healthySince: 0,
+  disconnectTimer: null,
+  offerTimer: null,
+  offerRetries: 0,
+  lastOfferAt: 0
 };
 
 elements.settingsServerUrl.value = state.serverUrl;
@@ -86,6 +101,15 @@ function setLiveStatus(message) {
   elements.videoStatus.textContent = message;
 }
 
+// 投屏时控制面板会隐藏到托盘，用托盘提示文字反映连接是否被自动恢复过。
+function setTrayStatus(text) {
+  try {
+    api.setTrayStatus?.(text);
+  } catch {
+    // 托盘不可用时忽略
+  }
+}
+
 function updateCursorHighlightUi() {
   elements.cursorHighlight.checked = state.cursorHighlight;
   elements.cursorHighlightButton.textContent = state.cursorHighlight ? '关闭鼠标强调' : '开启鼠标强调';
@@ -97,7 +121,7 @@ async function setCursorHighlight(enabled) {
   updateCursorHighlightUi();
   try {
     await api.setCursorHighlight(state.cursorHighlight);
-    // 窗口模式：强调圈需合成进采集帧，切换开关后重建发送流并重新协商；
+    // 窗口模式：强调点需合成进采集帧，切换开关后重建发送流并重新协商；
     // 屏幕模式由 overlay 承担（overlay 本身在采集画面内），无需重建。
     if (state.mediaStream && state.captureSourceType === 'window') {
       await applyCompositor();
@@ -296,10 +320,13 @@ async function requestScreenStream() {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: {
       frameRate: { ideal: 30, max: 30 },
-      // Cap at 1080p: 2K/4K laptops are downsampled (sharper text on 1080p displays),
-      // saving ~75% of bandwidth and encoding load versus native 2K/4K capture.
-      width: { ideal: 1920, max: 1920 },
-      height: { ideal: 1080, max: 1080 }
+      // 采集上限抬到 2560 宽：原先把 2K/4K 笔记本压到 1080p，投到 1080p 大屏上
+      // 确实更锐利，但教室里越来越多 4K 大屏会在显示端把 1080p 拉伸放大，文字立刻
+      // 发虚。采集只向下缩放、不会放大，1080p 笔记本仍按原分辨率采集，高分屏保留
+      // 更多细节；码率不足时由 maintain-resolution 策略降帧率保清晰度。
+      // 只限制宽度、不限制高度：同时给出宽高会让 Chromium 按固定宽高比裁剪屏幕
+      // （实测 3840×2160 会被裁成 2560×1600），必须让高度跟随屏幕原始比例。
+      width: { ideal: 2560, max: 2560 }
     },
     audio: true
   });
@@ -308,7 +335,8 @@ async function requestScreenStream() {
     stream.getTracks().forEach((track) => track.stop());
     throw new Error('没有获取到屏幕画面');
   }
-  videoTrack.contentHint = 'detail';
+  // 'text' 比 'detail' 更偏向文字可读性（编码器优先保证文字边缘清晰）。
+  videoTrack.contentHint = 'text';
   const sourceType = state.captureSourceType;
   videoTrack.addEventListener('ended', () => {
     if (!state.stopping && !state.switchingSource && stream === state.mediaStream) {
@@ -320,34 +348,33 @@ async function requestScreenStream() {
   return stream;
 }
 
-// --- 发送端鼠标强调圈合成 ---
-// 单应用窗口投屏时，Chromium 只采集目标窗口的内容，桌面上的 overlay 强调圈
-// 属于独立窗口、不会进入采集帧，因此大屏上看不到强调圈。这里把采集到的视频
-// 逐帧画到 canvas，按主进程推送的光标场景（屏幕 DIP 坐标 + 采集区域）把强调
-// 圈合成进画面：归一化坐标 = (光标 - 区域原点) / 区域尺寸，再乘以帧分辨率
-// （采集帧被压到 ≤1920×1080，这就是帧缩放系数）。合成流替换发送给 WebRTC 的
-// 视频轨，本地预览也显示合成流，与屏幕模式的 overlay 圈效果一致。
+// --- 发送端鼠标强调点合成 ---
+// 单应用窗口投屏时，Chromium 只采集目标窗口的内容，桌面上的 overlay 强调标记
+// 属于独立窗口、不会进入采集帧，因此大屏上看不到强调点。这里把采集到的视频
+// 逐帧画到 canvas，按主进程推送的光标场景（屏幕 DIP 坐标 + 采集区域）把强调点
+// 合成进画面：归一化坐标 = (光标 - 区域原点) / 区域尺寸，再乘以帧分辨率
+// （帧像素 / 区域 DIP 宽度 = 帧缩放系数，点的直径按该系数换算，保证大屏上大小
+// 与 overlay 模式一致）。合成流替换发送给 WebRTC 的视频轨，本地预览也显示合成流。
 let cursorScene = null;
 let compositor = null;
 
-function drawCursorRing(ctx, cx, cy) {
-  // 与 overlay 强调圈视觉一致：56px 红圈 + 4px 半透明边框 + 光晕 + 中心红点。
+// 与 main.js 的 CURSOR_DOT_SIZE 保持一致（屏幕 DIP 像素）
+const CURSOR_DOT_DIP = 14;
+
+function drawCursorDot(ctx, cx, cy, scale) {
+  // 只画中心强调点（外圈已按课堂反馈去掉）：红点 + 细白描边 + 轻微光晕。
+  const radius = Math.max(3, (CURSOR_DOT_DIP / 2) * scale);
   ctx.save();
-  ctx.shadowColor = 'rgba(255,59,48,.3)';
-  ctx.shadowBlur = 10;
-  ctx.strokeStyle = 'rgba(255,59,48,.55)';
-  ctx.lineWidth = 4;
+  ctx.shadowColor = 'rgba(255,59,48,.6)';
+  ctx.shadowBlur = Math.max(3, 6 * scale);
+  ctx.fillStyle = 'rgba(255,59,48,.95)';
   ctx.beginPath();
-  ctx.arc(cx, cy, 28, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.restore();
-  ctx.save();
-  ctx.shadowColor = 'rgba(255,59,48,.45)';
-  ctx.shadowBlur = 4;
-  ctx.fillStyle = 'rgba(255,59,48,.75)';
-  ctx.beginPath();
-  ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = Math.max(1, 2 * scale);
+  ctx.strokeStyle = 'rgba(255,255,255,.92)';
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -359,6 +386,8 @@ function createCompositor(rawStream) {
   const handle = {
     outputTrack: null,
     rafId: 0,
+    fallbackTimer: null,
+    lastDrawAt: 0,
     stopped: false,
     ready: null,
     stop: null
@@ -371,11 +400,11 @@ function createCompositor(rawStream) {
   });
   const failTimer = setTimeout(() => {
     if (!handle.outputTrack) {
-      rejectReady(new Error('强调圈合成初始化超时'));
+      rejectReady(new Error('强调点合成初始化超时'));
     }
   }, 3000);
 
-  function draw() {
+  function render() {
     if (handle.stopped) {
       return;
     }
@@ -387,12 +416,20 @@ function createCompositor(rawStream) {
           const nx = (cursorScene.cursor.x - region.x) / region.width;
           const ny = (cursorScene.cursor.y - region.y) / region.height;
           if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
-            drawCursorRing(ctx, nx * canvas.width, ny * canvas.height);
+            drawCursorDot(ctx, nx * canvas.width, ny * canvas.height, canvas.width / region.width);
           }
         }
       }
+      handle.lastDrawAt = performance.now();
     }
-    handle.rafId = requestAnimationFrame(draw);
+  }
+
+  function loop() {
+    if (handle.stopped) {
+      return;
+    }
+    render();
+    handle.rafId = requestAnimationFrame(loop);
   }
 
   video.muted = true;
@@ -406,19 +443,32 @@ function createCompositor(rawStream) {
     canvas.height = video.videoHeight;
     if (canvas.width === 0 || canvas.height === 0) {
       clearTimeout(failTimer);
-      rejectReady(new Error('强调圈合成：采集画面尺寸无效'));
+      rejectReady(new Error('强调点合成：采集画面尺寸无效'));
       return;
     }
+    // 画布尺寸与采集帧一致，合成不额外降采样；缩放交给高质量插值。
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     const outputStream = canvas.captureStream(30);
     handle.outputTrack = outputStream.getVideoTracks()[0];
-    handle.outputTrack.contentHint = 'detail';
-    handle.rafId = requestAnimationFrame(draw);
+    handle.outputTrack.contentHint = 'text';
+    handle.rafId = requestAnimationFrame(loop);
+    // 隐藏到托盘、被其他窗口遮挡时 rAF 可能被暂停，画布一旦停止重绘，
+    // captureStream 就不再产生新帧，大屏会停在最后一帧——用定时器兜底重绘。
+    handle.fallbackTimer = setInterval(() => {
+      if (handle.stopped) {
+        return;
+      }
+      if (performance.now() - handle.lastDrawAt > 150) {
+        render();
+      }
+    }, 50);
     clearTimeout(failTimer);
     resolveReady();
   });
   video.addEventListener('error', () => {
     clearTimeout(failTimer);
-    rejectReady(new Error('强调圈合成：采集画面播放失败'));
+    rejectReady(new Error('强调点合成：采集画面播放失败'));
   });
   video.play().catch((error) => {
     clearTimeout(failTimer);
@@ -430,6 +480,11 @@ function createCompositor(rawStream) {
     clearTimeout(failTimer);
     if (handle.rafId) {
       cancelAnimationFrame(handle.rafId);
+      handle.rafId = 0;
+    }
+    if (handle.fallbackTimer) {
+      clearInterval(handle.fallbackTimer);
+      handle.fallbackTimer = null;
     }
     video.pause();
     video.srcObject = null;
@@ -549,15 +604,246 @@ function stopSourceMonitor() {
   }
 }
 
+// ---------------------------------------------------------------- 连接自愈
+// 课堂反馈的“大屏画面停住、但 Windows 端仍显示已连接”，实测来自四类原因：
+//   1. 大屏页面刷新 / 浏览器重启 / 换网络：房间在宽限期内复用原连接码，大屏恢复了
+//      WebSocket，但它的 PeerConnection 已经销毁，必须由教师端重新发 offer，
+//      否则画面永远停在最后一帧（服务端只会推 viewer.online）；
+//   2. Wi-Fi 漫游 / 交换机抖动：ICE 通道失效，Chromium 只会停在 disconnected，
+//      不会自己恢复，必须重新协商；
+//   3. 编码器或强调点合成画布卡死：连接仍是 connected，但出帧数不再增长；
+//   4. 采集轨结束（显示器休眠、切换显卡输出）：本端采集已经停止。
+// 统一用「出帧看门狗 + 信令事件」触发自愈：重建合成流 → 必要时重新采集 →
+// 重建 PeerConnection 并重新发 offer（大屏收到 offer 会整体重建它那一侧）。
+const WATCHDOG_INTERVAL_MS = 3000;
+const STALL_GRACE_MS = 6000;             // 出帧停止多久判定卡死
+const HEALTHY_RESET_MS = 20000;          // 正常出帧多久后重置恢复次数
+const RECOVERY_MIN_INTERVAL_MS = 8000;   // 两次自愈的最小间隔
+const MAX_RECOVERY_ATTEMPTS = 4;         // 连续自愈上限，超过则提示重新投屏
+const DISCONNECT_RECOVERY_DELAY_MS = 4000;
+const OFFER_TIMEOUT_MS = 7000;           // 发出 offer 后多久没连上就重试
+const OFFER_MAX_RETRIES = 2;
+const RENEGOTIATE_COALESCE_MS = 800;     // 合并同一批信令里的重复协商
+
+function resetStallTracking() {
+  state.lastVideoProgress = null;
+  state.stallSince = 0;
+  state.healthySince = 0;
+}
+
+function clearDisconnectTimer() {
+  if (state.disconnectTimer) {
+    clearTimeout(state.disconnectTimer);
+    state.disconnectTimer = null;
+  }
+}
+
+function clearOfferWatchdog() {
+  if (state.offerTimer) {
+    clearTimeout(state.offerTimer);
+    state.offerTimer = null;
+  }
+}
+
+function armOfferWatchdog() {
+  clearOfferWatchdog();
+  state.offerTimer = setTimeout(() => {
+    state.offerTimer = null;
+    const peerConnection = state.peerConnection;
+    if (!peerConnection || state.stopping || !state.mediaStream) {
+      return;
+    }
+    if (peerConnection.connectionState === 'connected') {
+      return;
+    }
+    const sdp = peerConnection.localDescription?.sdp;
+    if (state.offerRetries < OFFER_MAX_RETRIES && sdp) {
+      // 大屏可能刚好在刷新页面，重发同一个 offer 就能恢复，不必重建连接。
+      state.offerRetries += 1;
+      api.sendSignaling({ type: 'webrtc.offer', sdp });
+      setStatus('教室大屏暂未响应，正在重试连接...');
+      armOfferWatchdog();
+      return;
+    }
+    recoverProjection('大屏未响应');
+  }, OFFER_TIMEOUT_MS);
+}
+
+function startWatchdog() {
+  if (state.watchdogTimer) {
+    return;
+  }
+  state.watchdogTimer = setInterval(runWatchdog, WATCHDOG_INTERVAL_MS);
+}
+
+function stopWatchdog() {
+  if (state.watchdogTimer) {
+    clearInterval(state.watchdogTimer);
+    state.watchdogTimer = null;
+  }
+  resetStallTracking();
+}
+
+async function readOutboundVideoProgress(peerConnection) {
+  let stats;
+  try {
+    stats = await peerConnection.getStats();
+  } catch {
+    return null;
+  }
+  let found = false;
+  let frames = 0;
+  let bytes = 0;
+  stats.forEach((report) => {
+    if (report.type === 'outbound-rtp' && report.kind === 'video' && report.isRemote !== true) {
+      found = true;
+      frames += report.framesEncoded ?? report.framesSent ?? 0;
+      bytes += report.bytesSent || 0;
+    }
+  });
+  return found ? { frames, bytes } : null;
+}
+
+async function runWatchdog() {
+  if (state.watchdogBusy) {
+    return;
+  }
+  state.watchdogBusy = true;
+  try {
+    const peerConnection = state.peerConnection;
+    if (!state.mediaStream || state.stopping || state.switchingSource || !peerConnection) {
+      resetStallTracking();
+      return;
+    }
+    const progress = await readOutboundVideoProgress(peerConnection);
+    if (!progress || state.peerConnection !== peerConnection) {
+      return;
+    }
+    const now = Date.now();
+    const previous = state.lastVideoProgress;
+    // 刚重新协商时计数器会归零，previous 为空视为正常起点。
+    const advanced = !previous
+      || progress.frames > previous.frames
+      || progress.bytes > previous.bytes;
+    const encoding = previous && (previous.frames > 0 || previous.bytes > 0);
+    state.lastVideoProgress = { frames: progress.frames, bytes: progress.bytes };
+
+    if (advanced) {
+      if (!state.healthySince) {
+        state.healthySince = now;
+      }
+      state.stallSince = 0;
+      if (now - state.healthySince >= HEALTHY_RESET_MS) {
+        state.recoveryAttempts = 0;
+      }
+      return;
+    }
+
+    state.healthySince = 0;
+    if (!encoding) {
+      return;
+    }
+    if (!state.stallSince) {
+      state.stallSince = now;
+    }
+    if (now - state.stallSince < STALL_GRACE_MS) {
+      return;
+    }
+    if (!state.viewerOnline) {
+      // 大屏不在线时发 offer 没有意义，等 viewer.online 再恢复。
+      return;
+    }
+    await recoverProjection('画面停止输出');
+  } finally {
+    state.watchdogBusy = false;
+  }
+}
+
+// 重新协商：大屏收到新 offer 会整体重建它那一侧的连接，是恢复画面最可靠的手段。
+async function requestRenegotiation() {
+  if (!state.mediaStream || state.stopping) {
+    return;
+  }
+  if (Date.now() - state.lastOfferAt < RENEGOTIATE_COALESCE_MS) {
+    // join.accepted 与 viewer.online 常常同一批到达，只保留一次协商。
+    return;
+  }
+  await negotiate();
+}
+
+async function recoverProjection(reason) {
+  if (!state.mediaStream || state.stopping || state.switchingSource || state.recovering) {
+    return;
+  }
+  if (!state.viewerOnline) {
+    return;
+  }
+  const now = Date.now();
+  if (now - state.lastRecoveryAt < RECOVERY_MIN_INTERVAL_MS) {
+    return;
+  }
+  if (state.recoveryAttempts >= MAX_RECOVERY_ATTEMPTS) {
+    setLiveStatus('需要重新投屏');
+    setStatus('画面多次自动恢复失败，请点击“停止投屏”后重新开始', true);
+    setTrayStatus('MyClass 投屏 - 画面中断，需要重新开始投屏');
+    return;
+  }
+
+  state.recovering = true;
+  state.lastRecoveryAt = now;
+  state.recoveryAttempts += 1;
+  const attempt = state.recoveryAttempts;
+  setLiveStatus('正在自动恢复');
+  setStatus(`检测到画面中断（${reason}），正在自动恢复（第 ${attempt} 次）...`);
+  setTrayStatus(`MyClass 投屏 - 正在自动恢复画面（第 ${attempt} 次）`);
+  try {
+    const rawTrack = state.rawStream?.getVideoTracks()[0];
+    if (!rawTrack || rawTrack.readyState !== 'live') {
+      // 采集轨已结束（显示器休眠、切换显卡输出、窗口被销毁），重新采集。
+      const previousRaw = state.rawStream;
+      const nextRaw = await requestScreenStream();
+      state.rawStream = nextRaw;
+      previousRaw?.getTracks().forEach((track) => track.stop());
+    }
+    // 强调点合成画布可能已经停止重绘，直接重建最稳妥。
+    await applyCompositor();
+    await negotiate();
+  } catch (error) {
+    setStatus(`自动恢复失败：${error.message}`, true);
+  } finally {
+    state.recovering = false;
+    resetStallTracking();
+  }
+}
+
+function scheduleDisconnectRecovery(peerConnection) {
+  if (state.disconnectTimer) {
+    return;
+  }
+  state.disconnectTimer = setTimeout(() => {
+    state.disconnectTimer = null;
+    if (state.peerConnection !== peerConnection || state.stopping || !state.mediaStream) {
+      return;
+    }
+    if (peerConnection.connectionState === 'connected') {
+      return;
+    }
+    recoverProjection('连接中断');
+  }, DISCONNECT_RECOVERY_DELAY_MS);
+}
+
 function configureSender(sender, kind) {
   const parameters = sender.getParameters();
   parameters.encodings = parameters.encodings?.length ? parameters.encodings : [{}];
   const encoding = parameters.encodings[0];
   if (kind === 'video') {
-    // Screen sharing needs a higher ceiling than a camera stream, especially for text.
-    encoding.minBitrate = 1_500_000;
-    encoding.maxBitrate = 12_000_000;
+    // 教室是局域网，放开到 16 Mbps：屏幕文字是高细节内容，码率越高越清晰，
+    // 弱网时 GCC 会自己降回可用带宽，不会因此拥塞。
+    encoding.minBitrate = 1_000_000;
+    encoding.maxBitrate = 16_000_000;
     encoding.maxFramerate = 30;
+    // 禁止浏览器按带宽偷偷降低分辨率（文字会直接变糊），宁可掉帧保住清晰度。
+    encoding.scaleResolutionDownBy = 1;
     parameters.degradationPreference = 'maintain-resolution';
   } else if (kind === 'audio') {
     encoding.maxBitrate = 128_000;
@@ -577,25 +863,43 @@ function createPeerConnection() {
     }
   });
   peerConnection.addEventListener('connectionstatechange', () => {
+    if (state.peerConnection !== peerConnection) {
+      return;
+    }
     const connectionState = peerConnection.connectionState;
     if (connectionState === 'connected') {
+      clearOfferWatchdog();
+      clearDisconnectTimer();
+      state.offerRetries = 0;
       elements.statusDot.classList.add('is-live');
       setLiveStatus('已连接');
       setStatus('已连接到教室大屏');
-      setTimeout(() => api.hideWindow(), 700);
+      setTrayStatus('MyClass 投屏 - 正在投屏');
+      if (!state.everConnected) {
+        // 只在首次连上时自动隐藏面板；自动恢复后隐藏会打断正在查看状态的老师。
+        state.everConnected = true;
+        setTimeout(() => api.hideWindow(), 700);
+      }
     } else if (connectionState === 'connecting') {
       setLiveStatus('连接中');
     } else if (connectionState === 'disconnected') {
       setLiveStatus('网络中断，等待恢复');
       setStatus('视频连接暂时中断，正在等待网络恢复', true);
+      // Chromium 不会自己从 disconnected 恢复，稍等无果就重新协商。
+      scheduleDisconnectRecovery(peerConnection);
     } else if (connectionState === 'failed') {
       setLiveStatus('连接失败');
-      setStatus('视频连接失败，请重新开始投屏', true);
+      setStatus('视频连接异常，正在自动恢复...', true);
+      recoverProjection('连接失败');
     }
   });
   peerConnection.addEventListener('iceconnectionstatechange', () => {
+    if (state.peerConnection !== peerConnection) {
+      return;
+    }
     if (peerConnection.iceConnectionState === 'failed') {
-      setStatus('ICE 连接失败，请检查局域网或 TURN 服务', true);
+      setStatus('ICE 连接失败，正在自动恢复...', true);
+      recoverProjection('ICE 连接失败');
     }
   });
 
@@ -615,21 +919,32 @@ function createPeerConnection() {
 }
 
 async function negotiate() {
-  if (!state.mediaStream) {
+  if (!state.mediaStream || state.stopping) {
     return;
   }
+  clearOfferWatchdog();
+  clearDisconnectTimer();
+  state.offerRetries = 0;
+  // 新连接从 0 开始出帧，旧的出帧计数必须清掉，否则看门狗会误判卡死。
+  resetStallTracking();
   if (state.peerConnection) {
     state.peerConnection.close();
   }
   state.pendingCandidates = [];
-  state.peerConnection = createPeerConnection();
-  const offer = await state.peerConnection.createOffer();
-  await state.peerConnection.setLocalDescription(offer);
+  const peerConnection = createPeerConnection();
+  state.peerConnection = peerConnection;
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  if (state.peerConnection !== peerConnection || state.stopping) {
+    return;
+  }
+  state.lastOfferAt = Date.now();
   api.sendSignaling({
     type: 'webrtc.offer',
-    sdp: state.peerConnection.localDescription.sdp
+    sdp: peerConnection.localDescription.sdp
   });
   setLiveStatus('等待大屏响应');
+  armOfferWatchdog();
 }
 
 async function handleRemoteCandidate(candidate) {
@@ -653,6 +968,9 @@ async function handleAnswer(sdp) {
   }
   try {
     await state.peerConnection.setRemoteDescription({ type: 'answer', sdp });
+    // 大屏已响应，后续由连接状态和出帧看门狗接管，不必再重发 offer。
+    clearOfferWatchdog();
+    state.offerRetries = 0;
     const pending = state.pendingCandidates.splice(0);
     for (const candidate of pending) {
       await handleRemoteCandidate(candidate);
@@ -667,7 +985,12 @@ async function handleSignal(message) {
     case 'join.accepted':
       state.joined = true;
       setStatus('连接码验证成功，正在建立投屏连接...');
-      await negotiate();
+      if (state.viewerOnline === false) {
+        // 大屏此刻不在线，等它重新连接后由 viewer.online 触发协商。
+        setLiveStatus('等待大屏连接');
+      } else {
+        await requestRenegotiation();
+      }
       break;
     case 'join.rejected':
       setStatus(message.message || '连接码错误', true);
@@ -678,6 +1001,25 @@ async function handleSignal(message) {
       break;
     case 'webrtc.ice-candidate':
       await handleRemoteCandidate(message.candidate);
+      break;
+    case 'viewer.online':
+      // 大屏刷新页面或网络恢复后重新连上同一个房间：它那一侧的 PeerConnection
+      // 已经销毁，只有教师端重新发 offer 才能让画面恢复，否则大屏一直停在最后一帧。
+      state.viewerOnline = true;
+      setTrayStatus('MyClass 投屏 - 正在投屏');
+      if (state.joined && state.mediaStream) {
+        setStatus('教室大屏已重新连接，正在恢复画面...');
+        await requestRenegotiation();
+      }
+      break;
+    case 'viewer.reconnecting':
+      state.viewerOnline = false;
+      resetStallTracking();
+      clearOfferWatchdog();
+      clearDisconnectTimer();
+      setLiveStatus('大屏断开，等待恢复');
+      setStatus('教室大屏已断开，正在等待自动恢复...');
+      setTrayStatus('MyClass 投屏 - 大屏断开，等待自动恢复');
       break;
     case 'viewer.disconnected':
     case 'room.expired':
@@ -745,6 +1087,15 @@ async function startProjection() {
   elements.startButton.disabled = true;
   elements.startButton.textContent = '正在准备屏幕...';
   state.stopping = false;
+  state.everConnected = false;
+  state.recovering = false;
+  state.recoveryAttempts = 0;
+  state.lastRecoveryAt = 0;
+  state.lastOfferAt = 0;
+  state.viewerOnline = true;
+  clearOfferWatchdog();
+  clearDisconnectTimer();
+  resetStallTracking();
   state.roomCode = code;
   state.captureSourceId = sourcePicker.value;
   state.captureSourceType = sourcePicker.type;
@@ -775,6 +1126,7 @@ async function startProjection() {
     state.mediaStream = state.rawStream;
     startSourceMonitor();
     await applyCompositor();
+    startWatchdog();
     const audioTrack = state.mediaStream.getAudioTracks()[0];
     elements.audioStatus.textContent = audioTrack
       ? (state.micAmplify ? '系统声音 + 麦克风已启用' : '系统声音已启用')
@@ -958,6 +1310,15 @@ async function stopProjection(disconnect = true, message = '') {
     state.followingWindowProbe = false;
   closeSourceSwitcher();
   stopSourceMonitor();
+  stopWatchdog();
+  clearOfferWatchdog();
+  clearDisconnectTimer();
+  state.recovering = false;
+  state.recoveryAttempts = 0;
+  state.lastRecoveryAt = 0;
+  state.everConnected = false;
+  state.viewerOnline = true;
+  setTrayStatus('MyClass 投屏');
   if (state.peerConnection) {
     state.peerConnection.close();
     state.peerConnection = null;
@@ -1067,11 +1428,15 @@ elements.cancelSourceSwitchAction.addEventListener('click', closeSourceSwitcher)
 elements.confirmSourceSwitchButton.addEventListener('click', switchProjectionSource);
 
 api.onSignalingMessage((message) => handleSignal(message).catch((error) => setStatus(error.message, true)));
-api.onSignalingState(({ state: signalingState }) => {
+api.onSignalingState(({ state: signalingState, reconnected }) => {
   if (signalingState === 'connecting') {
     setLiveStatus('连接中');
+  } else if (signalingState === 'connected' && reconnected && state.mediaStream) {
+    // 信令重连后服务端会重发 join.accepted / viewer.online，由那里触发重新协商。
+    setStatus('信令已重新连接，正在恢复投屏...');
   } else if (signalingState === 'closed' && state.mediaStream) {
     setStatus('信令连接已断开，正在重连...', true);
+    setTrayStatus('MyClass 投屏 - 信令断开，正在重连');
   }
 });
 api.onSignalingError(({ message }) => setStatus(message, true));

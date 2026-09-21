@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('myclass', {
   disconnectSignaling: () => ipcRenderer.send('signaling-disconnect'),
   getAppVersion: () => ipcRenderer.invoke('app-version'),
   setCursorHighlight: (enabled) => ipcRenderer.invoke('cursor-highlight', enabled),
+  setTrayStatus: (text) => ipcRenderer.send('tray-status', text),
   hideWindow: () => ipcRenderer.send('window-hide'),
   quit: () => ipcRenderer.send('app-quit'),
   onSignalingMessage: (callback) => {

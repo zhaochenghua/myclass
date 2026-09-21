@@ -37,7 +37,12 @@ windows/package-lock.json
 
 # 凭据文件（禁止提交）
 github令牌.txt
+*令牌*
 *令牌*.txt
 *_token*.txt
 .env
 .env.*
+
+# 本地 AI / 开发工具配置（不提交，.codebuddy/ 见上方）
+AGENTS.md
+CLAUDE.md

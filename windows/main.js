@@ -16,6 +16,11 @@ const { WebSocket } = require('ws');
 
 const DEFAULT_SERVER_URL = 'http://10.30.13.1/myclass';
 const APP_ICON_PATH = path.join(__dirname, 'assets', 'icon.ico');
+// 信令保活：每 5 秒发一次 client.ping，20 秒收不到任何消息即判定为半开连接
+// （Wi-Fi 漫游、网线被拔、AP 重启后 TCP 仍可能是 ESTABLISHED，服务端的
+// ping/pong 要 45~60 秒才判定死亡），主动断开并走重连逻辑更快恢复投屏。
+const SIGNALING_PING_INTERVAL_MS = 5000;
+const SIGNALING_STALE_MS = 20000;
 
 let mainWindow = null;
 let tray = null;
@@ -449,12 +454,20 @@ function sendSignalingMessage(payload) {
   return true;
 }
 
+function stopSignalingKeepAlive(connection) {
+  if (connection?.pingTimer) {
+    clearInterval(connection.pingTimer);
+    connection.pingTimer = null;
+  }
+}
+
 function closeSignaling({ notify = true } = {}) {
   if (!signaling) {
     return;
   }
   const current = signaling;
   current.manualClose = true;
+  stopSignalingKeepAlive(current);
   if (current.reconnectTimer) {
     clearTimeout(current.reconnectTimer);
     current.reconnectTimer = null;
@@ -504,11 +517,16 @@ function openSignalingSocket(connection) {
       return;
     }
     connection.attempts = 0;
-    sendRenderer('signaling-state', { state: 'connected' });
+    connection.lastMessageAt = Date.now();
+    connection.wasReconnect = connection.everOpened === true;
+    connection.everOpened = true;
+    startSignalingKeepAlive(connection, socket);
+    sendRenderer('signaling-state', { state: 'connected', reconnected: connection.wasReconnect });
     sendSignalingMessage({ type: 'teacher.join', code: connection.code });
   });
 
   socket.on('message', (rawMessage) => {
+    connection.lastMessageAt = Date.now();
     let message;
     try {
       message = JSON.parse(rawMessage.toString());
@@ -527,6 +545,7 @@ function openSignalingSocket(connection) {
   });
 
   socket.on('close', () => {
+    stopSignalingKeepAlive(connection);
     if (signaling !== connection) {
       return;
     }
@@ -537,6 +556,28 @@ function openSignalingSocket(connection) {
       scheduleReconnect(connection);
     }
   });
+}
+
+function startSignalingKeepAlive(connection, socket) {
+  stopSignalingKeepAlive(connection);
+  connection.pingTimer = setInterval(() => {
+    if (signaling !== connection || connection.socket !== socket || socket.readyState !== WebSocket.OPEN) {
+      stopSignalingKeepAlive(connection);
+      return;
+    }
+    if (Date.now() - (connection.lastMessageAt || 0) > SIGNALING_STALE_MS) {
+      // 服务端长时间无响应：直接 terminate，让 'close' 走自动重连。
+      console.warn('[Signaling] no response for', SIGNALING_STALE_MS, 'ms, forcing reconnect');
+      stopSignalingKeepAlive(connection);
+      socket.terminate();
+      return;
+    }
+    try {
+      socket.send(JSON.stringify({ type: 'client.ping', at: Date.now() }));
+    } catch {
+      // 'close' 事件会跟进处理
+    }
+  }, SIGNALING_PING_INTERVAL_MS);
 }
 
 async function connectSignaling({ baseUrl, code }) {
@@ -915,18 +956,19 @@ function installDisplayMediaHandler() {
 }
 
 // --- Cursor highlight: a transparent, always-on-top, click-through overlay that
-// draws a colored ring around the cursor. The overlay window is created ONCE and
-// covers the whole virtual screen; the ring is drawn INSIDE it (CSS transform)
+// draws a colored dot at the cursor. The overlay window is created ONCE and
+// covers the whole virtual screen; the dot is drawn INSIDE it (CSS transform)
 // at the cursor position reported over IPC. We deliberately never move the window:
 // on Windows with fractional DPI scaling (125%/150%) or mixed-DPI monitors,
 // repeatedly calling setPosition() makes Chromium round the DIP->physical pixel
 // conversion (electron#10862), and while getDisplayMedia is capturing, DWM can
-// present the moving transparent window at stale positions - the ring then slowly
+// present the moving transparent window at stale positions - the mark then slowly
 // drifts toward the bottom-right and away from the real cursor. A static overlay
-// cannot drift: the ring always sits exactly on the latest cursor coordinate.
+// cannot drift: the dot always sits exactly on the latest cursor coordinate.
 // Because the overlay lives on the shared screen, getDisplayMedia captures it,
 // so students still see the cursor emphasized on the big display.
-const CURSOR_RING_SIZE = 96;
+// 只保留中心强调点（外圈按课堂反馈去掉），点直径即覆盖层元素尺寸。
+const CURSOR_DOT_SIZE = 14;
 const CURSOR_POLL_INTERVAL_MS = 16;
 const CURSOR_OVERLAY_PRELOAD = path.join(__dirname, 'overlay-preload.js');
 
@@ -1072,13 +1114,13 @@ function createCursorOverlayHtml() {
   return (
     '<!doctype html><html><head><meta charset="utf-8"><style>' +
     'html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}' +
-    '#ring{position:absolute;left:0;top:0;width:' + CURSOR_RING_SIZE + 'px;height:' + CURSOR_RING_SIZE + 'px;' +
-    'transform:translate(-50%,-50%);will-change:transform;opacity:0;pointer-events:none;' +
-    'display:flex;align-items:center;justify-content:center}' +
-    /* The dot marks the cursor hotspot (pointer tip), which sits at the ring center. */
-    '.dot{width:10px;height:10px;border-radius:50%;background:rgba(255,59,48,.75);box-shadow:0 0 4px rgba(255,59,48,.45)}' +
-    '.circle{width:56px;height:56px;border-radius:50%;border:4px solid rgba(255,59,48,.55);box-shadow:0 0 10px rgba(255,59,48,.3);display:flex;align-items:center;justify-content:center}' +
-    '</style></head><body><div id="ring"><div class="circle"><div class="dot"></div></div></div>' +
+    '#ring{position:absolute;left:0;top:0;width:' + CURSOR_DOT_SIZE + 'px;height:' + CURSOR_DOT_SIZE + 'px;' +
+    'transform:translate(-50%,-50%);will-change:transform;opacity:0;pointer-events:none}' +
+    /* 中心强调点（光标热点位置）；细白描边保证浅色和深色画面都能看清。 */
+    '.dot{width:100%;height:100%;border-radius:50%;background:rgba(255,59,48,.95);' +
+    'border:2px solid rgba(255,255,255,.92);box-sizing:border-box;' +
+    'box-shadow:0 0 6px rgba(255,59,48,.6)}' +
+    '</style></head><body><div id="ring"><div class="dot"></div></div>' +
     '<script>' +
     'var ring = document.getElementById("ring");' +
     'var latest = null;' +
@@ -1244,6 +1286,12 @@ function registerIpc() {
     return { enabled: Boolean(enabled) };
   });
   ipcMain.on('window-hide', () => mainWindow?.hide());
+  // 投屏时窗口会隐藏到托盘，用托盘提示文字让老师知道连接是否被自动恢复过。
+  ipcMain.on('tray-status', (_event, text) => {
+    if (tray) {
+      tray.setToolTip(String(text || 'MyClass 投屏'));
+    }
+  });
   ipcMain.on('app-quit', () => {
     isQuitting = true;
     closeSignaling({ notify: false });
