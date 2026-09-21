@@ -11,6 +11,7 @@ const QRCode = require('qrcode');
 const setupWebSocket = require('./websocket');
 const { RoomManager } = require('./roomManager');
 const { createCoursewareStore } = require('./coursewareStore');
+const { expandAnimations, PROFILE: ANIMATION_PROFILE } = require('./expandAnimations');
 const { createClassStore } = require('./classStore');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
@@ -136,10 +137,13 @@ const upload = multer({
 
 fs.mkdirSync(coursewareRoot, { recursive: true });
 fs.mkdirSync(tempRoot, { recursive: true });
+const PPT_ANIMATION_MODE = process.env.PPT_ANIMATION_MODE || 'expand';
+if (!['expand', 'static'].includes(PPT_ANIMATION_MODE)) throw new Error('PPT_ANIMATION_MODE must be expand or static');
 const coursewareStore = createCoursewareStore({
   root: coursewareRoot,
   prefix: PATH_PREFIX,
   convertOfficeToPdf,
+  officeProfile: ext => PPT_ANIMATION_MODE === 'expand' && ['.ppt', '.pptx'].includes(ext) ? ANIMATION_PROFILE : '',
   listLimit: Number(process.env.COURSEWARE_LIST_LIMIT || 0)
 });
 const {
@@ -756,6 +760,13 @@ async function publishCourseware(file, fields = {}, userId) {
 }
 
 async function convertOfficeToPdf(inputPath, ext, outputPdfPath, id) {
+  if (PPT_ANIMATION_MODE === 'expand' && ['.ppt', '.pptx'].includes(ext)) {
+    return expandAnimations(inputPath, ext, outputPdfPath, {
+      executable: libreOfficeExecutable(), tempRoot,
+      timeoutMs: Number(process.env.PPT_ANIMATION_TIMEOUT_MS || 180000),
+      maxStates: Number(process.env.PPT_ANIMATION_MAX_STATES || 500)
+    });
+  }
   const sourcePath = path.join(tempRoot, `${id}${ext}`);
   const outputDir = path.join(tempRoot, id);
   await fs.promises.mkdir(outputDir, { recursive: true });
