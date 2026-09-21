@@ -4,7 +4,7 @@ const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 const { spawn } = require('node:child_process');
 
-const PROFILE = 'expand-animations-v1';
+const PROFILE = 'expand-animations-v2';
 const VENDOR = path.join(__dirname, 'vendor', 'expand-animations');
 
 function publicError(message, statusCode = 500) {
@@ -95,8 +95,11 @@ async function expandAnimations(input, ext, output, { executable,
     }
     if (report[0] !== 'OK') throw publicError(`PPT 动画展开失败：${report.slice(1).join(' ').slice(0, 500)}`);
     const [slideCount, stateCount, unsupportedSlides] = report.slice(1).map(Number);
+    const statePages = (report[4] || '').split(',').map(Number);
     if (!Number.isSafeInteger(slideCount) || slideCount < 1 || !Number.isSafeInteger(stateCount) ||
-        stateCount < 1 || stateCount > maxStates || !Number.isSafeInteger(unsupportedSlides) || unsupportedSlides < 0) {
+        stateCount < 1 || stateCount > maxStates || !Number.isSafeInteger(unsupportedSlides) || unsupportedSlides < 0 ||
+        statePages.length !== stateCount || statePages.some((page, i) => !Number.isSafeInteger(page) ||
+          page < 1 || page > slideCount || (i > 0 && page < statePages[i - 1]))) {
       throw publicError('PPT 动画展开结果无效');
     }
     const file = await fs.open(pdf, 'r');
@@ -106,7 +109,7 @@ async function expandAnimations(input, ext, output, { executable,
       if (signature.toString() !== '%PDF-') throw publicError('PPT 动画展开未生成有效 PDF');
     } finally { await file.close(); }
     await fs.copyFile(pdf, output);
-    return { mode: 'animation-states', profile: PROFILE, slideCount, stateCount, unsupportedSlides };
+    return { mode: 'animation-states', profile: PROFILE, slideCount, stateCount, unsupportedSlides, statePages };
   } finally {
     await fs.rm(job, { recursive: true, force: true });
   }

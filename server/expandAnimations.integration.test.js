@@ -33,6 +33,7 @@ test('real LibreOffice: direct PDF versus click states for PPTX and PPT', {
     const expanded = path.join(directory, `expanded-${ext}.pdf`);
     const report = await expandAnimations(input, `.${ext}`, expanded, { executable });
     assert.equal(report.slideCount, 10);
+    assert.deepEqual(report.statePages, [1,2,2,3,3,4,4,5,5,5,5,6,6,6,7,7,8,8,8,9,9,10,10]);
     assert.equal(report.stateCount, expected.length);
     assert.deepEqual(await pages(expanded), expected.map(page => [...page].sort()), `${ext}: every state must match`);
     await convert(input, 'pdf', path.join(directory, `direct-${ext}`));
@@ -68,6 +69,7 @@ test('real LibreOffice: direct PDF versus click states for PPTX and PPT', {
     assert.deepEqual(second.conversion, first.conversion);
     assert.equal(second.storageKey, first.storageKey);
     const origin = new URL(server.base).origin;
+    assert.deepEqual(await (await fetch(origin + first.url + '.metadata')).json(), { conversion: first.conversion });
     const download = await fetch(origin + first.url);
     assert.equal(download.status, 200);
     const uploadedPdf = path.join(directory, 'uploaded.pdf');

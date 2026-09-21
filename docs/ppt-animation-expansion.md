@@ -24,7 +24,7 @@ PPT/PPTX。它不是新的 Office 渲染器，而是普通 PDF 导出之前的�
 重复上传缓存，以及坏文件和状态数量上限。
 
 一次同机对照，普通导出约 2.5 秒，展开导出约 3.9 秒；这只是小样例的观测值，
-不是大课件性能保证。Linux 全套 35 项测试通过，浏览器中实际点击翻页也确认了
+不是大课件性能保证。Linux 全套 37 项测试通过，浏览器中实际点击翻页也确认了
 隐藏、出现、消失状态。23 页渲染图已做目视检查。
 
 输入由可复现的 ODF 样例经 LibreOffice 导出为 PPT/PPTX，并非大量真实教师
@@ -41,12 +41,16 @@ LibreOffice 的原生动画播放能力与其普通 PDF 导出能力不能混为
 - 不处理强调、运动路径、视频播放、点击特定形状的交互触发器、任意分支或循环。
   这些不是 PowerPoint 放映的完整替代。检测到的主序列不支持效果数量记录在
   `conversion.unsupportedSlides` 中；其属性变化不会展开。
-- 页码表示展开后的 PDF 页；标注按状态独立保存，沿用现有行为。
+- Android、iPhone/iPad 网页端和投屏大屏显示原始 PPT 页码及总页数。
+- “下一屏/上一屏”推进或回退一个动画状态；输入页码跳到该原始页的初始状态。
+- 隐藏幻灯片保留原始编号但不播放；跳转到隐藏页会明确提示，不跳到别的页。
+- 内部 PDF 页码、同步消息和标注仍按状态独立保存；普通 PDF 的页码不变。
 - 字体、公式、图表和排版保真度由 LibreOffice 及服务器字体决定。
 
 ## 部署
 
-只更新服务端，不涉及 APK/EXE。部署前备份整个课件目录和 `server/data`。
+需同时更新服务端、网页（含 `web/coursewarePages.mjs` 与 iOS 网页端）和 Android APK。
+旧客户端仍可播放，但可能把动画状态数显示成页数。部署前备份整个课件目录和 `server/data`。
 至少包含 `server/server.js`、`server/coursewareStore.js`、
 `server/expandAnimations.js` 和完整的 `server/vendor/expand-animations/`。
 保留第三方源码、LICENSE 和 README。
@@ -73,7 +77,7 @@ LIBREOFFICE_PATH=/usr/bin/libreoffice
 临时目录；不终止其他 Office 会话。展开失败会明确报错，不悄悄退回缺失步骤的
 静态 PDF。反向代理上传超时也应覆盖转换耗时。
 
-内容池使用 `expand-animations-v1` 转换版本隔离旧缓存。同一版本的重复上传
+内容池使用 `expand-animations-v2` 转换版本隔离旧缓存。同一版本的重复上传
 复用结果；旧课件及 URL 不被修改。要让旧 PPT 使用新功能，重新上传即可。
 不同转换版本目前独立保存原文件，可能额外占用空间。最后一个同版本引用删除
 后才清理该版本的内容池。
@@ -102,3 +106,19 @@ RUN_LIBREOFFICE_TESTS=1 npm test
 上游：[ExpandAnimations](https://github.com/monperrus/ExpandAnimations)，
 固定到 `77fb4c592676ef6435a05ddeef726bb5abf4ee47`，LGPL-3.0-or-later。
 本地修正了上游隐藏一个段落时误清空后续段落的问题；完整改动记录见 vendor README。
+
+## 原始页码协议
+
+转换元数据包含 `slideCount`（含隐藏页的原始总页数）、`stateCount` 和
+`statePages`（每个 PDF 状态对应的原始页码）。例如 `[1,2,2,3,3]` 表示第二页
+和第三页各有两个状态。映射随上传/列表返回，也可通过 PDF 地址追加 `.metadata`
+读取；该公开接口只返回当前文件的转换元数据，不返回教师信息或课件列表。
+客户端校验映射长度与 PDF 页数一致，保持信令 `page/pageCount` 为物理状态编号，
+显示和用户跳转才转换为原始页码；断线重连重新加载同一份映射。
+旧版静态或 v1 展开的已上传文件不会自动改写，需重新上传原 PPT 获取映射。
+
+2026-09-21 页码集成验收：Linux 37 项测试全部通过。Android 16 模拟器增量构建、
+安装并连接隔离大屏，验证了第 2 页出现前后仍为 2/10、跳到第 5 页初始状态、
+音量键推进出现/消失时仍为 5/10、返回菜单续播及普通 PDF；应用无崩溃或 ANR。
+iPhone/iPad 网页控制端在桌面浏览器中验证了预览、原始第 5 页跳转与下一屏保持
+5/10（未替代真机 Safari 测试）。同时修正了该端 PDF 模块相对路径解析错误。

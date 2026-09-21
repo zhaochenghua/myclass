@@ -50,7 +50,9 @@ export function loadPdfJs() {
   pdfJsPromise = (async () => {
     ensurePromiseWithResolvers();
     try {
-      const lib = await import(/* @vite-ignore */ `${PDFJS_MJS}${PDFJS_VERSION}`);
+      // import() resolves relative to this module (ios/js/), whereas the other
+      // resource URLs resolve relative to the document (ios/).
+      const lib = await import(/* @vite-ignore */ new URL(`${PDFJS_MJS}${PDFJS_VERSION}`, document.baseURI).href);
       lib.GlobalWorkerOptions.workerSrc = `${PDFJS_WORKER_MJS}${PDFJS_VERSION}`;
       return lib;
     } catch {

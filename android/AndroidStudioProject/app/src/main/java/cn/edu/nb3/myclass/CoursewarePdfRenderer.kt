@@ -7,6 +7,8 @@ import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import kotlin.math.max
@@ -49,7 +51,18 @@ class CoursewarePdfRenderer(
         if (!isCached(cacheKey)) {
             downloadBlocking(url, file, onProgress)
         }
-        return OpenedPdf(file)
+        val opened = OpenedPdf(file)
+        opened.pages = runCatching {
+            val endpoint = url.toHttpUrl().newBuilder().apply {
+                encodedPath(url.toHttpUrl().encodedPath + ".metadata")
+            }.build()
+            client.newCall(Request.Builder().url(endpoint).build()).execute().use { response ->
+                if (response.isSuccessful) CoursewarePages.parse(
+                    JSONObject(response.body?.string().orEmpty()).optJSONObject("conversion"), opened.pageCount
+                ) else null
+            }
+        }.getOrNull()
+        return opened
     }
 
     private fun downloadBlocking(url: String, target: File, onProgress: ((Int) -> Unit)?) {
@@ -105,6 +118,7 @@ class CoursewarePdfRenderer(
 
     /** 一份已打开的 PDF 句柄，用完必须 [close] */
     class OpenedPdf internal constructor(private val file: File) {
+        var pages: CoursewarePages? = null
 
         private val descriptor: ParcelFileDescriptor =
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)

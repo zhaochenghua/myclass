@@ -20,6 +20,7 @@ Sub Convert
     slideCount = doc.getDrawPages().getCount()
     stateCount = 0
     unsupported = 0
+    statePages = ""
     For i = 0 To slideCount - 1
         slide = doc.getDrawPages().getByIndex(i)
         If slide.Visible Then
@@ -31,6 +32,10 @@ Sub Convert
                 If ExpandAnimations.hasUnsupportedAnimation(slide) Then unsupported = unsupported + 1
             End If
             stateCount = stateCount + count
+            For stateIndex = 1 To count
+                If Len(statePages) > 0 Then statePages = statePages & ","
+                statePages = statePages & CStr(i + 1)
+            Next stateIndex
         End If
     Next i
     If stateCount < 1 Then Error 1003
@@ -44,7 +49,7 @@ Sub Convert
     ExpandAnimations.expandDocument(doc)
     stateCount = doc.getDrawPages().getCount()
     ExpandAnimations.exportToPDF(doc, ConvertToURL(Environ("MYCLASS_ANIMATION_OUTPUT")))
-    WriteReport "OK" & Chr(10) & CStr(slideCount) & Chr(10) & CStr(stateCount) & Chr(10) & CStr(unsupported)
+    WriteReport "OK" & Chr(10) & CStr(slideCount) & Chr(10) & CStr(stateCount) & Chr(10) & CStr(unsupported) & Chr(10) & statePages
     GoTo Finished
 Failed:
     errorMessage = "Basic error " & CStr(Err) & ": " & Error$

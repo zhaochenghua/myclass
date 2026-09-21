@@ -1,3 +1,4 @@
+const coursewarePages = import('./coursewarePages.mjs');
 let studentRoller = null;
 // A document reload starts a new visit; a socket reconnect does not.
 let viewerJoinedThisPage = false;
@@ -2946,6 +2947,7 @@ async function loadCoursewareDocument(courseware) {
 
   try {
     const pdfDocument = await loadingTask.promise;
+    courseware.mapping = await (await coursewarePages).loadPageMapping(courseware.url, pdfDocument.numPages);
     if (state.courseware !== courseware) {
       pdfDocument.destroy();
       return;
@@ -3130,7 +3132,7 @@ function updateCoursewareStatus() {
     return;
   }
 
-  const pageText = `第 ${courseware.page} / ${courseware.pageCount} 页`;
+  const pageText = `第 ${courseware.mapping?.statePages[courseware.page - 1] || courseware.page} / ${courseware.mapping?.slideCount || courseware.pageCount} 页`;
   const screenText = courseware.screenCount > 1
     ? `，第 ${courseware.screen} / ${courseware.screenCount} 屏`
     : '';
@@ -3149,6 +3151,7 @@ function sendCoursewareState() {
     presentationRevision: state.presentationRevision,
     page: courseware.page,
     pageCount: courseware.pageCount,
+    conversion: courseware.mapping,
     screen: courseware.screen,
     screenCount: courseware.screenCount,
     fitMode: courseware.fitMode

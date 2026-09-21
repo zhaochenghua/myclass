@@ -20,15 +20,15 @@ test('jobs isolate input/profile, require completion, and remove all temporary d
     assert.notEqual(env.MYCLASS_ANIMATION_INPUT, input);
     assert((await fs.readFile(path.join(profile, 'user/basic/Standard/MyClass.xba'), 'utf8')).includes('NEVER_EXECUTE'));
     await fs.writeFile(env.MYCLASS_ANIMATION_OUTPUT, '%PDF-1.7\nfixture');
-    await fs.writeFile(env.MYCLASS_ANIMATION_RESULT, 'OK\n2\n5\n0\n');
+    await fs.writeFile(env.MYCLASS_ANIMATION_RESULT, 'OK\n2\n5\n0\n1,1,2,2,2\n');
   };
   for (let i = 0; i < 2; i++) {
     assert.deepEqual(await expandAnimations(input, '.pptx', output, { executable: 'test', tempRoot: root, runner }),
-      { mode: 'animation-states', profile: PROFILE, slideCount: 2, stateCount: 5, unsupportedSlides: 0 });
+      { mode: 'animation-states', profile: PROFILE, slideCount: 2, stateCount: 5, unsupportedSlides: 0, statePages: [1,1,2,2,2] });
   }
   assert.notEqual(profiles[0], profiles[1]);
   assert.equal(await fs.readFile(input, 'utf8'), 'original');
-  for (const report of [null, 'ERROR\nconversion failed', 'OK\n1\n9999\n0', 'OK\n1\nNaN\n0']) {
+  for (const report of [null, 'ERROR\nconversion failed', 'OK\n1\n9999\n0', 'OK\n1\nNaN\n0', 'OK\n2\n2\n0\n2,1', 'OK\n2\n2\n0\n1,3', 'OK\n2\n2\n0\n1']) {
     await assert.rejects(expandAnimations(input, '.pptx', path.join(root, 'bad.pdf'), {
       executable: 'test', tempRoot: root, runner: async (exe, args, { env }) => {
         if (!env.MYCLASS_ANIMATION_RESULT) return;

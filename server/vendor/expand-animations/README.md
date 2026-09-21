@@ -10,6 +10,7 @@ MyClass changes (2026-09-21):
 
 - `MyClass.bas` supplies a headless entry point with document macros/updates
   disabled, genuine ODP intermediate conversion, state limit and completion report.
+  The report includes each state’s original slide number, retaining gaps for hidden slides.
 - Paragraph visibility removes only the targeted paragraph, not every subsequent
   paragraph. Blank lines preserve the existing text layout.
 - Animation type initialization is exposed for the adapter's preflight checks.

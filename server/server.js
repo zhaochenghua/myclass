@@ -634,6 +634,17 @@ app.use(PATH_PREFIX, (req, res, next) => {
   }
   next();
 });
+// Same public capability URL as the PDF; expose only its page mapping, never the index.
+app.get(`${PATH_PREFIX}/public/courseware/:file.metadata`, async (req, res, next) => {
+  try {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.pdf$/.test(req.params.file)) return res.sendStatus(404);
+    const url = `${PATH_PREFIX}/public/courseware/${req.params.file}`;
+    const item = (await readCoursewareIndex()).find(item => item.url === url);
+    if (!item) return res.sendStatus(404);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.json({ conversion: item.conversion || null });
+  } catch (error) { next(error); }
+});
 app.use(`${PATH_PREFIX}/public/courseware`, (req, res, next) => {
   if (!/^\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.(pdf|zip|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)$/i.test(req.path)) {
     res.sendStatus(404);
