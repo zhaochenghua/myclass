@@ -1894,9 +1894,8 @@ function clearCourseware() {
 
 const CW_MAX_SCALE = 8; // 同 ZoomableImageView.MAX_SCALE
 const CW_NOTIFY_INTERVAL_MS = 80; // 同 ZoomableImageView.NOTIFY_INTERVAL_MS
-const CW_DOUBLE_TAP_SCALE = 2.5; // 同 ZoomableImageView.DOUBLE_TAP_SCALE
-const CW_DOUBLE_TAP_WINDOW_MS = 320; // 双击放大的判定窗口（同 ZoomableImageView 的双击间隔）
-const CW_TAP_PAGE_DELAY_MS = 340; // 点动翻页等这么久再执行：窗口内来了第二下就改成双击放大
+// 注：安卓端的「双击 2.5x 放大」在 iOS 端不做了 —— 双击放大与「点动翻页」争的是同一个双击
+// 判定窗口，留着它就必须让每次点动翻页都等 ~340ms（实测明显发懒）。缩放仍可用双指捏合。
 const CW_TAP_MOVE_SLOP_PX = 12; // 手指移动超过这么多就不算"点动"（是拖动 / 平移）
 const CW_TAP_MAX_DURATION_MS = 500; // 按住超过这么久再抬手也不算"点动"（手指搭在屏幕上、擦屏不翻页）
 const CW_SWIPE_MIN_DISTANCE_PX = 60; // 滑动翻页的最小横向位移
@@ -2069,22 +2068,6 @@ function applyCoursewareGesture({ factor = 1, focusX = 0, focusY = 0, dx = 0, dy
   applyCoursewareView();
 }
 
-function toggleCoursewareZoom(point) {
-  const view = state.cwView;
-  if (view.scale > 1.01) {
-    view.scale = 1;
-    applyCoursewareView({ force: true });
-    return;
-  }
-  const rect = coursewareStage().getBoundingClientRect();
-  applyCoursewareGesture({
-    factor: CW_DOUBLE_TAP_SCALE,
-    focusX: point.x - (rect.left + rect.width / 2),
-    focusY: point.y - (rect.top + rect.height / 2)
-  });
-  notifyCoursewareViewport(true);
-}
-
 /** 清空视口状态与残留 transform / 比例（关闭课件、释放本地预览时用） */
 function resetCwViewState() {
   const view = state.cwView;
@@ -2252,7 +2235,10 @@ function coursewareScreenInfo() {
   return { screen: clamp(Math.round(progress * steps) + 1, 1, count), count };
 }
 
-/** 课件舞台手势：双指缩放 + 双指平移 + 单指平移 + 双击缩放（同安卓 ZoomableImageView） */
+/**
+ * 课件舞台手势：双指缩放 / 平移、单指平移（放大后）、点动翻页、滑动翻页。
+ * 与安卓 ZoomableImageView 的区别：不做双击放大（它和点动翻页争同一个双击判定窗口）。
+ */
 function bindCoursewareGestures() {
   const stage = coursewareStage();
   if (!stage) return;
@@ -2260,8 +2246,6 @@ function bindCoursewareGestures() {
   let lastCenter = null;
   let lastSpan = 0;
   let lastSingle = null;
-  let lastTapAt = 0;
-  let lastTapPoint = null;
 
   const pointsOf = (event) => Array.from(event.touches || []).map((p) => ({ x: p.clientX, y: p.clientY }));
   const distOf = (pts) => Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -2276,22 +2260,14 @@ function bindCoursewareGestures() {
 
   // ---- 翻页手势：点动 + 滑动 ----
   // 点动：几乎没移动（≤ CW_TAP_MOVE_SLOP_PX）且按得不久（≤ CW_TAP_MAX_DURATION_MS），
-  //       左半边上一页、右半边下一页；
+  //       左半边上一页、右半边下一页；松手立即生效，不做任何延迟。
   // 滑动：横向位移 ≥ CW_SWIPE_MIN_DISTANCE_PX 且大于纵向 1.5 倍，左滑下一页、右滑上一页。
   // 两者互斥：点动要求"几乎没动"，滑动要求"横向拖了很远"，同一次触摸只会命中一种。
   // 画笔模式单指要留给写字，两种手势都得用双指（非画笔模式一根手指就够，多一根也认）。
-  // 与「双击放大」共用判定窗口：点动等 CW_TAP_PAGE_DELAY_MS 再执行，窗口内来了第二下就
-  // 取消这次翻页、交给双击放大（不会"放大一次又翻了一页"）。
   let paging = null; // 本次触摸的翻页手势状态
-  let tapTimer = 0;
-  const cancelPendingTap = () => {
-    if (tapTimer) clearTimeout(tapTimer);
-    tapTimer = 0;
-  };
   // centerOf 只处理两指，单指要单独取点（否则单指拖动会抛异常）
   const gesturePoint = (pts) => (pts.length >= 2 ? centerOf(pts) : { x: pts[0].x, y: pts[0].y });
   const beginPaging = (pts) => {
-    cancelPendingTap(); // 新的触摸（可能是双击的第二下）先取消上一次待翻页
     paging = {
       fingers: pts.length,
       start: gesturePoint(pts),
@@ -2299,9 +2275,7 @@ function bindCoursewareGestures() {
       startedAt: Date.now(),
       bestDx: 0,
       bestDy: 0,
-      moved: false,
-      // 是否还够格算"点动"：没怎么动、没被"双击放大"用掉
-      eligibleTap: true
+      moved: false
     };
   };
   const trackPaging = (pts) => {
@@ -2310,7 +2284,6 @@ function bindCoursewareGestures() {
     // 会让剩下那根手指与起始中心的距离突然变得很大，被误判成横滑而翻页。
     if (pts.length !== paging.fingers) {
       paging.moved = true;
-      paging.eligibleTap = false;
       return;
     }
     // 点动的位移要按手指各自算：双指捏合时中心可能几乎不动，但手指一定在动
@@ -2318,7 +2291,6 @@ function bindCoursewareGestures() {
       const from = paging.startPoints[i];
       if (Math.hypot(pts[i].x - from.x, pts[i].y - from.y) > CW_TAP_MOVE_SLOP_PX) {
         paging.moved = true;
-        paging.eligibleTap = false;
       }
     }
     const center = gesturePoint(pts);
@@ -2336,22 +2308,11 @@ function bindCoursewareGestures() {
     // 画笔模式下单指是写字（会落下一个点），翻页得用双指
     if (state.cwBoard?.penMode === true && gesture.fingers < 2) return;
 
-    // 一、点动翻页
-    if (
-      gesture.eligibleTap &&
-      !gesture.moved &&
-      Date.now() - gesture.startedAt <= CW_TAP_MAX_DURATION_MS
-    ) {
+    // 一、点动翻页：抬手立即翻（要等双击判定窗口的话，每次翻页都会慢半拍）
+    if (!gesture.moved && Date.now() - gesture.startedAt <= CW_TAP_MAX_DURATION_MS) {
       const rect = stage.getBoundingClientRect();
       const previous = gesture.start.x < rect.left + rect.width / 2;
-      cancelPendingTap();
-      tapTimer = setTimeout(() => {
-        tapTimer = 0;
-        // 已经翻页，别再让紧随的一次轻点触发"双击放大"
-        lastTapAt = 0;
-        lastTapPoint = null;
-        navigateCourseware(previous ? -1 : 1);
-      }, CW_TAP_PAGE_DELAY_MS);
+      navigateCourseware(previous ? -1 : 1);
       return;
     }
 
@@ -2359,8 +2320,6 @@ function bindCoursewareGestures() {
     if (state.cwView.scale > 1.01) return;
     if (Math.abs(gesture.bestDx) < CW_SWIPE_MIN_DISTANCE_PX) return;
     if (Math.abs(gesture.bestDx) <= Math.abs(gesture.bestDy) * CW_SWIPE_AXIS_RATIO) return;
-    lastTapAt = 0;
-    lastTapPoint = null;
     navigateCourseware(gesture.bestDx < 0 ? 1 : -1);
   };
 
@@ -2375,27 +2334,10 @@ function bindCoursewareGestures() {
       lastSpan = distOf(pts);
       lastCenter = centerOf(pts);
       lastSingle = null;
-      lastTapAt = 0;
-      lastTapPoint = null;
     } else if (pts.length === 1) {
       lastSingle = { x: pts[0].x, y: pts[0].y };
       lastCenter = null;
       lastSpan = 0;
-      // 双击缩放（画笔模式下禁用，避免绘制过程中的误触）
-      if (state.cwBoard?.penMode) return;
-      const now = Date.now();
-      const near =
-        lastTapPoint && Math.hypot(pts[0].x - lastTapPoint.x, pts[0].y - lastTapPoint.y) < 36;
-      if (near && now - lastTapAt < CW_DOUBLE_TAP_WINDOW_MS) {
-        // 这一下被"双击放大"用掉了：抬手时不能再当成点动翻页
-        if (paging) paging.eligibleTap = false;
-        toggleCoursewareZoom(pts[0]);
-        lastTapAt = 0;
-        lastTapPoint = null;
-      } else {
-        lastTapAt = now;
-        lastTapPoint = { x: pts[0].x, y: pts[0].y };
-      }
     }
   }, { passive: true });
 
@@ -2417,8 +2359,6 @@ function bindCoursewareGestures() {
       lastCenter = center;
       lastSpan = span;
       lastSingle = null;
-      lastTapAt = 0;
-      lastTapPoint = null;
       event.preventDefault();
       return;
     }
@@ -2427,8 +2367,6 @@ function bindCoursewareGestures() {
     if (pts.length === 1 && lastSingle) {
       applyCoursewareGesture({ dx: pts[0].x - lastSingle.x, dy: pts[0].y - lastSingle.y });
       lastSingle = { x: pts[0].x, y: pts[0].y };
-      lastTapAt = 0;
-      lastTapPoint = null;
       event.preventDefault();
     }
   }, { passive: false });
@@ -3018,7 +2956,7 @@ function bindStaticEvents() {
 
   bindLiveGestures();
   bindMediaGestures();
-  // 课件预览的双指缩放 / 平移 / 双击放大（缺了这一步 iPad 上只能看不能操作画面）
+  // 课件预览的缩放 / 平移 / 点动与滑动翻页（缺了这一步 iPad 上只能看不能操作画面）
   bindCoursewareGestures();
   $('mediaResetView').addEventListener('click', resetMediaView);
 
