@@ -27,11 +27,12 @@ import { CoursewareClient, coursewareFormatLabel } from './courseware.js';
 import { AnnotationBoard } from './annotation.js';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20260921';
 
-const QUALITY_PRESETS = {
-  smooth: { label: '流畅 960×720', width: 960, height: 720, fps: 24, maxBitrate: 3000000 },
-  standard: { label: '标准 1280×960', width: 1280, height: 960, fps: 24, maxBitrate: 6000000 },
-  hd: { label: '高清 1920×1440', width: 1920, height: 1440, fps: 24, maxBitrate: 10000000 }
-};
+// 摄像头采集与推流参数。原先由功能菜单里的「画质」选项切换，实际只影响
+// getUserMedia 的期望长边与 WebRTC 码率，课堂投屏下看不出差别，已固定为原"标准"档。
+const CAMERA_WIDTH = 1280;
+const CAMERA_HEIGHT = 960;
+const CAMERA_FPS = 24;
+const LIVE_MAX_BITRATE = 6000000;
 
 const state = {
   config: null,
@@ -47,7 +48,6 @@ const state = {
   screen: 'Auth',
   liveMode: 'camera', // camera | image
   liveActive: false,
-  quality: storage.get('quality', 'standard'),
   torchOn: false,
   courseware: null,
   // 图片视频投屏队列（与 Android 一致：上传后由大屏加载，投屏中可直接切换）
@@ -96,7 +96,6 @@ async function bootstrap() {
   // 标注画板只依赖 DOM，最先初始化：即使后续配置/登录失败，画笔相关代码也不会拿到空画板
   setupAnnotationBoards();
   bindStaticEvents();
-  renderQualityOptions();
   registerServiceWorker();
   $('networkRetry').addEventListener('click', connectCampus);
   window.addEventListener('online', () => { if (state.screen === 'Network') connectCampus(); });
@@ -405,10 +404,9 @@ function setupPipeline() {
 }
 
 function createPublisher() {
-  const preset = QUALITY_PRESETS[state.quality] || QUALITY_PRESETS.standard;
   return new LivePublisher({
     iceServers: state.config?.rtc?.iceServers || [],
-    maxBitrate: preset.maxBitrate,
+    maxBitrate: LIVE_MAX_BITRATE,
     onIceCandidate: (candidate) => state.signaling?.sendIceCandidate(candidate),
     onStateChange: () => updateLiveStatus(),
     onError: (message) => toast(message, { warn: true })
@@ -473,7 +471,6 @@ function sendOrientationNow() {
 async function openCameraLive() {
   // 正在投屏图片/视频时改开摄像头：先结束投屏，避免大屏停留在旧内容
   if (state.media.index >= 0) stopMediaCast();
-  const preset = QUALITY_PRESETS[state.quality] || QUALITY_PRESETS.standard;
   state.liveMode = 'camera';
   state.screen = 'Live';
   showView('Live');
@@ -483,9 +480,9 @@ async function openCameraLive() {
   try {
     await state.pipeline.openCamera({
       facing: state.pipeline.facing || 'back',
-      width: preset.width,
-      height: preset.height,
-      fps: preset.fps
+      width: CAMERA_WIDTH,
+      height: CAMERA_HEIGHT,
+      fps: CAMERA_FPS
     });
     delete $('liveStatus').dataset.userMessage;
     updateTorchButton();
@@ -1898,6 +1895,12 @@ function clearCourseware() {
 const CW_MAX_SCALE = 8; // 同 ZoomableImageView.MAX_SCALE
 const CW_NOTIFY_INTERVAL_MS = 80; // 同 ZoomableImageView.NOTIFY_INTERVAL_MS
 const CW_DOUBLE_TAP_SCALE = 2.5; // 同 ZoomableImageView.DOUBLE_TAP_SCALE
+const CW_DOUBLE_TAP_WINDOW_MS = 320; // 双击放大的判定窗口（同 ZoomableImageView 的双击间隔）
+const CW_TAP_PAGE_DELAY_MS = 340; // 点动翻页等这么久再执行：窗口内来了第二下就改成双击放大
+const CW_TAP_MOVE_SLOP_PX = 12; // 手指移动超过这么多就不算"点动"（是拖动 / 平移）
+const CW_TAP_MAX_DURATION_MS = 500; // 按住超过这么久再抬手也不算"点动"（手指搭在屏幕上、擦屏不翻页）
+const CW_SWIPE_MIN_DISTANCE_PX = 60; // 滑动翻页的最小横向位移
+const CW_SWIPE_AXIS_RATIO = 1.5; // 横向位移要明显大于纵向，否则当成"长页上下拖动"
 const CW_SCREEN_STEP_RATIO = 0.92; // 逐屏滚动留 8% 重叠，避免相邻屏内容割裂
 const BIG_SCREEN_H_OVER_W = 9 / 16; // 大屏按 16:9 横屏估算（同安卓 stepBigScreen）
 
@@ -1939,10 +1942,53 @@ function coursewarePreviewReady() {
   return base.width > 0 && base.height > 0;
 }
 
-/** 显式锁定显示比例，保证 canvas / img 都按页面比例铺满舞台宽度 */
+// ---- 显示区域比例：FitWidth 还是"整页放下" ----
+// 横向课件（4:3 / 16:9 这类 PPT 页）在横屏舞台上按宽度铺满时，只要舞台比课件更扁
+// 就会被裁掉底部一点点：手机横屏最明显（844×390 的手机去掉右侧竖栏后舞台宽高比约
+// 1.8~2.2，而 16:9 课件只有 1.78）。裁掉的画面只是表面问题——requestCoursewareScreenStep
+// 会据此判定"一屏放不下"，先做本地逐屏滚动，于是同一张课件要点两次才翻得过去。
+// 因此横向课件改为收窄到"整页刚好放得下"（左右各留一点黑边），一次翻页；
+// 竖向长课件（A4 试卷等）保持按宽度铺满 + 逐屏滚动，否则收窄后小得没法看。
+const CW_FIT_PAGE_MIN_ASPECT = 1.2; // 宽高比 ≥ 1.2 视为横向课件（4:3 = 1.33，16:9 = 1.78）
+const CW_FIT_WIDTH_SAFETY_PX = 1; // 收窄时再多留 1px，避免亚像素舍入把高度重新顶出舞台
+const CW_FIT_TABLET_MAX_WIDTH_LOSS = 0.03; // 平板舞台与课件比例接近，只处理"差几个像素"的情况
+
+/** 是否手机横屏布局（与 style.css 里 (orientation: landscape) and (max-height: 30rem) 对齐） */
+function coursewarePhoneLayout() {
+  return window.matchMedia('(orientation: landscape) and (max-height: 30rem)').matches;
+}
+
+/**
+ * 决定课件在舞台里的显示宽度：默认交给 CSS 的 width:100%（FitWidth），
+ * 需要"整页放下"时写死一个像素宽度。舞台尺寸变化后必须重新调用。
+ */
+function applyCoursewareFit() {
+  const surface = coursewareSurface();
+  if (!surface) return;
+  surface.style.removeProperty('width');
+  const natural = coursewareNaturalSize();
+  const stage = coursewareStageSize();
+  if (!natural.width || !natural.height || !stage.width || !stage.height) return;
+
+  const aspect = natural.width / natural.height;
+  if (aspect < CW_FIT_PAGE_MIN_ASPECT) return; // 竖向长课件：保持 FitWidth + 逐屏滚动
+  if (stage.width / aspect <= stage.height) return; // 按宽度铺开本来就放得下
+
+  const fitWidth = stage.height * aspect;
+  const widthLoss = 1 - fitWidth / stage.width;
+  // 手机横屏的舞台明显比课件扁，宁可多让一点宽度也要保证整页完整、一次翻页；
+  // 平板舞台与课件比例接近，只在几乎不损失宽度时才收窄。
+  const maxLoss = coursewarePhoneLayout() ? 1 : CW_FIT_TABLET_MAX_WIDTH_LOSS;
+  if (widthLoss > maxLoss) return; // 收窄代价太大，宁可裁切（仍可逐屏滚动）
+
+  surface.style.width = `${Math.max(1, Math.floor(fitWidth - CW_FIT_WIDTH_SAFETY_PX))}px`;
+}
+
+/** 显式锁定显示比例：canvas / img 都按页面比例显示（默认铺满舞台宽度） */
 function applyCoursewareSurfaceRatio(surface, width, height) {
   if (!surface || !width || !height) return;
   surface.style.aspectRatio = `${width} / ${height}`;
+  applyCoursewareFit();
 }
 
 function coursewareMaxTranslation() {
@@ -2052,6 +2098,8 @@ function resetCwViewState() {
     if (!element) continue;
     element.style.removeProperty('transform');
     element.style.removeProperty('aspect-ratio');
+    // 宽度可能被 applyCoursewareFit 写成固定像素，一并清掉，恢复 CSS 的 width:100%
+    element.style.removeProperty('width');
   }
 }
 
@@ -2081,6 +2129,8 @@ function resetCoursewareViewport({ atBottom = false, notify = true } = {}) {
 
 /** 舞台尺寸变化后重新适配（安卓 ZoomableImageView.onSizeChanged） */
 function refitCoursewareViewport() {
+  // 舞台宽高变了，"整页放下"要收窄多少也跟着变（旋转屏幕/进出横屏都会走到这里）
+  applyCoursewareFit();
   const view = state.cwView;
   if (view.scale <= 1.01) {
     const base = coursewareBaseSize();
@@ -2108,7 +2158,9 @@ function requestCoursewareScreenStep(direction) {
 
   const displayHeight = base.height * view.scale;
   const viewHeight = stage.height;
-  if (displayHeight <= viewHeight) {
+  // 1px 容差：applyCoursewareFit 收窄后的课件高度可能因亚像素舍入比舞台高出不到 1px，
+  // 那种情况必须当成"整页可显示"，否则一张课件要点两次才翻得过去（同 coursewareScreenInfo）。
+  if (displayHeight <= viewHeight + 1) {
     // iPad 整页可显示：大屏（横屏）往往是长页，改用大屏滚动进度驱动大屏逐屏下滚，
     // 滚到底再翻页，避免 iPad 整页直接翻页导致大屏不滚动。
     return stepCoursewareBigScreen(direction);
@@ -2222,9 +2274,100 @@ function bindCoursewareGestures() {
     };
   };
 
+  // ---- 翻页手势：点动 + 滑动 ----
+  // 点动：几乎没移动（≤ CW_TAP_MOVE_SLOP_PX）且按得不久（≤ CW_TAP_MAX_DURATION_MS），
+  //       左半边上一页、右半边下一页；
+  // 滑动：横向位移 ≥ CW_SWIPE_MIN_DISTANCE_PX 且大于纵向 1.5 倍，左滑下一页、右滑上一页。
+  // 两者互斥：点动要求"几乎没动"，滑动要求"横向拖了很远"，同一次触摸只会命中一种。
+  // 画笔模式单指要留给写字，两种手势都得用双指（非画笔模式一根手指就够，多一根也认）。
+  // 与「双击放大」共用判定窗口：点动等 CW_TAP_PAGE_DELAY_MS 再执行，窗口内来了第二下就
+  // 取消这次翻页、交给双击放大（不会"放大一次又翻了一页"）。
+  let paging = null; // 本次触摸的翻页手势状态
+  let tapTimer = 0;
+  const cancelPendingTap = () => {
+    if (tapTimer) clearTimeout(tapTimer);
+    tapTimer = 0;
+  };
+  // centerOf 只处理两指，单指要单独取点（否则单指拖动会抛异常）
+  const gesturePoint = (pts) => (pts.length >= 2 ? centerOf(pts) : { x: pts[0].x, y: pts[0].y });
+  const beginPaging = (pts) => {
+    cancelPendingTap(); // 新的触摸（可能是双击的第二下）先取消上一次待翻页
+    paging = {
+      fingers: pts.length,
+      start: gesturePoint(pts),
+      startPoints: pts.map((p) => ({ x: p.x, y: p.y })),
+      startedAt: Date.now(),
+      bestDx: 0,
+      bestDy: 0,
+      moved: false,
+      // 是否还够格算"点动"：没怎么动、没被"双击放大"用掉
+      eligibleTap: true
+    };
+  };
+  const trackPaging = (pts) => {
+    if (!paging || pts.length === 0) return;
+    // 手势中途加/减了手指：既不算点动、也不再按滑动累计位移。否则"抬起两根手指中的一根"
+    // 会让剩下那根手指与起始中心的距离突然变得很大，被误判成横滑而翻页。
+    if (pts.length !== paging.fingers) {
+      paging.moved = true;
+      paging.eligibleTap = false;
+      return;
+    }
+    // 点动的位移要按手指各自算：双指捏合时中心可能几乎不动，但手指一定在动
+    for (let i = 0; i < pts.length; i += 1) {
+      const from = paging.startPoints[i];
+      if (Math.hypot(pts[i].x - from.x, pts[i].y - from.y) > CW_TAP_MOVE_SLOP_PX) {
+        paging.moved = true;
+        paging.eligibleTap = false;
+      }
+    }
+    const center = gesturePoint(pts);
+    const dx = center.x - paging.start.x;
+    const dy = center.y - paging.start.y;
+    if (Math.abs(dx) > Math.abs(paging.bestDx)) {
+      paging.bestDx = dx;
+      paging.bestDy = dy;
+    }
+  };
+  const finishPaging = () => {
+    const gesture = paging;
+    paging = null;
+    if (!gesture) return;
+    // 画笔模式下单指是写字（会落下一个点），翻页得用双指
+    if (state.cwBoard?.penMode === true && gesture.fingers < 2) return;
+
+    // 一、点动翻页
+    if (
+      gesture.eligibleTap &&
+      !gesture.moved &&
+      Date.now() - gesture.startedAt <= CW_TAP_MAX_DURATION_MS
+    ) {
+      const rect = stage.getBoundingClientRect();
+      const previous = gesture.start.x < rect.left + rect.width / 2;
+      cancelPendingTap();
+      tapTimer = setTimeout(() => {
+        tapTimer = 0;
+        // 已经翻页，别再让紧随的一次轻点触发"双击放大"
+        lastTapAt = 0;
+        lastTapPoint = null;
+        navigateCourseware(previous ? -1 : 1);
+      }, CW_TAP_PAGE_DELAY_MS);
+      return;
+    }
+
+    // 二、滑动翻页（放大后横向拖动是平移，不翻页）
+    if (state.cwView.scale > 1.01) return;
+    if (Math.abs(gesture.bestDx) < CW_SWIPE_MIN_DISTANCE_PX) return;
+    if (Math.abs(gesture.bestDx) <= Math.abs(gesture.bestDy) * CW_SWIPE_AXIS_RATIO) return;
+    lastTapAt = 0;
+    lastTapPoint = null;
+    navigateCourseware(gesture.bestDx < 0 ? 1 : -1);
+  };
+
   stage.addEventListener('touchstart', (event) => {
     if (!coursewarePreviewReady()) return;
     const pts = pointsOf(event);
+    beginPaging(pts);
     if (pts.length >= 2) {
       // 第二根手指落下：先结束当前笔画，再进入双指缩放 / 平移（与安卓一致）
       state.cwBoard?.endActiveStroke(true);
@@ -2243,7 +2386,9 @@ function bindCoursewareGestures() {
       const now = Date.now();
       const near =
         lastTapPoint && Math.hypot(pts[0].x - lastTapPoint.x, pts[0].y - lastTapPoint.y) < 36;
-      if (near && now - lastTapAt < 320) {
+      if (near && now - lastTapAt < CW_DOUBLE_TAP_WINDOW_MS) {
+        // 这一下被"双击放大"用掉了：抬手时不能再当成点动翻页
+        if (paging) paging.eligibleTap = false;
         toggleCoursewareZoom(pts[0]);
         lastTapAt = 0;
         lastTapPoint = null;
@@ -2257,6 +2402,7 @@ function bindCoursewareGestures() {
   stage.addEventListener('touchmove', (event) => {
     if (!coursewarePreviewReady()) return;
     const pts = pointsOf(event);
+    trackPaging(pts);
     if (pts.length >= 2 && twoFingerActive) {
       const center = centerOf(pts);
       const span = distOf(pts);
@@ -2287,16 +2433,21 @@ function bindCoursewareGestures() {
     }
   }, { passive: false });
 
-  const release = (event) => {
+  const release = (event, cancelled = false) => {
     const remaining = pointsOf(event);
     twoFingerActive = false;
     lastSpan = 0;
     lastCenter = null;
     lastSingle = remaining.length === 1 ? { x: remaining[0].x, y: remaining[0].y } : null;
-    if (remaining.length === 0) notifyCoursewareViewport(true);
+    if (remaining.length === 0) {
+      notifyCoursewareViewport(true);
+      // 手指全部抬起后再判断点动 / 滑动翻页（被系统打断的 touchcancel 不算）
+      if (cancelled) paging = null;
+      else finishPaging();
+    }
   };
-  stage.addEventListener('touchend', release, { passive: true });
-  stage.addEventListener('touchcancel', release, { passive: true });
+  stage.addEventListener('touchend', (event) => release(event), { passive: true });
+  stage.addEventListener('touchcancel', (event) => release(event, true), { passive: true });
 
   // 桌面 / 触控板调试用：滚轮缩放
   stage.addEventListener('wheel', (event) => {
@@ -2675,19 +2826,45 @@ function bindPageLongPress(buttonId, delta) {
 
 // ---------------------------------------------------------------- 其他交互
 
-function renderQualityOptions() {
-  const select = $('qualitySelect');
-  select.innerHTML = '';
-  for (const [key, preset] of Object.entries(QUALITY_PRESETS)) {
-    const option = document.createElement('option');
-    option.value = key;
-    option.textContent = preset.label;
-    select.appendChild(option);
+/**
+ * 外接键盘 / 蓝牙翻页笔翻页（对应安卓端的音量键翻页）。
+ *
+ * 音量键做不到：iOS 上音量键由系统独占，网页收不到任何 keydown（安卓网页同样收不到，
+ * 安卓端能用是因为那是原生 App 在 dispatchKeyEvent 里拦下来的）。网页端能拿到的是
+ * 蓝牙翻页笔 / 外接键盘发出的 PageUp / PageDown（部分翻页笔发方向键）。
+ * 万一某个浏览器确实派发了音量键事件，也按安卓的规则处理（音量+ 上一页、音量- 下一页）。
+ */
+function handleCoursewarePagingKey(event) {
+  if (state.screen !== 'CoursewarePlay' || !state.courseware || !state.joined) return;
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  // 正在输入页码 / 密码时不抢按键
+  if (event.target?.closest?.('input, select, textarea, [contenteditable]')) return;
+
+  let delta = 0;
+  switch (event.key) {
+    case 'PageDown':
+    case 'ArrowRight':
+    case 'ArrowDown':
+    case 'AudioVolumeDown': // 同安卓：音量- 下一页
+      delta = 1;
+      break;
+    case 'PageUp':
+    case 'ArrowLeft':
+    case 'ArrowUp':
+    case 'AudioVolumeUp': // 同安卓：音量+ 上一页
+      delta = -1;
+      break;
+    default:
+      return;
   }
-  select.value = QUALITY_PRESETS[state.quality] ? state.quality : 'standard';
+  event.preventDefault();
+  navigateCourseware(delta);
 }
 
 function bindStaticEvents() {
+  // 蓝牙翻页笔 / 外接键盘翻页（视图隐藏时下面这些按钮不存在，所以挂在 document 上）
+  document.addEventListener('keydown', handleCoursewarePagingKey);
+
   $('authLogin').addEventListener('click', () => performAuth(false));
   $('authRegister').addEventListener('click', () => performAuth(true));
   $('authPassword').addEventListener('keydown', (event) => {
@@ -2716,11 +2893,6 @@ function bindStaticEvents() {
   $('updateLater').addEventListener('click', () => dismissUpdateDialog());
   $('updateReload').addEventListener('click', () => applyUpdate({ clearCache: false }));
   $('updateClear').addEventListener('click', () => applyUpdate({ clearCache: true }));
-  $('qualitySelect').addEventListener('change', (event) => {
-    state.quality = event.target.value;
-    storage.set('quality', state.quality);
-    toast('下次开始直播时生效');
-  });
 
   $('liveBack').addEventListener('click', () => exitLive());
   $('liveToggle').addEventListener('click', () => {
@@ -2924,12 +3096,11 @@ async function handleResume() {
   if (!track || track.readyState === 'ended') {
     setLiveMessage('正在恢复摄像头...');
     try {
-      const preset = QUALITY_PRESETS[state.quality] || QUALITY_PRESETS.standard;
       await state.pipeline.openCamera({
         facing: state.pipeline.facing || 'back',
-        width: preset.width,
-        height: preset.height,
-        fps: preset.fps,
+        width: CAMERA_WIDTH,
+        height: CAMERA_HEIGHT,
+        fps: CAMERA_FPS,
         preserveLockedFrame: true
       });
       if (state.liveActive) await restartLive();

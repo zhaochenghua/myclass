@@ -167,20 +167,6 @@ body::before {
   gap: 0.35rem;
 }
 
-.field-inline {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.9rem;
-  color: var(--muted);
-}
-
-.field-inline select {
-  flex: 1 1 auto;
-  max-width: 60%;
-}
-
 input,
 select {
   width: 100%;
@@ -860,8 +846,10 @@ input::placeholder {
    == ORIENTATION_LANDSCAPE 时重建布局）：
      * 表单 / 菜单类页面（登录、连接码、功能菜单、投屏来源）：左右两栏，
        左＝标题与状态，右＝输入与按钮；
-     * 投屏类页面（图片视频、课件）：左侧预览占满剩余空间，右侧固定宽竖栏
-       放工具栏（对应安卓的 dp(240) 侧栏）；
+     * 投屏类页面（图片视频）：左侧预览占满剩余空间，右侧固定宽竖栏
+       放工具栏（对应安卓的 dp(240) 侧栏）；课件页是"标注写字"场景，
+       按屏幕宽度分开处理：宽屏（iPad，≥ 60rem）工具栏收到屏幕底部横条、
+       课件独占整屏；窄屏（手机）竖向空间金贵，仍走右侧竖栏；
      * 列表页：列表占满左侧，按钮收进右侧竖栏，列表本身在横屏下改双列；
      * 摄像头直播页：工具栏从底部移到右侧竖栏（对应安卓的 dp(86) 侧栏）。
    ================================================================== */
@@ -980,7 +968,11 @@ input::placeholder {
     flex: 1 1 6.5rem;
   }
 
-  /* ---- 课件播放：左侧页面预览 + 右侧竖栏（标注工具栏 + 翻页） ---- */
+  /* ---- 课件播放的兜底布局（既不是手机也不是 iPad 的横屏，如小尺寸安卓平板）：
+     左侧页面预览 + 右侧 16rem 竖栏 ----
+     手机横屏（max-height: 30rem）取消顶部标题栏那一行、竖栏收窄到 8rem；
+     iPad 横屏（min-width: 60rem）把控件收到底部横条、课件独占整屏。
+     两者见文件后面各自的块。 */
   #viewCoursewarePlay {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 16rem;
@@ -1049,6 +1041,146 @@ input::placeholder {
     width: 5.6rem;
     min-height: 3rem;
     font-size: 0.95rem;
+  }
+}
+
+/* ==================================================================
+   宽屏横屏（iPad，横屏宽度 ≥ 960px）的课件播放页：课件占满整屏，
+   标注与翻页控件收到屏幕底部的一条横条里。
+   60rem = 960px 这条线用来区分 iPad 与手机：iPad 横屏最小 1024px
+   （iPad mini / 9.7"），手机横屏最大 932px（iPhone 15 Pro Max）。
+   iPad mini 横屏（1133×744）实测：右侧 16rem 竖栏下 16:9 课件显示宽度只有
+   833px（屏宽的 74%）、占屏面积约 46%；改成整屏舞台后课件宽 1120px
+   （屏宽的 99%）、面积约 84%，标注写字的空间接近翻倍。横条平时只占底部
+   40px，画笔模式下标注工具排不下时自动折成两行（约 86px），课件仍整页可见。
+   手机横屏不走这一套，见文件末尾 (max-height: 30rem) 块里的窄竖栏方案。
+   ================================================================== */
+@media (orientation: landscape) and (min-width: 60rem) {
+  #viewCoursewarePlay {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "stage stage"
+      "head  side";
+    /* 只保留安全区 + 极小内边距，其余空间全部让给课件 */
+    padding: calc(var(--safe-top) + 0.2rem) calc(var(--safe-left) + 0.35rem)
+      calc(var(--safe-bottom) + 0.2rem) calc(var(--safe-right) + 0.35rem);
+    gap: 0.3rem 0.5rem;
+  }
+
+  /* 返回 / 标题 / 画笔：从顶部挪到底部横条的最左侧 */
+  #viewCoursewarePlay > .list-header {
+    grid-area: head;
+    align-self: center;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  #viewCoursewarePlay .list-header .pill {
+    min-height: 2.5rem;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.78rem;
+  }
+
+  #viewCoursewarePlay .list-title {
+    max-width: 8rem;
+    overflow: hidden;
+    font-size: 0.82rem;
+    text-align: left;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  #viewCoursewarePlay > .cw-stage {
+    grid-area: stage;
+    min-width: 0;
+    margin: 0;
+    border-radius: 8px;
+  }
+
+  /* 标注工具栏 + 翻页控件：整体摊平成一条横向工具栏 */
+  #viewCoursewarePlay > .cw-side {
+    grid-area: side;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem 0.55rem;
+    padding-left: 0;
+    border-left: none;
+    overflow: visible;
+  }
+
+  #viewCoursewarePlay .annotation-bar {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0;
+  }
+
+  #viewCoursewarePlay .annotation-colors {
+    gap: 0.45rem;
+  }
+
+  #viewCoursewarePlay .annotation-color {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+
+  #viewCoursewarePlay .annotation-actions {
+    gap: 0.3rem;
+  }
+
+  #viewCoursewarePlay .cw-footer {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem 0.55rem;
+    padding-top: 0;
+    border-top: none;
+  }
+
+  #viewCoursewarePlay .page-row {
+    flex-wrap: nowrap;
+    gap: 0.3rem;
+  }
+
+  /* 横条内按钮一律收成"内容宽度"，否则 .btn-nav / .tool 的 flex: 1
+     会把每个按钮撑开、把横条挤成好几行 */
+  #viewCoursewarePlay .page-row .btn,
+  #viewCoursewarePlay .cw-footer > .btn,
+  #viewCoursewarePlay .annotation-actions .tool,
+  #viewCoursewarePlay .classroom-actions > button {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 2.5rem;
+    padding: 0.3rem 0.55rem;
+    font-size: 0.78rem;
+  }
+
+  #viewCoursewarePlay .classroom-actions {
+    gap: 0.3rem;
+  }
+
+  #viewCoursewarePlay .code-input-sm {
+    width: 4rem;
+    min-height: 2.5rem;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.85rem;
+    letter-spacing: 0;
+  }
+
+  #viewCoursewarePlay .subtitle {
+    margin: 0;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  /* 横条里没有位置放"长按可连续播放"的说明 */
+  #viewCoursewarePlay .footnote-dim {
+    display: none;
   }
 }
 
@@ -1142,5 +1274,121 @@ input::placeholder {
   .annotation-color {
     width: 1.55rem;
     height: 1.55rem;
+  }
+
+  /* ---- 课件播放（手机横屏）：取消顶部标题栏那一行，按钮全收进右侧竖栏并收窄 ----
+     原来第一行是标题栏（返回 / 标题 / 画笔），第二行才是「课件 + 16rem 竖栏」：
+     844×390 的手机上课件只剩 546px 宽（屏宽的 65%），高度还被标题栏吃掉一行。
+     现在标题栏那一行不要了：课件从屏幕顶部一直占到低部、独占整屏高度，右侧竖栏
+     由 16rem 收窄到 8rem（返回 / 画笔 并入竖栏顶部），课件宽度升到 ~700px。 */
+  #viewCoursewarePlay {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 8rem;
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "stage head"
+      "stage side";
+    padding: calc(var(--safe-top) + 0.2rem) calc(var(--safe-right) + 0.35rem)
+      calc(var(--safe-bottom) + 0.2rem) calc(var(--safe-left) + 0.35rem);
+    gap: 0.3rem 0.4rem;
+  }
+
+  /* 返回 / 画笔 / 标题：竖栏顶部一组，标题换到第二行并省略号截断 */
+  #viewCoursewarePlay > .list-header {
+    grid-area: head;
+    align-self: start;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    padding-bottom: 0.35rem;
+    padding-left: 0.4rem;
+  }
+
+  #viewCoursewarePlay .list-title {
+    order: 2;
+    flex: 1 1 100%;
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 0.7rem;
+    text-align: left;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  #viewCoursewarePlay > .cw-stage {
+    grid-area: stage;
+    min-width: 0;
+    margin: 0;
+  }
+
+  /* 竖栏：窄，控件按列堆叠、排不下就换行，竖栏内部可滚动 */
+  #viewCoursewarePlay > .cw-side {
+    grid-area: side;
+    gap: 0.3rem;
+    padding-left: 0.4rem;
+    border-left: 1px solid var(--line);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #viewCoursewarePlay .annotation-colors {
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  #viewCoursewarePlay .annotation-actions {
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  /* 「板擦 / 撤销 / 清空」要三个挤在同一行，必须去掉 .tool 的 min-width: 4.2rem */
+  #viewCoursewarePlay .annotation-actions .tool {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 2.1rem;
+    padding: 0.25rem 0.15rem;
+    font-size: 0.7rem;
+  }
+
+  #viewCoursewarePlay .page-row {
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  /* 竖栏里按钮一律等分宽度、压到最小，一行能放两个 */
+  #viewCoursewarePlay .page-row .btn,
+  #viewCoursewarePlay .cw-footer > .btn,
+  #viewCoursewarePlay .classroom-actions > button {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 2.1rem;
+    padding: 0.25rem 0.3rem;
+    font-size: 0.7rem;
+  }
+
+  #viewCoursewarePlay .classroom-actions {
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  /* 必须写 min-width: 0：<input> 的自动最小宽度是 size 属性算出来的（~170px），
+     窄竖栏里会横向溢出、盖到课件上面去 */
+  #viewCoursewarePlay .code-input-sm {
+    flex: 1 1 100%;
+    min-width: 0;
+    width: auto;
+    min-height: 2.1rem;
+    padding: 0.25rem 0.3rem;
+    font-size: 0.78rem;
+  }
+
+  #viewCoursewarePlay .subtitle {
+    margin: 0;
+    font-size: 0.68rem;
+    white-space: normal;
+  }
+
+  /* 竖栏里没有位置放"长按可连续播放"的说明 */
+  #viewCoursewarePlay .footnote-dim {
+    display: none;
   }
 }
