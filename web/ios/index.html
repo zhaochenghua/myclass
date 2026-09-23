@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20260922a" />
+    <link rel="stylesheet" href="./style.css?v=20260923a" />
   </head>
   <body>
     <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
@@ -113,6 +113,8 @@
             <p class="footnote" id="menuVersion"></p>
           </div>
           <div class="panel-main">
+            <!-- 课件播放中临时切出来投摄像头/图片后，从这里回到课件播放页（仅播放中显示） -->
+            <button class="btn btn-primary" id="menuResumeCourseware" type="button" hidden>继续播放课件</button>
             <button class="btn btn-primary" id="menuCamera" type="button">摄像头直播</button>
             <button class="btn btn-primary" id="menuMedia" type="button">图片视频投屏</button>
             <button class="btn btn-primary" id="menuCourseware" type="button">播放课件</button>
@@ -270,7 +272,7 @@
       <!-- ============ 课件播放（含标注） ============ -->
       <section class="view view-cw" id="viewCoursewarePlay" hidden>
         <header class="list-header">
-          <button class="pill" id="cwBackButton" type="button">返回</button>
+          <button class="pill" id="cwLeaveButton" type="button">菜单</button>
           <h2 class="list-title" id="cwPlayTitle">课件</h2>
           <button class="pill" id="cwPenButton" type="button">画笔</button>
         </header>
@@ -370,6 +372,6 @@
 
     <div class="toast" id="toast" hidden></div>
 
-    <script type="module" src="./js/app.js?v=20260922a"></script>
+    <script type="module" src="./js/app.js?v=20260923b"></script>
   </body>
 </html>

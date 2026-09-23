@@ -46,6 +46,15 @@ body {
   touch-action: manipulation;
 }
 
+/* iOS 专用兜底：overflow:hidden 挡不住 iOS 为了"聚焦输入框"自动滚动整页——一旦滚走，
+   底部就会露出一条背景色（表现为"整屏上移 + 底部一块黑"）。position:fixed 把 body 钉在
+   视口上，页面本身就再也滚不动了。注意 fixed 会让 body 成为固定定位子元素的包含块，
+   而 body 的盒子就等于视口，所以 .toast / .overlay / body::before 的位置不受影响。 */
+body {
+  position: fixed;
+  inset: 0;
+}
+
 input,
 textarea,
 select {
@@ -1181,6 +1190,19 @@ input::placeholder {
   /* 横条里没有位置放"长按可连续播放"的说明 */
   #viewCoursewarePlay .footnote-dim {
     display: none;
+  }
+}
+
+/* ==================================================================
+   窄屏横屏平板（约 1024px 宽，如 iPad 9.7"）的课件横条兜底：
+   画笔模式下横条内容正好卡在换行临界点上，状态文字（页码位数变化）一长就在
+   1 行 / 2 行之间跳，舞台高度跟着变（实测 717 ↔ 671），看起来就是"整屏往上一移、
+   底部多出一块黑"。这种宽度下把画笔模式的横条高度钉成两行最稳。
+   更宽的 iPad（mini 1133 / 10.9" 1180 起）内容本来就放得下一行，不加锁。
+   ================================================================== */
+@media (orientation: landscape) and (min-width: 60rem) and (max-width: 70rem) {
+  #viewCoursewarePlay:has(#cwAnnotationBar:not([hidden])) > .cw-side {
+    min-height: 5.4rem;
   }
 }
 

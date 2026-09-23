@@ -72,6 +72,8 @@ const state = {
   },
   resumeLiveAfterJoin: false,
   pendingCoursewareClose: false,
+  // 图片/视频投屏期间课件"挂起"：state.courseware 仍保留，但不再采信大屏回传的课件状态
+  coursewareSuspended: false,
   uploadAbort: null,
   lastHiddenAt: 0
 };
@@ -246,9 +248,46 @@ function showMenu() {
   const version = state.config?.iosVersion || state.config?.apkVersion || '';
   $('menuVersion').textContent = `已登录：${state.username || ''}${version ? ` · v${version}` : ''}`;
   $('menuStatus').textContent = `已连接课堂 ${state.roomCode || ''}`;
+  // 课件仍在大屏播放时才给"继续播放课件"入口（上课途中临时投摄像头/图片后回到课件用）
+  $('menuResumeCourseware').hidden = !state.courseware;
   // 离开投屏/课件页时收起画笔，避免回到菜单后工具栏残留
   setMediaPenMode(false);
   setCoursewarePenMode(false);
+}
+
+/**
+ * 临时切出课件播放页：回菜单，但课件继续留在大屏播放（本地预览也不释放），
+ * 之后从菜单的「继续播放课件」回来。区别于「结束播放」——那个会真的结束并释放。
+ */
+function leaveCoursewareToMenu() {
+  showMenu();
+  toast('课件仍在大屏播放，可从「继续播放课件」回来');
+}
+
+/** 从菜单回到课件播放页：中途可能被摄像头/图片投屏顶掉，这里按当前页重新推给大屏 */
+function resumeCourseware() {
+  const cw = state.courseware;
+  if (!cw) {
+    toast('当前没有正在播放的课件', { warn: true });
+    return;
+  }
+  state.coursewareSuspended = false;
+  // 大屏已经切回课件，图片/视频投屏这一轮结束：清掉本地投屏队列，
+  // 否则之后开摄像头时还会以为"正在投屏"而多发一次 courseware.close
+  resetMediaCastState();
+  state.screen = 'CoursewarePlay';
+  showView('CoursewarePlay');
+  updateCoursewareStatus();
+  state.signaling?.sendCoursewareOpen({
+    url: cw.url,
+    title: cw.title,
+    page: cw.page || 1,
+    screen: cw.screen || 1,
+    linkUrl: cw.linkUrl
+  });
+  // 本地预览还在就按当前页重画一遍（离开期间页码可能已变），不在就重新准备
+  if (state.cwPdf.doc) renderCoursewarePage(cw.page || 1);
+  else prepareCoursewarePreview().catch(() => {});
 }
 
 // ---------------------------------------------------------------- 信令
@@ -1125,7 +1164,8 @@ function switchToReadyMediaItem(index) {
   const item = state.media.queue[index];
   if (!item) return;
   state.media.index = index;
-  state.courseware = null;
+  // 注意：不清 state.courseware —— 课件只是被图片/视频投屏挂起，之后还能「继续播放课件」
+  suspendCourseware();
   // 换一张图就是换一份标注：收起画笔并清空本地笔迹
   setMediaPenMode(false);
   state.mediaBoard?.reset();
@@ -1156,7 +1196,8 @@ async function uploadAndCastMediaItem(index) {
   state.media.index = index;
   item.status = 'uploading';
   state.media.uploading = true;
-  state.courseware = null;
+  // 同上：课件挂起而不是丢弃，投屏结束后仍可「继续播放课件」
+  suspendCourseware();
   stopLive({ notify: false });
 
   state.screen = 'MediaCast';
@@ -1881,7 +1922,18 @@ function releaseCoursewarePreview() {
 
 function clearCourseware() {
   state.courseware = null;
+  state.coursewareSuspended = false;
   releaseCoursewarePreview();
+}
+
+/**
+ * 图片 / 视频投屏开始时把当前课件挂起：**保留** state.courseware（含当前页码、页数），
+ * 投屏结束后仍能从功能菜单「继续播放课件」回到原来那一页。
+ * 挂起期间不再采信大屏回传的 courseware.state —— 那些消息带的是图片/视频的页码
+ * （大屏端图片/视频也走课件通道），采信会把课件的页码改掉。
+ */
+function suspendCourseware() {
+  state.coursewareSuspended = Boolean(state.courseware);
 }
 
 // ------------------------------------------------- 课件预览视口（缩放 / 平移 / 逐屏）
@@ -1897,6 +1949,8 @@ const CW_NOTIFY_INTERVAL_MS = 80; // 同 ZoomableImageView.NOTIFY_INTERVAL_MS
 // 注：安卓端的「双击 2.5x 放大」在 iOS 端不做了 —— 双击放大与「点动翻页」争的是同一个双击
 // 判定窗口，留着它就必须让每次点动翻页都等 ~340ms（实测明显发懒）。缩放仍可用双指捏合。
 const CW_TAP_MOVE_SLOP_PX = 12; // 手指移动超过这么多就不算"点动"（是拖动 / 平移）
+const CW_PINCH_SLOP_PX = 20; // 两指间距变化超过这么多才算"捏合缩放"（双指滑动时手指会漂移几个像素）
+const CW_PAN_SLOP_PX = 12; // 两指中心移动超过这么多就算"平移 / 滑动"
 const CW_TAP_MAX_DURATION_MS = 500; // 按住超过这么久再抬手也不算"点动"（手指搭在屏幕上、擦屏不翻页）
 const CW_SWIPE_MIN_DISTANCE_PX = 60; // 滑动翻页的最小横向位移
 const CW_SWIPE_AXIS_RATIO = 1.5; // 横向位移要明显大于纵向，否则当成"长页上下拖动"
@@ -2142,7 +2196,7 @@ function requestCoursewareScreenStep(direction) {
   const displayHeight = base.height * view.scale;
   const viewHeight = stage.height;
   // 1px 容差：applyCoursewareFit 收窄后的课件高度可能因亚像素舍入比舞台高出不到 1px，
-  // 那种情况必须当成"整页可显示"，否则一张课件要点两次才翻得过去（同 coursewareScreenInfo）。
+  // 那种情况必须当成"整页可显示"，否则一张课件要点两次才翻得过去。
   if (displayHeight <= viewHeight + 1) {
     // iPad 整页可显示：大屏（横屏）往往是长页，改用大屏滚动进度驱动大屏逐屏下滚，
     // 滚到底再翻页，避免 iPad 整页直接翻页导致大屏不滚动。
@@ -2205,36 +2259,6 @@ function stepCoursewareBigScreen(direction) {
   return false;
 }
 
-/** 估算当前页的屏数，用于「第 x / y 屏」提示（仅显示用，不参与定位） */
-function coursewareScreenInfo() {
-  const view = state.cwView;
-  const base = coursewareBaseSize();
-  const stage = coursewareStageSize();
-  if (!base.height || !stage.height) return null;
-
-  if (view.bigScrollActive) {
-    const natural = coursewareNaturalSize();
-    if (!natural.width || !natural.height) return null;
-    const bigMaxYRatio = (natural.height / natural.width - BIG_SCREEN_H_OVER_W) / 2;
-    if (bigMaxYRatio <= 0) return null;
-    const stepRatio = (BIG_SCREEN_H_OVER_W * CW_SCREEN_STEP_RATIO) / (2 * bigMaxYRatio);
-    const total = Math.max(2, Math.ceil(1 / stepRatio) + 1);
-    return {
-      screen: clamp(Math.round(view.bigProgressY * (total - 1)) + 1, 1, total),
-      count: total
-    };
-  }
-
-  const displayHeight = base.height * view.scale;
-  if (displayHeight <= stage.height + 1) return null;
-  const range = displayHeight - stage.height;
-  const maxY = range / 2;
-  const steps = Math.max(1, Math.ceil(range / (stage.height * CW_SCREEN_STEP_RATIO)));
-  const count = steps + 1;
-  const progress = maxY > 0.5 ? (maxY - view.translateY) / (2 * maxY) : 0;
-  return { screen: clamp(Math.round(progress * steps) + 1, 1, count), count };
-}
-
 /**
  * 课件舞台手势：双指缩放 / 平移、单指平移（放大后）、点动翻页、滑动翻页。
  * 与安卓 ZoomableImageView 的区别：不做双击放大（它和点动翻页争同一个双击判定窗口）。
@@ -2246,6 +2270,10 @@ function bindCoursewareGestures() {
   let lastCenter = null;
   let lastSpan = 0;
   let lastSingle = null;
+  // 两指手势的模式（见 touchmove）：null = 还没分清 | 'pinch' = 捏合缩放 | 'pan' = 平移 / 滑动
+  let pinchMode = null;
+  let pinchStartSpan = 0;
+  let pinchStartCenter = null;
 
   const pointsOf = (event) => Array.from(event.touches || []).map((p) => ({ x: p.clientX, y: p.clientY }));
   const distOf = (pts) => Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -2275,7 +2303,8 @@ function bindCoursewareGestures() {
       startedAt: Date.now(),
       bestDx: 0,
       bestDy: 0,
-      moved: false
+      moved: false,
+      pinched: false // 这一轮被判定成捏合缩放后就不再翻页
     };
   };
   const trackPaging = (pts) => {
@@ -2307,6 +2336,8 @@ function bindCoursewareGestures() {
     if (!gesture) return;
     // 画笔模式下单指是写字（会落下一个点），翻页得用双指
     if (state.cwBoard?.penMode === true && gesture.fingers < 2) return;
+    // 这一轮被判定成捏合缩放：只缩放，不翻页
+    if (gesture.pinched) return;
 
     // 一、点动翻页：抬手立即翻（要等双击判定窗口的话，每次翻页都会慢半拍）
     if (!gesture.moved && Date.now() - gesture.startedAt <= CW_TAP_MAX_DURATION_MS) {
@@ -2334,6 +2365,10 @@ function bindCoursewareGestures() {
       lastSpan = distOf(pts);
       lastCenter = centerOf(pts);
       lastSingle = null;
+      // 重新判定这一轮两指手势是"捏合缩放"还是"平移 / 滑动"
+      pinchMode = null;
+      pinchStartSpan = lastSpan;
+      pinchStartCenter = lastCenter;
     } else if (pts.length === 1) {
       lastSingle = { x: pts[0].x, y: pts[0].y };
       lastCenter = null;
@@ -2349,8 +2384,19 @@ function bindCoursewareGestures() {
       const center = centerOf(pts);
       const span = distOf(pts);
       const focus = focusOf(center);
+      // 两指手势先分清是捏合还是平移：定下来之后这一轮就不再改（平移永远生效，只有缩放被锁）
+      if (!pinchMode) {
+        if (Math.abs(span - pinchStartSpan) >= CW_PINCH_SLOP_PX) pinchMode = 'pinch';
+        else if (
+          Math.hypot(center.x - pinchStartCenter.x, center.y - pinchStartCenter.y) >= CW_PAN_SLOP_PX
+        ) {
+          pinchMode = 'pan';
+        }
+        // 认定是捏合的这一轮不翻页（否则"捏合一下又翻页"）
+        if (pinchMode === 'pinch' && paging) paging.pinched = true;
+      }
       applyCoursewareGesture({
-        factor: lastSpan > 0 && span > 0 ? span / lastSpan : 1,
+        factor: pinchMode === 'pinch' && lastSpan > 0 && span > 0 ? span / lastSpan : 1,
         focusX: focus.x,
         focusY: focus.y,
         dx: lastCenter ? center.x - lastCenter.x : 0,
@@ -2554,6 +2600,7 @@ function openCourseware(item) {
     fitMode: 'fit-page',
     linkUrl: item.linkUrl || null
   };
+  state.coursewareSuspended = false;
 
   state.signaling?.sendCoursewareOpen({
     url: state.courseware.url,
@@ -2575,17 +2622,17 @@ function updateCoursewareStatus() {
   const cw = state.courseware;
   if (!cw) return;
   $('cwPlayTitle').textContent = cw.title;
-  // 本地预览可用时以本机滚动状态为准（大屏端现在按滚动进度联动，不再上报屏数）
-  const local = coursewareScreenInfo();
-  const localText = local && local.count > 1 ? `，第 ${local.screen} / ${local.count} 屏` : '';
-  const remoteText = cw.screenCount > 1 ? `，第 ${cw.screen} / ${cw.screenCount} 屏` : '';
-  const zoomText = state.cwView.scale > 1.02 ? `，${state.cwView.scale.toFixed(1)}x` : '';
-  $('cwPlayStatus').textContent = `第 ${slidePage(cw)} / ${slideCount(cw)} 页${localText || remoteText}${zoomText}`;
+  // 状态只显示页码。原先还会跟在后面的"第 x / y 屏"和"1.5x"都去掉了：那个屏数是按当前缩放/
+  // 滚动折算出来的，一次捏合就从"第 1 / 1 屏"变成"第 1 / 5 屏"，文字一长就把底部横条挤到
+  // 第二行（实测 iPad mini 在 1 行 / 2 行之间跳、整屏跟着上下移），放大倍数在画面上也看得到。
+  $('cwPlayStatus').textContent = `第 ${slidePage(cw)} / ${slideCount(cw)} 页`;
   $('cwPageInput').placeholder = `1-${slideCount(cw)}`;
 }
 
 function handleCoursewareState(message) {
   if (!state.courseware) return;
+  // 图片/视频投屏期间大屏也在用课件通道，回传的是图片/视频的页码，别污染挂起的课件
+  if (state.coursewareSuspended) return;
   if (message.url && message.url !== state.courseware.url) return;
   const remotePage = Math.max(1, Number(message.page) || 1);
   // 本地刚发起翻页时，大屏可能还没渲染完就回传了旧页码，
@@ -2621,6 +2668,7 @@ function handleViewerCoursewareOpen(message) {
     fitMode: 'fit-page',
     linkUrl: null
   };
+  state.coursewareSuspended = false;
   state.screen = 'CoursewarePlay';
   showView('CoursewarePlay');
   updateCoursewareStatus();
@@ -2704,6 +2752,7 @@ function gotoCoursewarePage() {
   if (!physical) { toast('该页是隐藏幻灯片，无法播放', { warn: true }); return; }
   jumpToCoursewarePage(physical);
   $('cwPageInput').value = '';
+  $('cwPageInput').blur(); // 收起键盘，避免键盘压着界面、也免得 iOS 把页面滚走
 }
 
 function stopCoursewareSignals() {
@@ -2797,6 +2846,47 @@ function handleCoursewarePagingKey(event) {
   }
   event.preventDefault();
   navigateCourseware(delta);
+}
+
+// ------------------------------------------------- iOS 视口复位（键盘收起后的点击错位）
+// iOS 为了把聚焦的输入框顶到键盘上方会偏移可视视口；用键盘上的"完成"收起键盘时
+// **输入框仍然保持 focus**，于是画面看着正常、点击却整体落到别处（表现为"所有按钮都失效"）。
+// body 已用 position: fixed 钉住，这里再兜一道复位。
+
+function isEditingText() {
+  return Boolean(document.activeElement?.matches?.('input, textarea, select, [contenteditable]'));
+}
+
+/** 键盘是否还占着视口：弹起时可视视口高度明显小于窗口高度（iOS 的 innerHeight 不变） */
+function keyboardVisible() {
+  const vv = window.visualViewport;
+  // 40px 容差：兼容地址栏/工具条带来的小差异
+  return Boolean(vv && vv.height > 0 && vv.height < window.innerHeight - 40);
+}
+
+function resetViewportOffset() {
+  // 不留 `if (window.scrollX || window.scrollY)` 这种判断：收起键盘后可能只偏移了可视视口
+  //（scrollY 仍读到 0），按旧判断会直接跳过，从此每次点击都错位。
+  window.scrollTo(0, 0);
+  const root = document.documentElement;
+  const body = document.body;
+  if (root) { root.scrollTop = 0; root.scrollLeft = 0; }
+  if (body) { body.scrollTop = 0; body.scrollLeft = 0; }
+}
+
+function keepDocumentPinned() {
+  // 只有"正在编辑 + 键盘确实还在"时才让位（此时 iOS 需要把输入框顶到键盘上方）。
+  // 光看 focus 是不够的：收起键盘后输入框仍持有 focus，旧实现因此一直以为还在输入，
+  // 偏移从来没被复位过。
+  if (isEditingText() && keyboardVisible()) return;
+  resetViewportOffset();
+}
+
+/** 复位 + 两次补刀：iOS 收起键盘是异步的，偏移往往晚几十毫秒才落定 */
+function pinDocumentSoon() {
+  keepDocumentPinned();
+  setTimeout(keepDocumentPinned, 80);
+  setTimeout(keepDocumentPinned, 320);
 }
 
 function bindStaticEvents() {
@@ -2937,7 +3027,9 @@ function bindStaticEvents() {
   $('cwListUpload').addEventListener('click', () => pickCoursewareFile());
   $('cwListFileInput').addEventListener('change', (event) => uploadCourseware(event.target.files?.[0]));
 
-  $('cwBackButton').addEventListener('click', () => showMenu());
+  // 临时切出（课件继续在大屏播放）↔ 菜单里的「继续播放课件」回来；要真正结束用「结束播放」
+  $('cwLeaveButton').addEventListener('click', () => leaveCoursewareToMenu());
+  $('menuResumeCourseware').addEventListener('click', () => resumeCourseware());
   $('cwPenButton').addEventListener('click', () => setCoursewarePenMode(!state.cwBoard?.penMode));
   // 缩放 / 平移后一键回到「顶部对齐 + 1 倍」的默认视图
   $('cwResetView').addEventListener('click', () => {
@@ -2972,11 +3064,33 @@ function bindStaticEvents() {
     if (state.screen === 'CoursewarePlay') refitCoursewareViewport();
   });
 
+  // 舞台尺寸不一定伴随 window resize：底部横条换行、键盘/分屏压缩视口都会只改舞台。
+  // 不重新适配的话，"整页放下"的宽度会停留在按旧舞台算出来的值上（可能又被裁掉底部）。
+  if (typeof ResizeObserver === 'function') {
+    const stage = coursewareStage();
+    if (stage) {
+      new ResizeObserver(() => {
+        if (state.screen === 'CoursewarePlay') refitCoursewareViewport();
+      }).observe(stage);
+    }
+  }
+
+  // iOS 的视口偏移复位（键盘收起后点击整体错位），实现见上面的 keepDocumentPinned 一组函数
+  window.addEventListener('scroll', keepDocumentPinned, { passive: true });
+  window.visualViewport?.addEventListener('scroll', keepDocumentPinned);
+  // 收起键盘是异步的：resize 之后偏移还会晚一点落定，所以顺带补两次
+  window.visualViewport?.addEventListener('resize', pinDocumentSoon);
+  document.addEventListener('focusout', () => setTimeout(pinDocumentSoon, 0));
+  // 兜底：每次按下之前都确认没有残留偏移，避免这一次点击又落到别处
+  document.addEventListener('pointerdown', keepDocumentPinned, { passive: true, capture: true });
+
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       state.lastHiddenAt = Date.now();
       return;
     }
+    // 从后台回来时 iOS 可能还带着切走前的视口偏移（比如带着键盘切到别的 App）
+    pinDocumentSoon();
     if (state.screen === 'Network') connectCampus();
     else handleResume();
   });
