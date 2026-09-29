@@ -57,6 +57,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -73,6 +74,7 @@ import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.SurfaceViewRenderer
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
@@ -484,6 +486,32 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         startLocalMediaQueue(picked)
+    }
+
+    // 拍照投屏：相机写入应用缓存目录的文件，拍完立刻加入投屏队列，可连续拍多张
+    private var pendingCaptureFile: File? = null
+    private var captureSessionActive = false
+
+    private val capturePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) launchCameraCapture() else toast("需要相机权限才能拍照投屏")
+    }
+
+    private val captureLauncher = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { saved: Boolean ->
+        val file = pendingCaptureFile
+        pendingCaptureFile = null
+        if (!saved) {
+            toast("已取消拍照")
+            return@registerForActivityResult
+        }
+        if (file == null || !file.exists() || file.length() == 0L) {
+            toast("没有拍下照片")
+            return@registerForActivityResult
+        }
+        addCaptureToQueue(file)
     }
 
     private val coursewarePickerLauncher = registerForActivityResult(
@@ -2081,9 +2109,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun showMediaCastSourceScreen() {
         currentScreen = Screen.Courseware
         coursewareSubScreen = CoursewareSubScreen.MediaSource
+        // 回到本机图片视频入口即视为结束上一次连拍会话：下一次拍照从新队列开始
+        captureSessionActive = false
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        val localBtn = primaryButton("本机图片视频（可多选）").apply {
+        val localBtn = primaryButton("本机图片视频（拍照 / 相册）").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -2091,7 +2121,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 topMargin = dp(if (isLandscape) 0 else 34)
             }
             setOnClickListener {
-                launchMediaPicker()
+                showMediaSourceChooser()
             }
         }
         val linkBtn = primaryButton("剪贴板链接").apply {
@@ -2179,6 +2209,86 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(versionLabel())
             showScreenView(root)
         }
+    }
+
+    /** 「本机图片视频」入口：先选“拍照”还是“相册选择”，拍照支持一次连拍多张 */
+    private fun showMediaSourceChooser() {
+        AlertDialog.Builder(this)
+            .setTitle("本机图片视频")
+            .setItems(arrayOf("拍照", "相册选择（可多选）")) { _, which ->
+                if (which == 0) launchCameraCapture() else launchMediaPicker()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 拍照投屏：相机把照片写进应用缓存文件，之后走与相册选择相同的上传 / 投屏链路 */
+    private fun launchCameraCapture() {
+        val cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!cameraGranted) {
+            capturePermissionLauncher.launch(Manifest.permission.CAMERA)
+            return
+        }
+        val file = runCatching { createCaptureFile() }.getOrNull()
+        if (file == null) {
+            toast("无法创建照片文件")
+            return
+        }
+        val uri = runCatching {
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        }.getOrNull()
+        if (uri == null) {
+            toast("无法准备相机输出")
+            return
+        }
+        pendingCaptureFile = file
+        runCatching { captureLauncher.launch(uri) }.onFailure {
+            pendingCaptureFile = null
+            toast("无法打开相机")
+        }
+    }
+
+    /** 每张照片一个文件，避免连拍时互相覆盖 */
+    private fun createCaptureFile(): File {
+        val directory = File(cacheDir, "captures").apply { mkdirs() }
+        return File(directory, "capture-${System.currentTimeMillis()}.jpg")
+    }
+
+    /**
+     * 拍照结果加入投屏队列：本次拍照的第一张先清空队列，之后逐张追加，
+     * 这样一次课可以连拍多张，用「上一个 / 下一个」在大屏切换。
+     */
+    private fun addCaptureToQueue(file: File) {
+        val uri = runCatching {
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        }.getOrNull()
+        if (uri == null) {
+            toast("照片读取失败")
+            return
+        }
+        if (!captureSessionActive) {
+            mediaQueue.clear()
+            mediaQueueIndex = -1
+            captureSessionActive = true
+        }
+        mediaQueue.add(LocalMediaItem(uri = uri, name = file.name))
+        if (activeRoomCode == null) {
+            toast("请先连接教室端，照片已加入队列")
+            return
+        }
+        castMediaQueueItem(mediaQueue.lastIndex)
+        promptContinueCapture()
+    }
+
+    /** 拍完一张后询问是否继续拍，方便连拍多张 */
+    private fun promptContinueCapture() {
+        AlertDialog.Builder(this)
+            .setTitle("已拍 ${mediaQueue.size} 张")
+            .setMessage("继续拍照会把新照片接在队列后面，可用「上一个 / 下一个」在大屏切换。")
+            .setPositiveButton("继续拍照") { _, _ -> launchCameraCapture() }
+            .setNegativeButton("完成", null)
+            .show()
     }
 
     private fun launchMediaPicker() {

@@ -2,4 +2,6 @@
 <paths>
     <cache-path name="shared_files" path="shared/" />
     <cache-path name="apk_updates" path="apk_updates/" />
+    <!-- 拍照投屏：相机拍下的照片先落在这里，上传后即可清理 -->
+    <cache-path name="captures" path="captures/" />
 </paths>

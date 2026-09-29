@@ -17,6 +17,13 @@
         android:name="android.hardware.camera.autofocus"
         android:required="false" />
 
+    <!-- Android 11+ 包可见性：拍照投屏要能解析系统相机（否则查询不到相机应用） -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:hardwareAccelerated="true"
