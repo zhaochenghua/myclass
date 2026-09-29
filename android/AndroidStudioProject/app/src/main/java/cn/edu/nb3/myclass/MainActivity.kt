@@ -59,6 +59,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
@@ -696,7 +697,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener { checkCampusAccess() }
         })
         root.addView(versionLabel())
-        setContentView(root)
+        showScreenView(root)
     }
 
     private fun checkCampusAccess() {
@@ -869,7 +870,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             // 竖屏：垂直结构
             val root = baseColumn().apply {
@@ -891,7 +892,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(statusView)
             root.addView(footerLabel())
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -1060,7 +1061,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             // 竖屏：垂直结构
             val root = baseColumn().apply {
@@ -1078,7 +1079,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(footerLabel().apply {
                 (layoutParams as LinearLayout.LayoutParams).topMargin = dp(2)
             })
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -1126,7 +1127,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ).apply { topMargin = dp(20) }
         }
         root.addView(progressView)
-        setContentView(root)
+        showScreenView(root)
         statusText = progressView
     }
 
@@ -1151,7 +1152,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ).apply { topMargin = dp(20) }
             setOnClickListener { showConnectScreen() }
         })
-        setContentView(root)
+        showScreenView(root)
 
         Thread {
             runCatching {
@@ -1250,7 +1251,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             ).apply { topMargin = dp(8) }
             setOnClickListener { showConnectScreen() }
         })
-        setContentView(root)
+        showScreenView(root)
     }
 
     private val managementPickerLauncher = registerForActivityResult(
@@ -1445,6 +1446,41 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    /**
+     * 课件播放页是否处于沉浸式全屏（隐藏状态栏与导航栏）。
+     * 平板横屏下这两条系统栏约吃掉 100px 高度，收起来后课件能显示得更大。
+     */
+    private var immersiveFullscreen = false
+
+    /**
+     * 课件播放页开沉浸式全屏，其余页面恢复系统栏
+     * （从边缘上滑可临时唤出系统栏，不影响手势导航）。
+     */
+    private fun applyImmersiveFullscreen(enabled: Boolean) {
+        if (!enabled && !immersiveFullscreen) return
+        immersiveFullscreen = enabled
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (enabled) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    /**
+     * 所有页面切换的统一出口：切换内容视图，并按当前页面决定是否沉浸式全屏。
+     * 只有课件播放页全屏，其余页面（连接码、菜单、课件列表等）保持系统栏。
+     */
+    private fun showScreenView(view: View) {
+        setContentView(view)
+        applyImmersiveFullscreen(
+            currentScreen == Screen.Courseware &&
+                coursewareSubScreen == CoursewareSubScreen.Playback
+        )
+    }
+
     private fun buildOrientationSelector(): LinearLayout {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1564,7 +1600,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             // 竖屏：垂直结构
             val root = baseColumn().apply {
@@ -1579,7 +1615,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(coursewareBtn)
             root.addView(statusText)
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -1860,7 +1896,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         })
         root.addView(studentRollButton())
         root.addView(versionLabel())
-        setContentView(root)
+        showScreenView(root)
         startOrientationTracking()
 
         runCatching {
@@ -2021,7 +2057,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             // 竖屏：垂直结构
             val root = baseColumn().apply {
@@ -2033,7 +2069,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(backBtn)
             root.addView(statusText)
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -2128,7 +2164,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             // 竖屏：垂直结构
             val root = baseColumn().apply {
@@ -2141,7 +2177,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(backBtn)
             root.addView(statusText)
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -2391,7 +2427,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             val root = baseColumn().apply {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
@@ -2399,7 +2435,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(titleText("服务器图片视频", 28f))
             root.addView(statusText)
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -2492,7 +2528,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             val root = baseColumn().apply {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
@@ -2551,7 +2587,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(backBtn)
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -2680,7 +2716,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             val root = baseColumn().apply {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
@@ -2688,7 +2724,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(titleText("服务器课件", 28f))
             root.addView(statusText)
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -2801,7 +2837,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             // 竖屏
             val root = baseColumn().apply {
@@ -2869,7 +2905,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(uploadBtn)
             root.addView(backBtn)
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -3361,7 +3397,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             // 竖屏
             val root = baseColumn().apply {
@@ -3398,7 +3434,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 })
             }
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -3743,7 +3779,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
 
-        setContentView(root)
+        showScreenView(root)
         // Android 15+ 默认边到边绘制，按系统栏留出安全边距，
         // 否则横屏时右侧竖栏顶部的按钮会被状态栏挡住
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
@@ -3807,15 +3843,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareUploadInProgress = false
 
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        // 横屏分两种，与 iOS 端 iPad / 手机的分化一致：
+        // - 平板（smallestScreenWidthDp ≥ 600）：控制项收进底部横条，课件占满整屏宽度；
+        // - 手机：高度紧张，继续用右侧竖栏，避免多条横向工具条吃掉本就有限的高度。
+        val sideRailLandscape = isLandscape && resources.configuration.smallestScreenWidthDp < 600
+        val tabletLandscape = isLandscape && !sideRailLandscape
         val root = LinearLayout(this).apply {
-            // 横屏改为左右布局：预览占满左侧剩余空间，控制栏收进右侧竖栏，
-            // 避免多条横向工具条吃掉横屏本就有限的高度
-            orientation = if (isLandscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            // 只有手机横屏走左右布局（预览占满左侧剩余空间，控制栏收进右侧竖栏）；
+            // 平板横屏与竖屏都是上下布局（预览在上，控制项在下）
+            orientation = if (sideRailLandscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
         }
         val imageHost = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            layoutParams = if (isLandscape) {
+            layoutParams = if (sideRailLandscape) {
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             } else {
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -3824,6 +3865,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val zoomable = ZoomableImageView(this).apply {
             // 课件默认宽度充满：两侧不留黑边，长页上下拖动查看
             fitMode = ImageFitMode.FitWidth
+            // 横向课件（4:3 / 16:9）在横屏舞台上只差一点点放不下时收窄成"整页刚好放下"，
+            // 避免底部被裁、一张课件要按两次才翻得过去（对齐 iOS 端 applyCoursewareFit）
+            fitPageForWidePages = true
         }
         imageHost.addView(
             zoomable,
@@ -3848,6 +3892,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         var refreshAnnotationBar: (() -> Unit)? = null
         var applyCastMode: (() -> Unit)? = null
+        // 平板横屏底部横条的第二行（画笔工具）：非空时由 applyCastMode 随模式显隐
+        var penToolsRow: LinearLayout? = null
 
         // 模式栏：手势 / 画笔切换，常驻显示
         val modeBar = LinearLayout(this).apply {
@@ -3869,9 +3915,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         modeBar.addView(modeButton)
 
-        modeBar.addView(compactButton(studentRollButton("抽学生"), 12f).apply {
+        val rollButton = compactButton(studentRollButton("抽学生"), 12f).apply {
             layoutParams = LinearLayout.LayoutParams(dp(80), dp(40)).apply { marginStart = dp(6) }
-        })
+        }
+        modeBar.addView(rollButton)
 
         // 翻页栏：手势与画笔模式下都常驻，翻页同时更新手机预览与大屏
         val pageBar = LinearLayout(this).apply {
@@ -3943,14 +3990,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        gestureBar.addView(compactButton(primaryButton("返回主菜单"), 14f).apply {
+        val gestureBackButton = compactButton(primaryButton("返回主菜单"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) }
             setOnClickListener { pauseCoursewareAndReturnMenu() }
-        })
-        gestureBar.addView(compactButton(secondaryButton("结束投屏"), 14f).apply {
+        }
+        gestureBar.addView(gestureBackButton)
+        val gestureEndButton = compactButton(secondaryButton("结束投屏"), 14f).apply {
             layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
             setOnClickListener { closeCoursewareAndReturnMenu() }
-        })
+        }
+        gestureBar.addView(gestureEndButton)
         // 画笔模式工具栏：颜色 / 板擦 + 撤销 / 清空
         val penBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -4095,13 +4144,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface)
                 }
             )
-            val showBar = if (penMode) penBar else gestureBar
-            val hideBar = if (penMode) gestureBar else penBar
-            hideBar.animate().cancel()
-            hideBar.visibility = View.GONE
-            showBar.visibility = View.VISIBLE
-            showBar.alpha = 0f
-            showBar.animate().alpha(1f).setDuration(150).start()
+            val penRow = penToolsRow
+            if (penRow != null) {
+                // 平板横屏：翻页/模式行常驻底部，画笔工具折成下方第二行随模式显隐
+                penRow.visibility = if (penMode) View.VISIBLE else View.GONE
+            } else {
+                // 工具栏切换做淡入过渡，避免画面跳变
+                val showBar = if (penMode) penBar else gestureBar
+                val hideBar = if (penMode) gestureBar else penBar
+                hideBar.animate().cancel()
+                hideBar.visibility = View.GONE
+                showBar.visibility = View.VISIBLE
+                showBar.alpha = 0f
+                showBar.animate().alpha(1f).setDuration(150).start()
+            }
             refreshAnnotationBar?.invoke()
         }
 
@@ -4271,8 +4327,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         applyCastMode?.invoke()
 
-        if (isLandscape) {
-            // 右侧竖栏自上而下排布：模式 / 翻页 / 跳页 / 工具栏，左侧空间全部留给课件预览
+        if (sideRailLandscape) {
+            // 手机横屏：右侧竖栏自上而下排布——模式 / 翻页 / 跳页 / 工具栏，左侧空间全部留给课件预览
             val sidePanel = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -4293,6 +4349,82 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             scroller.addView(sidePanel)
             root.addView(imageHost)
             root.addView(scroller)
+        } else if (tabletLandscape) {
+            // 平板横屏：控制项拍平成底部横条（对齐 iOS「控制项收进屏幕底部横条，课件占满整屏」），
+            // 课件因此拿到整屏宽度——原来右侧 240dp 竖栏占了屏宽约 19%；
+            // 画笔工具一行放不下时折成第二行，与 iOS 画笔模式的自动折行一致。
+            val bottomBar = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val pageRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(2), dp(10), dp(2))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
+            }
+            // 这些控件原先挂在模式栏 / 翻页栏 / 跳页行 / 手势栏上，搬进新行前必须先脱离旧父容器，
+            // 否则 addView 会抛 "The specified child already has a parent"。
+            fun takeOver(view: View) {
+                (view.parent as? ViewGroup)?.removeView(view)
+            }
+            // 把原先分散在模式栏 / 翻页栏 / 跳页行 / 手势栏里的控件搬进同一行
+            fun addToPageRow(view: View, width: Int, weight: Float = 0f, start: Int = 0, end: Int = 0) {
+                takeOver(view)
+                view.layoutParams = LinearLayout.LayoutParams(
+                    width,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    weight
+                ).apply {
+                    marginStart = dp(start)
+                    marginEnd = dp(end)
+                }
+                pageRow.addView(view)
+            }
+            addToPageRow(modeButton, dp(96), end = 6)
+            addToPageRow(rollButton, dp(80), end = 6)
+            addToPageRow(prevButton, 0, weight = 1f, end = 6)
+            addToPageRow(pageLabel, dp(88))
+            addToPageRow(nextButton, 0, weight = 1f, start = 6)
+            addToPageRow(pageInput, 0, weight = 1f, start = 6, end = 8)
+            addToPageRow(jumpButton, 0, weight = 1f, end = 8)
+            addToPageRow(gestureBackButton, 0, weight = 1f, end = 6)
+            addToPageRow(gestureEndButton, 0, weight = 1f, start = 6)
+
+            // 第二行：画笔模式的颜色 / 板擦 / 撤销 / 清空，手势模式下隐藏
+            val penRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), 0, dp(10), dp(2))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(44)
+                )
+                visibility = if (imageCastPenMode) View.VISIBLE else View.GONE
+            }
+            colorDots.forEach {
+                takeOver(it)
+                penRow.addView(it)
+            }
+            listOf(eraserButton, undoButton, clearButton).forEach { button ->
+                takeOver(button)
+                button.layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                    marginStart = dp(8)
+                }
+                penRow.addView(button)
+            }
+            penToolsRow = penRow
+
+            bottomBar.addView(pageRow)
+            bottomBar.addView(penRow)
+            root.addView(imageHost)
+            root.addView(bottomBar)
         } else {
             root.addView(imageHost)
             root.addView(modeBar)
@@ -4302,7 +4434,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(penBar)
         }
 
-        setContentView(root)
+        showScreenView(root)
         // Android 15+（targetSdk 35）默认边到边绘制，内容会延伸到系统栏下方。
         // 这里按系统栏给根布局留出安全边距，否则横屏时右侧竖栏顶部的按钮会被状态栏压住。
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
@@ -4644,7 +4776,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         root.addView(versionLabel())
 
         // 横屏时内容可能超过屏幕高度，用滚动容器兜底
-        setContentView(
+        showScreenView(
             ScrollView(this).apply {
                 isFillViewport = true
                 addView(root)
@@ -4801,7 +4933,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             rightPanel.addView(versionLabel())
             root.addView(leftPanel)
             root.addView(rightPanel)
-            setContentView(root)
+            showScreenView(root)
         } else {
             val root = baseColumn().apply {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
@@ -4811,7 +4943,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(backBtn)
             root.addView(reselectBtn)
             root.addView(versionLabel())
-            setContentView(root)
+            showScreenView(root)
         }
     }
 
@@ -5353,7 +5485,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             audioButtonLayoutParams(isLandscape)
         )
 
-        setContentView(root)
+        showScreenView(root)
         startOrientationTracking()
 
         runCatching {

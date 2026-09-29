@@ -1,6 +1,7 @@
 package cn.edu.nb3.myclass
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -90,6 +91,27 @@ class ZoomableImageView(context: Context) : View(context) {
 
     /** 当前画笔颜色（#RRGGBB），取自 AnnotationPalette */
     var penColorHex: String = AnnotationPalette.DEFAULT_COLOR
+
+    /**
+     * 横向课件（宽高比 ≥ 1.2，即 4:3 / 16:9 这类 PPT 页）在横屏舞台上按宽度铺满时，
+     * 只要舞台比课件更扁就会被裁掉底部一点点，"下一屏"会据此判定"一屏放不下"，
+     * 先做本地逐屏滚动，于是一张课件要按两次才翻得过去（与 iOS 端同款问题）。
+     *
+     * 开启本开关后，这类课件会收窄到"整页刚好放得下"（两侧各留一点黑边），一次翻页；
+     * 竖向长课件（A4 等）仍按宽度铺满 + 逐屏滚动，否则收窄后小得没法看。
+     *
+     * 与 iOS 端 `web/ios/js/app.js` 的 `applyCoursewareFit` 策略一致。
+     */
+    var fitPageForWidePages: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            measureFit()
+            clampTranslation()
+            markAnnotationDirty()
+            notifyViewport(force = true)
+            invalidate()
+        }
 
     /** 当前是否为板擦 */
     var penEraser: Boolean = false
@@ -393,13 +415,46 @@ class ZoomableImageView(context: Context) : View(context) {
             return
         }
         val (imageWidth, imageHeight) = rotatedSize(image)
-        fitScale = if (fitMode == ImageFitMode.FitWidth) {
-            viewWidth / imageWidth
-        } else {
+        val fillWidthScale = viewWidth / imageWidth
+        val contain = fitMode != ImageFitMode.FitWidth ||
+            shouldFitWholePage(imageWidth.toFloat(), imageHeight.toFloat(), viewWidth, viewHeight, fillWidthScale)
+        fitScale = if (contain) {
             min(viewWidth / imageWidth, viewHeight / imageHeight)
+        } else {
+            fillWidthScale
         }
         fitWidth = imageWidth * fitScale
         fitHeight = imageHeight * fitScale
+    }
+
+    /**
+     * 是否需要"整页刚好放下"（与 iOS `applyCoursewareFit` 判定一致）：
+     * 1. 只在 FitWidth 模式、且开启了 [fitPageForWidePages] 时才可能收窄；
+     * 2. 宽高比 < 1.2 的竖向长课件不收窄（保持铺满 + 逐屏滚动）；
+     * 3. 按宽度铺开本来就放得下的不收窄（没有收益，不必留黑边）；
+     * 4. 收窄带来的宽度损失超过阈值时也不收窄——宁可裁切（仍可逐屏滚动），
+     *    手机横屏舞台比课件扁得多，宁可多让一点宽度也要整页完整、一次翻页。
+     */
+    private fun shouldFitWholePage(
+        imageWidth: Float,
+        imageHeight: Float,
+        viewWidth: Float,
+        viewHeight: Float,
+        fillWidthScale: Float
+    ): Boolean {
+        if (!fitPageForWidePages) return false
+        val aspect = imageWidth / imageHeight
+        if (aspect < FIT_PAGE_MIN_ASPECT) return false
+        if (imageHeight * fillWidthScale <= viewHeight + 1f) return false
+        val widthLoss = 1f - (viewHeight * aspect) / viewWidth
+        val maxLoss = if (shortLandscape()) 1f else FIT_TABLET_MAX_WIDTH_LOSS
+        return widthLoss <= maxLoss
+    }
+
+    /** 手机横屏（高度紧张）判定，与 iOS 的 (orientation: landscape) and (max-height: 30rem) 对齐 */
+    private fun shortLandscape(): Boolean {
+        val config = context.resources.configuration
+        return config.orientation == Configuration.ORIENTATION_LANDSCAPE && config.screenHeightDp <= 480
     }
 
     /**
@@ -469,7 +524,9 @@ class ZoomableImageView(context: Context) : View(context) {
         }
         val displayHeight = fitHeight * userScale
         val viewHeight = height.toFloat()
-        if (displayHeight <= viewHeight) {
+        // 1px 容差：整页放下的课件高度可能与舞台差不到 1px（亚像素舍入），
+        // 这种情况必须当成"整页可显示"，否则一张课件要按两次才翻得过去（与 iOS 端一致）。
+        if (displayHeight <= viewHeight + 1f) {
             // 手机端整页可显示：大屏（横屏）往往是长页。改用大屏滚动进度驱动大屏逐屏下滚，
             // 滚到底再翻页，避免手机整页直接翻页导致大屏不滚动。
             return stepBigScreen(direction)
@@ -930,6 +987,12 @@ class ZoomableImageView(context: Context) : View(context) {
     companion object {
         private const val MAX_SCALE = 8f
         private const val DOUBLE_TAP_SCALE = 2.5f
+
+        /** 宽高比 ≥ 1.2 视为横向课件（4:3 = 1.33，16:9 = 1.78），见 [fitPageForWidePages] */
+        private const val FIT_PAGE_MIN_ASPECT = 1.2f
+
+        /** 平板舞台与课件比例接近，只在几乎不损失宽度时才收窄（对齐 iOS CW_FIT_TABLET_MAX_WIDTH_LOSS） */
+        private const val FIT_TABLET_MAX_WIDTH_LOSS = 0.03f
         private const val NOTIFY_INTERVAL_MS = 80L
         /** 单次批量上报的最大点数，防止弱网下积压过多 */
         private const val MAX_PENDING_POINTS = 12
