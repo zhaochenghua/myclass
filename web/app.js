@@ -1,4 +1,5 @@
-const coursewarePages = import('./coursewarePages.mjs');
+// Shared with the iPhone/iPad app; it must live inside the iOS Service Worker scope.
+const coursewarePages = import('./ios/js/coursewarePages.mjs');
 let studentRoller = null;
 // A document reload starts a new visit; a socket reconnect does not.
 let viewerJoinedThisPage = false;

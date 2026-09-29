@@ -5,7 +5,7 @@ const path = require('node:path');
 const { startTestServer } = require('./testSupport');
 
 test('animation states keep original page labels and jump to the first state; hidden slides never alias another slide', async () => {
-  const { pageMapping, slidePage, slideCount, firstState } = await import('../web/coursewarePages.mjs');
+  const { pageMapping, slidePage, slideCount, firstState } = await import('../web/ios/js/coursewarePages.mjs');
   const conversion = { slideCount: 4, statePages: [1, 2, 2, 2, 4, 4] };
   const cw = { page: 2, pageCount: 6, mapping: pageMapping(conversion, 6) };
   for (const physical of [2, 3, 4]) { cw.page = physical; assert.equal(slidePage(cw), 2); }

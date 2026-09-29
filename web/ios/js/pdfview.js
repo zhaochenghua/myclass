@@ -94,9 +94,12 @@ export async function openPdfDocument(url) {
 
 /**
  * 把第 pageNumber 页（1 基）渲染到 canvas，返回页面像素尺寸。
- * maxEdge 限制渲染分辨率，避免整本大课件一次性占满内存（对齐 Android DEFAULT_MAX_EDGE=2048）。
+ * maxEdge 限制渲染分辨率，避免整本大课件一次性占满内存。
+ * 数值比 Android 的 DEFAULT_MAX_EDGE=2048 大一档：iPad 横屏已改为整屏显示课件
+ * （宽约 1117 CSS px，2x 屏即 ~2234 物理像素），2048 的长边会被拉伸发虚。
+ * 缩放上限 4 与 Android CoursewarePdfRenderer 的 coerceIn(0.25f, 4f) 保持一致。
  */
-export async function renderPdfPage(document, pageNumber, canvas, maxEdge = 2048) {
+export async function renderPdfPage(document, pageNumber, canvas, maxEdge = 2560) {
   const total = document.numPages || 1;
   const target = Math.min(Math.max(1, Math.round(pageNumber) || 1), total);
   const page = await document.getPage(target);
@@ -104,7 +107,7 @@ export async function renderPdfPage(document, pageNumber, canvas, maxEdge = 2048
   try {
     const base = page.getViewport({ scale: 1 });
     const longest = Math.max(base.width, base.height) || 1;
-    const scale = Math.min(maxEdge / longest, 2.5);
+    const scale = Math.min(maxEdge / longest, 4);
     const viewport = page.getViewport({ scale });
 
     canvas.width = Math.max(1, Math.floor(viewport.width));

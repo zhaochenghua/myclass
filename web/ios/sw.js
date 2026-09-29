@@ -8,15 +8,15 @@
 
 // 每次发版请同时提升 CACHE_NAME 与下方资源上的 ?v= 版本号（与 index.html 保持一致），
 // 否则旧设备会继续命中旧缓存；页面内的"清除缓存并更新"是用户的兜底手段。
-const CACHE_NAME = 'myclass-ios-v9-update-check';
+const CACHE_NAME = 'myclass-ios-v13-keyboard-viewport';
 const SHELL_FILES = [
   './',
   './index.html',
   './style.css',
-  './style.css?v=20260920b',
+  './style.css?v=20260923a',
   './manifest.webmanifest',
   './js/app.js',
-  './js/app.js?v=20260920b',
+  './js/app.js?v=20260923b',
   './js/pipeline.js?v=20260920a',
   './js/mediaGeometry.js?v=20260920a',
   './js/classroom.js?v=20260919f',
@@ -29,6 +29,8 @@ const SHELL_FILES = [
   './js/courseware.js',
   './js/annotation.js',
   './js/pdfview.js',
+  // 必须留在 ios/ 作用域内，否则离线时 import 失败会让整个应用起不来
+  './js/coursewarePages.mjs',
   './icons/icon.svg',
   './icons/icon-180.png',
   './icons/icon-192.png',

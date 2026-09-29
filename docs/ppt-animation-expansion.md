@@ -36,6 +36,10 @@ LibreOffice 的原生动画播放能力与其普通 PDF 导出能力不能混为
 ## 功能边界
 
 - 支持主动画序列中普通对象、图片、整个组合对象和段落的出现/消失。
+- 这里的“出现/消失”仅指 **visibility 切换类**效果。淡入、飞入、浮入、擦除等基于
+  透明度或位移的入场/退场效果不在支持范围内：它们不会被展开，而且对应对象会从
+  该页的初始状态就可见（不会等到点击），等于提前显示内容。实测确认
+  `unsupportedSlides` 会记录这类幻灯片，但客户端目前不展示该字段。
 - 一次点击关联的“同时/随后”效果合并为一个静态结束状态，不逐帧展示移动过程。
 - 保留点击前的初始状态；隐藏幻灯片不输出。自动启动动画可能形成额外初始状态。
 - 不处理强调、运动路径、视频播放、点击特定形状的交互触发器、任意分支或循环。
@@ -49,7 +53,7 @@ LibreOffice 的原生动画播放能力与其普通 PDF 导出能力不能混为
 
 ## 部署
 
-需同时更新服务端、网页（含 `web/coursewarePages.mjs` 与 iOS 网页端）和 Android APK。
+需同时更新服务端、网页（含 `web/ios/js/coursewarePages.mjs` 与 iOS 网页端）和 Android APK。
 旧客户端仍可播放，但可能把动画状态数显示成页数。部署前备份整个课件目录和 `server/data`。
 至少包含 `server/server.js`、`server/coursewareStore.js`、
 `server/expandAnimations.js` 和完整的 `server/vendor/expand-animations/`。
@@ -75,7 +79,13 @@ LIBREOFFICE_PATH=/usr/bin/libreoffice
 
 转换串行执行，避免同时占用大量内存。超时终止本任务的 Office 进程组并清理
 临时目录；不终止其他 Office 会话。展开失败会明确报错，不悄悄退回缺失步骤的
-静态 PDF。反向代理上传超时也应覆盖转换耗时。
+静态 PDF。反向代理上传超时也必须覆盖转换耗时，否则课件会被代理判为超时（504），
+而服务端仍在转换并最终入库。nginx 需显式配置，默认 `proxy_read_timeout` 只有 60s：
+
+```nginx
+proxy_read_timeout 300s;
+proxy_send_timeout 300s;
+```
 
 内容池使用 `expand-animations-v2` 转换版本隔离旧缓存。同一版本的重复上传
 复用结果；旧课件及 URL 不被修改。要让旧 PPT 使用新功能，重新上传即可。
