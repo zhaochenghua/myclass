@@ -3472,15 +3472,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareUploadInProgress = false
 
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        // 与课件投屏页一致：平板横屏把控制项收进底部横条，图片占满整屏宽度；
+        // 手机横屏高度紧张，继续用右侧竖栏。
+        val sideRailLandscape = isLandscape && resources.configuration.smallestScreenWidthDp < 600
+        val tabletLandscape = isLandscape && !sideRailLandscape
         val root = LinearLayout(this).apply {
-            // 横屏改为左右布局：预览占满左侧，控制栏收进右侧竖栏
-            orientation = if (isLandscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            // 只有手机横屏走左右布局（预览占满左侧，控制栏收进右侧竖栏）
+            orientation = if (sideRailLandscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
         }
 
         val imageHost = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            layoutParams = if (isLandscape) {
+            layoutParams = if (sideRailLandscape) {
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             } else {
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -3511,6 +3515,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         // 模式提示 + 切换按钮：常驻显示，是手势 / 画笔两种模式的唯一入口
         var refreshAnnotationBar: (() -> Unit)? = null
         var applyImageCastMode: (() -> Unit)? = null
+        // 平板横屏底部横条的第二行（画笔工具）：非空时由 applyImageCastMode 随模式显隐
+        var penToolsRow: LinearLayout? = null
 
         val modeBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -3535,9 +3541,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         modeBar.addView(modeButton)
 
         // 手势模式工具栏：旋转 / 返回主菜单 / 结束投屏
-        modeBar.addView(compactButton(studentRollButton("抽学生"), 12f).apply {
+        val rollButton = compactButton(studentRollButton("抽学生"), 12f).apply {
             layoutParams = LinearLayout.LayoutParams(dp(80), dp(40)).apply { marginStart = dp(6) }
-        })
+        }
+        modeBar.addView(rollButton)
         val gestureBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -3726,14 +3733,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface)
                 }
             )
-            // 工具栏切换做淡入过渡，避免画面跳变
-            val showBar = if (penMode) penBar else gestureBar
-            val hideBar = if (penMode) gestureBar else penBar
-            hideBar.animate().cancel()
-            hideBar.visibility = View.GONE
-            showBar.visibility = View.VISIBLE
-            showBar.alpha = 0f
-            showBar.animate().alpha(1f).setDuration(150).start()
+            val penRow = penToolsRow
+            if (penRow != null) {
+                // 平板横屏：手势行常驻底部，画笔工具折成下方第二行随模式显隐
+                penRow.visibility = if (penMode) View.VISIBLE else View.GONE
+            } else {
+                // 工具栏切换做淡入过渡，避免画面跳变
+                val showBar = if (penMode) penBar else gestureBar
+                val hideBar = if (penMode) gestureBar else penBar
+                hideBar.animate().cancel()
+                hideBar.visibility = View.GONE
+                showBar.visibility = View.VISIBLE
+                showBar.alpha = 0f
+                showBar.animate().alpha(1f).setDuration(150).start()
+            }
             refreshAnnotationBar?.invoke()
         }
 
@@ -3745,8 +3758,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         applyImageCastMode?.invoke()
 
-        if (isLandscape) {
-            // 右侧竖栏自上而下排布，左侧空间全部留给图片预览
+        if (sideRailLandscape) {
+            // 手机横屏：右侧竖栏自上而下排布，左侧空间全部留给图片预览
             val sidePanel = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -3768,6 +3781,79 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             scroller.addView(sidePanel)
             root.addView(imageHost)
             root.addView(scroller)
+        } else if (tabletLandscape) {
+            // 平板横屏：控制项拍平成底部横条（与课件投屏页一致），
+            // 图片预览因此拿到整屏宽度——原来右侧 240dp 竖栏占了屏宽约 19%。
+            val bottomBar = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val actionRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(2), dp(10), dp(2))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
+            }
+            // 控件原先挂在模式栏 / 手势栏上，搬进新行前必须先脱离旧父容器
+            fun takeOver(view: View) {
+                (view.parent as? ViewGroup)?.removeView(view)
+            }
+            fun addToActionRow(view: View, width: Int, weight: Float = 0f, start: Int = 0, end: Int = 0) {
+                takeOver(view)
+                view.layoutParams = LinearLayout.LayoutParams(
+                    width,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    weight
+                ).apply {
+                    marginStart = dp(start)
+                    marginEnd = dp(end)
+                }
+                actionRow.addView(view)
+            }
+            addToActionRow(modeButton, dp(96), end = 6)
+            addToActionRow(rollButton, dp(80), end = 6)
+            addToActionRow(rotateButton, 0, weight = 1f, end = 6)
+            addToActionRow(gestureBackButton, 0, weight = 1f, end = 6)
+            addToActionRow(gestureEndButton, 0, weight = 1f)
+
+            // 第二行：画笔模式的颜色 / 板擦 / 撤销 / 清空，手势模式下隐藏
+            val penRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), 0, dp(10), dp(2))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(44)
+                )
+                visibility = if (imageCastPenMode) View.VISIBLE else View.GONE
+            }
+            colorDots.forEach {
+                takeOver(it)
+                penRow.addView(it)
+            }
+            listOf(eraserButton, undoButton, clearButton).forEach { button ->
+                takeOver(button)
+                button.layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                    marginStart = dp(8)
+                }
+                penRow.addView(button)
+            }
+            penToolsRow = penRow
+
+            bottomBar.addView(actionRow)
+            bottomBar.addView(penRow)
+            // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
+            if (mediaQueue.size > 1) {
+                bottomBar.addView(buildMediaQueueRow())
+            }
+            root.addView(imageHost)
+            root.addView(bottomBar)
         } else {
             root.addView(imageHost)
             root.addView(modeBar)
