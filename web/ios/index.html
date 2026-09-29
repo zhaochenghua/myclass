@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20260923a" />
+    <link rel="stylesheet" href="./style.css?v=20260929a" />
   </head>
   <body>
     <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
@@ -156,10 +156,14 @@
           <div class="panel-side">
             <h1 class="title">图片视频投屏</h1>
             <p class="footnote" id="mediaSourceStatus">
-              可一次选择多个图片或视频，投屏中用“上一个/下一个”直接切换，无需重新选择
+              可一次选择多个图片或视频，投屏中用“上一个/下一个”直接切换，无需重新选择；
+              也可以直接“拍照投屏”
             </p>
           </div>
           <div class="panel-main">
+            <button class="btn btn-primary" id="mediaCameraSourceButton" type="button">
+              拍照投屏
+            </button>
             <button class="btn btn-primary" id="mediaLocalButton" type="button">
               本机图片视频（可多选）
             </button>
@@ -217,6 +221,8 @@
             <button class="btn btn-nav" id="mediaRotate" type="button">旋转90°</button>
             <button class="btn btn-nav" id="mediaResetView" type="button">复位视图</button>
             <button class="btn btn-nav" id="mediaPenButton" type="button">画笔</button>
+            <!-- 投屏过程中也能随手拍一张接在队列后面（与安卓端一致） -->
+            <button class="btn btn-nav" id="mediaCameraButton" type="button">拍照</button>
           </div>
           <div class="media-row" id="mediaSwitchRow" hidden>
             <button class="btn btn-nav" id="mediaPrev" type="button">◀ 上一个</button>
@@ -372,6 +378,6 @@
 
     <div class="toast" id="toast" hidden></div>
 
-    <script type="module" src="./js/app.js?v=20260923b"></script>
+    <script type="module" src="./js/app.js?v=20260929a"></script>
   </body>
 </html>

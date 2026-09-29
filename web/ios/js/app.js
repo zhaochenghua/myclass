@@ -860,6 +860,7 @@ function mediaKindOf(nameOrUrl) {
 // iOS（尤其主屏 PWA）对临时创建、未挂载到 DOM 的 <input type=file> 行为异常，
 // 因此与单图投屏一样把 input 持久挂到 DOM。
 let mediaFileInput = null;
+let mediaCameraInput = null;
 let mediaPreviewUrl = null;
 
 function showMediaSource() {
@@ -871,6 +872,7 @@ function openMediaPicker() {
   if (!mediaFileInput) {
     const input = document.createElement('input');
     input.type = 'file';
+    input.id = 'mediaPickerInput';
     input.accept = 'image/*,video/*';
     input.multiple = true;
     input.style.position = 'fixed';
@@ -885,6 +887,39 @@ function openMediaPicker() {
   }
   mediaFileInput.value = '';
   mediaFileInput.click();
+}
+
+/**
+ * 拍照投屏：与安卓端的「拍照」入口对应。
+ * iPhone Safari 会因 capture="environment" 直接调起相机拍照；拍完仍是系统的
+ * “使用照片 / 重拍”确认页（网页层无法去除，也无法像原生那样连拍 + 缩略图删除）；
+ * iPad 与桌面浏览器会忽略 capture，退化成普通文件选择器（只能从相册里选）。
+ * 选好的照片追加到投屏队列后面并立即投屏，因此可以反复“拍照”把多张接在一起。
+ */
+function openMediaCamera() {
+  if (!state.joined) {
+    toast('请先连接教室端', { warn: true });
+    return;
+  }
+  if (!mediaCameraInput) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.id = 'mediaCameraInput';
+    input.accept = 'image/*';
+    input.setAttribute('capture', 'environment');
+    // 同 openMediaPicker：必须真实挂到 DOM，否则 iOS 不触发选择
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.top = '0';
+    input.style.opacity = '0';
+    input.style.width = '1px';
+    input.style.height = '1px';
+    input.addEventListener('change', handleMediaPicked);
+    document.body.appendChild(input);
+    mediaCameraInput = input;
+  }
+  mediaCameraInput.value = ''; // 清空，允许连拍多张
+  mediaCameraInput.click();
 }
 
 async function handleMediaPicked(event) {
@@ -1056,9 +1091,71 @@ function bindMediaGestures() {
     return !!it && it.kind === 'image' && !$('mediaPreview').hidden;
   };
 
+  // ---- 切换手势：点动（左半边上一张 / 右半边下一张）+ 横向滑动 ----
+  // 阈值与课件翻页共用同一套常量（CW_TAP_* / CW_SWIPE_* / CW_PINCH_*），行为保持一致：
+  // 点动＝几乎没移动且按得不久，抬手立即生效；滑动＝横向位移足够大且明显大于纵向。
+  // 画笔模式单指要留给写字，两种手势都要求双指；队列只有一张时不做任何事。
+  let paging = null;
+  const beginPaging = (pts) => {
+    paging = {
+      fingers: pts.length,
+      start: pts.length >= 2 ? centerOf(pts) : { x: pts[0].x, y: pts[0].y },
+      startPoints: pts.map((p) => ({ x: p.x, y: p.y })),
+      startedAt: Date.now(),
+      bestDx: 0,
+      bestDy: 0,
+      moved: false,
+      pinched: false
+    };
+  };
+  const trackPaging = (pts) => {
+    if (!paging || pts.length === 0) return;
+    // 中途加/减手指：既不算点动、也不再累计滑动位移
+    if (pts.length !== paging.fingers) {
+      paging.moved = true;
+      return;
+    }
+    for (let i = 0; i < pts.length; i += 1) {
+      const from = paging.startPoints[i];
+      if (Math.hypot(pts[i].x - from.x, pts[i].y - from.y) > CW_TAP_MOVE_SLOP_PX) {
+        paging.moved = true;
+      }
+    }
+    const center = pts.length >= 2 ? centerOf(pts) : pts[0];
+    const dx = center.x - paging.start.x;
+    const dy = center.y - paging.start.y;
+    if (Math.abs(dx) > Math.abs(paging.bestDx)) {
+      paging.bestDx = dx;
+      paging.bestDy = dy;
+    }
+  };
+  const finishPaging = () => {
+    const gesture = paging;
+    paging = null;
+    if (!gesture) return;
+    if (state.media.queue.length < 2) return;
+    if (state.mediaBoard?.penMode === true && gesture.fingers < 2) return;
+    if (gesture.pinched) return;
+
+    // 一、点动切换：抬手立即切（等双击判定窗口会明显发懒）
+    if (!gesture.moved && Date.now() - gesture.startedAt <= CW_TAP_MAX_DURATION_MS) {
+      const box = stage.getBoundingClientRect();
+      switchMediaBy(gesture.start.x < box.left + box.width / 2 ? -1 : 1);
+      return;
+    }
+
+    // 二、横向滑动切换（放大后横向拖动是平移，不切换）
+    const item = currentItem();
+    if (!item || (item.scale || 1) > 1.01) return;
+    if (Math.abs(gesture.bestDx) < CW_SWIPE_MIN_DISTANCE_PX) return;
+    if (Math.abs(gesture.bestDx) <= Math.abs(gesture.bestDy) * CW_SWIPE_AXIS_RATIO) return;
+    switchMediaBy(gesture.bestDx < 0 ? 1 : -1);
+  };
+
   stage.addEventListener('touchstart', (event) => {
     if (!imageShown()) return;
     const pts = pointsOf(event);
+    if (pts.length > 0) beginPaging(pts);
     if (pts.length >= 2) {
       // 第二根手指落下：先结束当前笔画，再进入双指缩放/平移（与 Android 一致）
       state.mediaBoard?.endActiveStroke(true);
@@ -1075,11 +1172,16 @@ function bindMediaGestures() {
   stage.addEventListener('touchmove', (event) => {
     if (!imageShown()) return;
     const pts = pointsOf(event);
+    trackPaging(pts);
     if (pts.length >= 2) {
       pinchActive = true;
       const box = stage.getBoundingClientRect();
       const current = distOf(pts);
-      if (current > 0 && lastDist > 0) zoomByMedia(current / lastDist);
+      if (current > 0 && lastDist > 0) {
+        // 两指间距明显变化 → 这一轮算"捏合缩放"，不再当成点动 / 滑动切换
+        if (Math.abs(current - lastDist) >= CW_PINCH_SLOP_PX && paging) paging.pinched = true;
+        zoomByMedia(current / lastDist);
+      }
       lastDist = current;
       // 双指平移：按中点位移拖动画面（缩放状态下画笔模式也能用）
       const center = centerOf(pts);
@@ -1115,7 +1217,11 @@ function bindMediaGestures() {
       lastDist = distOf(remaining);
       lastCenter = centerOf(remaining);
     }
-    if (remaining.length === 0) lastSingle = null;
+    if (remaining.length === 0) {
+      lastSingle = null;
+      // 手指全部抬起后再判断点动 / 滑动切换（与课件翻页一致）
+      finishPaging();
+    }
   }, { passive: true });
 
   stage.addEventListener('touchcancel', () => {
@@ -1123,6 +1229,7 @@ function bindMediaGestures() {
     lastDist = 0;
     lastSingle = null;
     lastCenter = null;
+    paging = null; // 被系统打断的这一轮不算切换
   }, { passive: true });
 
   // 桌面/触控板调试用：滚轮缩放
@@ -1397,6 +1504,10 @@ function updateMediaCastUI(statusOverride) {
     $('mediaStatus').textContent = '尚未选择文件';
   } else if (isVideo) {
     updateVideoPanelUI();
+  } else if (total >= 2) {
+    $('mediaStatus').textContent = state.joined
+      ? '点画面左/右半边、或左右滑动可切换上一张/下一张'
+      : '正在重新连接教室端...';
   } else {
     $('mediaStatus').textContent = state.joined ? '大屏正在显示该图片' : '正在重新连接教室端...';
   }
@@ -2976,12 +3087,15 @@ function bindStaticEvents() {
     updateZoomBadge();
   });
 
+  $('mediaCameraSourceButton').addEventListener('click', () => openMediaCamera());
   $('mediaLocalButton').addEventListener('click', () => openMediaPicker());
   $('mediaServerButton').addEventListener('click', () => loadServerMedia());
   $('mediaSourceBack').addEventListener('click', () => showMenu());
 
   $('mediaBack').addEventListener('click', () => showMenu());
   $('mediaRotate').addEventListener('click', () => rotateCurrentMedia());
+  // 投屏过程中也能随手拍一张（与安卓端底部横条的「拍照」一致）
+  $('mediaCameraButton').addEventListener('click', () => openMediaCamera());
   $('mediaPrev').addEventListener('click', () => switchMediaBy(-1));
   $('mediaNext').addEventListener('click', () => switchMediaBy(1));
   $('mediaListButton').addEventListener('click', () => showMediaQueue());

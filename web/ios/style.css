@@ -1191,6 +1191,122 @@ input::placeholder {
   #viewCoursewarePlay .footnote-dim {
     display: none;
   }
+
+  /* ---- 图片视频投屏：与课件同一套思路 —— 画面独占整屏、控制项摊成底部横条 ----
+     原来横屏是「左预览 + 右侧 15rem 竖栏」：iPad mini 横屏（1133×744）下 16:9 图片
+     只有约 833px 宽（屏宽的 74%），底部还压着一条竖栏；改成整屏舞台后图片接近满屏，
+     标注写字的空间也翻倍。手机横屏不走这一套（高度金贵），仍用原竖栏，见文件上方
+     的基础横屏块。注意：.list-footer / .annotation-bar / .classroom-actions / .media-row
+     是图片投屏与课件共用的工具类，所以这里所有规则都用 #viewMediaCast 前缀限定作用域。 */
+  #viewMediaCast {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "body body"
+      "head side";
+    padding: calc(var(--safe-top) + 0.2rem) calc(var(--safe-left) + 0.35rem)
+      calc(var(--safe-bottom) + 0.2rem) calc(var(--safe-right) + 0.35rem);
+    gap: 0.3rem 0.5rem;
+  }
+
+  /* 返回 / 标题 / 张数：从顶部挪到底部横条的最左侧 */
+  #viewMediaCast > .list-header {
+    grid-area: head;
+    align-self: center;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  #viewMediaCast .list-header .pill {
+    min-height: 2.5rem;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.78rem;
+  }
+
+  #viewMediaCast .list-title {
+    max-width: 8rem;
+    overflow: hidden;
+    font-size: 0.82rem;
+    text-align: left;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* 画面独占整屏（图片仍是 object-fit: contain，完整显示不裁切） */
+  #viewMediaCast > .media-body {
+    grid-area: body;
+    min-width: 0;
+    padding: 0;
+  }
+
+  #viewMediaCast .media-preview {
+    border-radius: 8px;
+  }
+
+  /* 抽学生 / 标注工具 / 旋转 / 切换 / 结束投屏：整体摊平成一条横向工具栏 */
+  #viewMediaCast > .list-footer {
+    grid-area: side;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem 0.55rem;
+    padding-top: 0;
+    padding-left: 0;
+    border-top: none;
+    border-left: none;
+    overflow: visible;
+  }
+
+  #viewMediaCast .annotation-bar {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0;
+  }
+
+  #viewMediaCast .annotation-colors {
+    gap: 0.45rem;
+  }
+
+  #viewMediaCast .annotation-color {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+
+  #viewMediaCast .annotation-actions {
+    gap: 0.3rem;
+  }
+
+  #viewMediaCast .classroom-actions {
+    gap: 0.3rem;
+  }
+
+  #viewMediaCast .media-row {
+    flex-wrap: nowrap;
+    gap: 0.35rem;
+  }
+
+  #viewMediaCast .subtitle {
+    margin: 0;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  /* 横条内按钮一律收成"内容宽度"，否则 .btn-nav / .tool / .media-row .btn 上的 flex:1
+     会把每个按钮撑开、把横条挤成好几行 */
+  #viewMediaCast .media-row .btn,
+  #viewMediaCast > .list-footer > .btn,
+  #viewMediaCast .annotation-actions .tool,
+  #viewMediaCast .classroom-actions > button {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 2.5rem;
+    padding: 0.3rem 0.55rem;
+    font-size: 0.78rem;
+  }
 }
 
 /* ==================================================================
