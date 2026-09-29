@@ -65,7 +65,22 @@ git -c http.proxy= -c https.proxy= -c "http.https://github.com.proxy=" push gith
 - 服务器的 `origin` URL 内嵌了 gitee 访问令牌：`https://oauth2:<token>@gitee.com/...`。**不要执行会打印该 URL 的命令**（如 `git remote -v` 后直接截图/贴群），也不要在服务器上执行 `git remote set-url` 覆盖它。
 - 令牌文件 `gitee令牌*`、`github令牌*.txt`、`.env*` 均在 `.gitignore` 内，**永远不要 `git add -f` 它们**。
 
-### 2.4 编辑器 / 工具目录
+### 2.4 SSH 免密（已配置）
+
+本机 `~/.ssh/id_ed25519`（注释 `nbzch@126.com`，指纹 `SHA256:TpN7yKaXp14WA95VvtMgWV56ZmT00K4O+p+oGAp+NV8`）已写入服务器 `zch@192.168.50.241` 的 `~/.ssh/authorized_keys`，与原有的 `zch@mysever` 并存，目录权限 `700`、文件权限 `600`。
+
+因此第 4、5、7 节里的 `ssh zch@192.168.50.241 ...` 命令**都不再需要输入密码**，可整段粘贴执行。
+
+换机器或换密钥时，用下面两条命令重新授权并验证（密码由运维人员线下提供）：
+
+```powershell
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh zch@192.168.50.241 "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+ssh -o BatchMode=yes zch@192.168.50.241 "echo KEY_AUTH_OK"
+```
+
+> 服务器目前**仍允许密码登录**（`PasswordAuthentication` 未关闭）。若以后要关闭它来加固，务必先用上面第二条命令确认密钥登录可用，避免把自己锁在门外。
+
+### 2.5 编辑器 / 工具目录
 
 `.codebuddy/`、`AGENTS.md`、`.vscode/`、`.claude/` 均在 `.gitignore` 内，属于本地数据，**不要删除 `.codebuddy/`**（里面存着 Android 自测流程等技能文件）。
 
@@ -222,7 +237,7 @@ http://10.30.13.1/myclass/myclass-windows.exe
 
 ## 7. 一致性自检清单
 
-推荐在服务器上给本机公钥授权一次（`ssh-copy-id zch@192.168.50.241`），之后可用下面这段一键体检；否则每步都要输密码。
+本机到服务器的 SSH 免密已配置（见 2.4），因此下面这段可以整段粘贴运行，自动输出三方同步状态与服务健康码，**无需任何交互输入**。
 
 ```powershell
 $APP_DIR = '/opt/1panel/apps/openresty/openresty/www/sites/10.30.13.1/index/myclass'
@@ -302,10 +317,13 @@ git fetch "C:\Users\zch\Documents\code\myclass-backup\codex-windows-single-app-2
 
 | 项目 | 状态 |
 |---|---|
-| `main` | `2812201`（合并提交，**内容与 `a2415d7` 完全一致**，`git diff` 为空） |
-| 本地 / gitee / 服务器 | 三处均为 `2812201`，工作区干净 |
+| 交接当时的 `main` | `2812201`（合并提交，**内容与 `a2415d7` 完全一致**，`git diff` 为空） |
+| 为什么不再写当前 SHA | 每次提交都会推进 `main`，写死会立刻过期。**判断是否同步请用第 3、7 节的自检命令**，本表只记录不会随时间变化的事实 |
+| 本地 / gitee / 服务器 | 交接当时三处同为 `2812201`，工作区干净 |
+| 本文件引入的提交 | `8cf4a04 docs: add three-way sync handover guide`（初版；之后对本文档的修订各自追加提交） |
 | 服务器运行进程 | PID 1072390，启动于 09-21 22:32；因 `server.js` 自那次启动后未变更，**无需重启** |
 | 服务器 git 身份 | 已由 `Your Name <you@example.com>` 修正为 `zhaochenghua` |
+| SSH 免密 | 已配置：本机 `id_ed25519`（`nbzch@126.com`）→ 服务器 `authorized_keys`，`BatchMode` 校验通过 |
 | `github/main` | 仍停在 `c82eac0`（落后，代理不通未同步） |
 | 已合并并删除的分支 | `codex/ppt-appear-disappear`（内容等价于 main，历史已并入 main） |
 | 已归档并删除的分支 | `codex/windows-single-app`（`14975b9`，146 个提交，与 main **无共同祖先**的旧历史线；已导出 bundle 备份后删除本地与 gitee 引用） |
@@ -318,6 +336,7 @@ git fetch "C:\Users\zch\Documents\code\myclass-backup\codex-windows-single-app-2
 2. `github` remote 落后；待本地代理可用时执行 `git push github main`（本次因代理未运行失败）。
 3. 备份 bundle 是仓库外的独立文件，确认 github 上的副本可用后可自行删除。
 4. gitee 上那个 80.9MB 的历史对象，引用已不可达，但**空间释放取决于 gitee 自身 GC**，短期内克隆体积可能不变。
+5. 服务器仍开放密码登录（免密是"新增公钥"，不是"取代密码"）。若要加固，见 2.4 的注意事项。
 
 ---
 
