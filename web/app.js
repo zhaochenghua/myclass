@@ -384,26 +384,23 @@ async function bootstrap() {
     elements.closePickerButton.addEventListener('click', () => {
       elements.coursewarePicker.hidden = true;
     });
+    // 只负责切换，文案一律交给 fullscreenchange 同步。
+    // 「首次点击自动全屏」进入全屏时不会经过这里，若在此乐观改文案，
+    // 会出现"按钮写着全屏、实际已在全屏"的错位，用户点它反而被当成退出全屏。
     elements.homeFullscreenButton.addEventListener('click', () => {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
-        elements.homeFullscreenButton.textContent = '全屏';
       } else {
         document.documentElement.requestFullscreen().catch(() => {});
-        elements.homeFullscreenButton.textContent = '退出全屏';
       }
     });
-    document.addEventListener('fullscreenchange', () => {
-      if (!document.fullscreenElement && elements.homeFullscreenButton) {
-        elements.homeFullscreenButton.textContent = '全屏';
-      }
-    });
+    document.addEventListener('fullscreenchange', updateHomeFullscreenButton);
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
     window.addEventListener('resize', handleViewportResize);
-    // 首次点击页面任意位置自动全屏（排除下载按钮、考试平台链接）
+    // 首次点击页面任意位置自动全屏（排除自身已是全屏入口的按钮、会跳转的链接与各类弹窗）
     const autoFullscreen = (e) => {
-      if (e.target.closest('#downloadApkButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, #studentRollControls, #classPickerModal, #studentCountModal, .action-btn-exam, .action-btn-exit')) return;
+      if (e.target.closest('#downloadApkButton, #homeFullscreenButton, #action-btn-admin, #iosWebAppButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, #studentRollControls, #classPickerModal, #studentCountModal, .action-btn-exam, .action-btn-exit')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
@@ -4055,6 +4052,15 @@ function toggleFullscreen() {
 function updateFullscreenButton() {
   if (elements.fullscreenButton) {
     elements.fullscreenButton.textContent = document.fullscreenElement ? '退出全屏' : '全屏';
+  }
+}
+
+// 首页「全屏」按钮文案：进入 / 退出都必须同步。
+// 之前只在退出时重置，导致「首次点击自动全屏」后按钮仍写着"全屏"，
+// 用户点它时被当成"退出全屏"，表现为"第一次点全屏反而退回未全屏"。
+function updateHomeFullscreenButton() {
+  if (elements.homeFullscreenButton) {
+    elements.homeFullscreenButton.textContent = document.fullscreenElement ? '退出全屏' : '全屏';
   }
 }
 
