@@ -857,6 +857,29 @@ function mediaKindOf(nameOrUrl) {
   return 'other';
 }
 
+/**
+ * 列表里的文件类型标签：优先显示扩展名（JPG / PNG / MP4 …），
+ * 文件名 / 地址里看不出扩展名时退回按 kind 判断的「图片 / 视频 / 文件」。
+ * 本机待上传的文件还没有 url，只能从文件名推。
+ */
+function mediaTypeLabel(item) {
+  const source = String(item?.name || item?.title || item?.url || '').split('?')[0];
+  const ext = source.includes('.') ? source.split('.').pop() : '';
+  if (ext && ext.length <= 5) return ext.toUpperCase();
+  if (item?.kind === 'video') return '视频';
+  if (item?.kind === 'image') return '图片';
+  return '文件';
+}
+
+/** 类型标签的配色分类：PDF / 图片 / 视频 / 其它（拿不到扩展名时用 kind 兜底） */
+function mediaTypeTone(label, kind) {
+  const value = `${label || ''} ${kind || ''}`.toLowerCase();
+  if (value.includes('pdf')) return 'is-pdf';
+  if (/(jpg|jpeg|png|gif|webp|bmp|heic|heif|图片|image)/.test(value)) return 'is-image';
+  if (/(mp4|mov|avi|webm|mkv|3gp|视频|video)/.test(value)) return 'is-video';
+  return '';
+}
+
 // iOS（尤其主屏 PWA）对临时创建、未挂载到 DOM 的 <input type=file> 行为异常，
 // 因此与单图投屏一样把 input 持久挂到 DOM。
 let mediaFileInput = null;
@@ -1410,6 +1433,15 @@ function renderMediaQueue() {
     main.className = 'cw-item-main';
     if (index === state.media.index) main.classList.add('is-current');
 
+    // 文件类型标签（图片视频列表原来只有投屏状态，看不出是图片还是视频）
+    const typeText = mediaTypeLabel(item);
+    const type = document.createElement('span');
+    type.className = `cw-item-type ${mediaTypeTone(typeText, item.kind)}`.trim();
+    type.textContent = typeText;
+
+    const text = document.createElement('span');
+    text.className = 'cw-item-text';
+
     const title = document.createElement('span');
     title.className = 'cw-item-title';
     title.textContent = `${index + 1}. ${item.title || item.name}`;
@@ -1418,7 +1450,8 @@ function renderMediaQueue() {
     meta.className = 'cw-item-meta';
     meta.textContent = mediaStatusText(item, index);
 
-    main.append(title, meta);
+    text.append(title, meta);
+    main.append(type, text);
     main.addEventListener('click', () => castMediaItem(index));
     row.appendChild(main);
     body.appendChild(row);
@@ -2595,12 +2628,21 @@ function renderCoursewareList(items, forManage) {
     main.type = 'button';
     main.className = 'cw-item-main';
     main.innerHTML = `
-      <span class="cw-item-title"></span>
-      <span class="cw-item-meta"></span>
+      <span class="cw-item-type"></span>
+      <span class="cw-item-text">
+        <span class="cw-item-title"></span>
+        <span class="cw-item-meta"></span>
+      </span>
     `;
+    // 文件类型做成独立标签（原来混在 meta 文字里，一眼扫不出来）；链接、无扩展名的文件分别显示「链接」「文件」
+    const cwTypeText = coursewareFormatLabel(item);
+    const cwType = main.querySelector('.cw-item-type');
+    cwType.textContent = cwTypeText;
+    cwType.className = `cw-item-type ${mediaTypeTone(cwTypeText)}`.trim();
+
     main.querySelector('.cw-item-title').textContent = item.title || item.fileName || '未命名课件';
     main.querySelector('.cw-item-meta').textContent =
-      `${coursewareFormatLabel(item)} · ${formatBytes(item.size)} · ${formatDate(item.createdAt)}`;
+      `${formatBytes(item.size)} · ${formatDate(item.createdAt)}`;
 
     main.addEventListener('click', () => {
       if (forManage) {

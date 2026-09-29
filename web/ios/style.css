@@ -465,6 +465,9 @@ input::placeholder {
 }
 
 .cw-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   flex: 1 1 auto;
   min-width: 0;
   text-align: left;
@@ -479,6 +482,47 @@ input::placeholder {
 
 .cw-item-main:active {
   opacity: 0.7;
+}
+
+/* 标题 + 副标题（课件列表与图片视频列表共用） */
+.cw-item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 文件类型标签：PDF / PPTX / JPG / MP4 / 链接…，让"这是什么文件"一眼可见。
+   定宽 + 居中，多行列表里能对齐成一列。 */
+.cw-item-type {
+  flex: 0 0 auto;
+  min-width: 2.5rem;
+  padding: 0.22rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(101, 240, 200, 0.08);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.cw-item-type.is-image {
+  color: var(--accent);
+  border-color: rgba(101, 240, 200, 0.5);
+  background: rgba(101, 240, 200, 0.14);
+}
+
+.cw-item-type.is-video {
+  color: var(--warm);
+  border-color: rgba(255, 209, 102, 0.5);
+  background: rgba(255, 209, 102, 0.14);
+}
+
+.cw-item-type.is-pdf {
+  color: #ff9b9b;
+  border-color: rgba(255, 107, 107, 0.5);
+  background: rgba(255, 107, 107, 0.14);
 }
 
 .cw-item-title {
