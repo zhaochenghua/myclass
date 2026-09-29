@@ -38,6 +38,12 @@ class UpdateManager(private val activity: Activity) {
 
     private var downloadDialog: AlertDialog? = null
 
+    /** 已下载待安装的更新包：去开启安装权限后返回时复用它，不再重新下载 */
+    private var pendingInstallApk: File? = null
+
+    /** 正在等用户去「允许安装未知应用」设置页授权（返回时只处理一次） */
+    private var awaitingInstallPermission = false
+
     fun checkForUpdate() {
         Thread {
             runCatching {
@@ -55,8 +61,14 @@ class UpdateManager(private val activity: Activity) {
                     val apkUrl = config.optString("apkUrl", "")
                     if (remoteVersion.isBlank() || apkUrl.isBlank()) return@use
                     if (isNewerVersion(BuildConfig.VERSION_NAME, remoteVersion)) {
+                        val cached = cachedApkFor(remoteVersion)
                         activity.runOnUiThread {
-                            showUpdateAvailableDialog(remoteVersion, apkUrl)
+                            if (cached != null) {
+                                // 同一个版本之前已经下载过（例如去开启安装权限后返回）：直接给「立即安装」
+                                showInstallDialog(cached)
+                            } else {
+                                showUpdateAvailableDialog(remoteVersion, apkUrl)
+                            }
                         }
                     }
                 }
@@ -71,12 +83,12 @@ class UpdateManager(private val activity: Activity) {
             .setCancelable(false)
             .setNegativeButton("稍后", null)
             .setPositiveButton("立即更新") { _, _ ->
-                startDownload(apkUrl)
+                startDownload(apkUrl, remoteVersion)
             }
             .show()
     }
 
-    private fun startDownload(apkUrl: String) {
+    private fun startDownload(apkUrl: String, remoteVersion: String) {
         val progressText = TextView(activity).apply {
             text = "准备下载..."
             gravity = Gravity.CENTER
@@ -106,7 +118,7 @@ class UpdateManager(private val activity: Activity) {
 
         Thread {
             runCatching {
-                downloadApkBlocking(apkUrl) { percent ->
+                downloadApkBlocking(apkUrl, remoteVersion) { percent ->
                     activity.runOnUiThread {
                         if (downloadDialog?.isShowing == true) {
                             progressBar.progress = percent
@@ -134,9 +146,25 @@ class UpdateManager(private val activity: Activity) {
         }.start()
     }
 
-    private fun downloadApkBlocking(apkUrl: String, onProgress: (Int) -> Unit): File {
+    /** 更新包按版本命名缓存：同一版本只下载一次，权限设置返回后可直接复用 */
+    private fun apkFileFor(version: String): File {
         val updateDir = File(activity.cacheDir, "apk_updates").apply { mkdirs() }
-        val apkFile = File(updateDir, "myclass_update.apk")
+        val safeName = version.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return File(updateDir, "myclass_$safeName.apk")
+    }
+
+    /** 已经下载完成的同版本安装包，没有则返回 null */
+    private fun cachedApkFor(version: String): File? =
+        apkFileFor(version).takeIf { it.exists() && it.length() > 0L }
+
+    private fun downloadApkBlocking(
+        apkUrl: String,
+        version: String,
+        onProgress: (Int) -> Unit
+    ): File {
+        val apkFile = apkFileFor(version)
+        // 已经下载好同一版本（例如去开启安装权限后返回）：直接用，不重新下载
+        cachedApkFor(version)?.let { return it }
         if (apkFile.exists()) apkFile.delete()
 
         val request = Request.Builder().url(apkUrl).get().build()
@@ -166,13 +194,23 @@ class UpdateManager(private val activity: Activity) {
                 }
             }
         }
+        // 下载成功后清掉其它版本的旧包，避免缓存越积越多
+        apkFile.parentFile?.listFiles()?.forEach { other ->
+            if (other.name.startsWith("myclass_") && other != apkFile) other.delete()
+        }
         return apkFile
     }
 
+    /** 下载完成后不直接安装，先给出「立即安装」按钮 */
     private fun showInstallDialog(apkFile: File) {
+        pendingInstallApk = apkFile
         AlertDialog.Builder(activity)
-            .setTitle("下载完成")
-            .setMessage("新版本已下载完成，是否立即安装？")
+            .setTitle("新版本已下载完成")
+            .setMessage(
+                "点「立即安装」开始安装。\n\n" +
+                    "若系统提示需要允许安装未知应用，开启后返回本应用再点一次「立即安装」即可，" +
+                    "安装包已经下载好，不会再重新下载。"
+            )
             .setCancelable(false)
             .setNegativeButton("稍后", null)
             .setPositiveButton("立即安装") { _, _ ->
@@ -181,21 +219,45 @@ class UpdateManager(private val activity: Activity) {
             .show()
     }
 
+    /**
+     * 从「允许安装未知应用」设置页返回时调用：
+     * 权限已开启就直接复用刚才那个安装包，无需重新下载。
+     */
+    fun onResumeFromSettings() {
+        if (!awaitingInstallPermission) return
+        awaitingInstallPermission = false
+        val apkFile = pendingInstallApk ?: return
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+            activity.packageManager.canRequestPackageInstalls()
+        if (!granted) return
+        if (!apkFile.exists() || apkFile.length() == 0L) {
+            pendingInstallApk = null
+            return
+        }
+        activity.runOnUiThread { showInstallDialog(apkFile) }
+    }
+
     private fun installApk(apkFile: File) {
         // Android 8+ 需要检查是否有安装未知来源应用的权限
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !activity.packageManager.canRequestPackageInstalls()
         ) {
+            // 记住这个安装包：去设置授权后返回直接复用，不再重新下载
+            pendingInstallApk = apkFile
             AlertDialog.Builder(activity)
                 .setTitle("需要安装权限")
-                .setMessage("安装更新需要允许来自此来源的应用，请在设置中开启后重试。")
+                .setMessage(
+                    "请允许本应用「安装未知应用」，开启后返回本应用会自动再次给出「立即安装」。\n\n" +
+                        "安装包已经下载好，无需重新下载。"
+                )
                 .setNegativeButton("取消", null)
                 .setPositiveButton("去设置") { _, _ ->
+                    awaitingInstallPermission = true
                     val intent = Intent(
                         android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                         Uri.parse("package:${activity.packageName}")
                     )
-                    activity.startActivity(intent)
+                    runCatching { activity.startActivity(intent) }
                 }
                 .show()
             return
@@ -210,6 +272,18 @@ class UpdateManager(private val activity: Activity) {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        // 本应用自己也能“打开”APK（清单里声明了 VIEW + */*），不指定目标时系统会弹
+        // “打开方式”（MyClass / 软件包安装程序）。这里直接挑系统安装器，
+        // 挑不到再退回“非本应用”的第一个候选，最后才用隐式 Intent。
+        val candidates = runCatching {
+            activity.packageManager.queryIntentActivities(intent, 0)
+        }.getOrDefault(emptyList())
+        val installer = candidates.firstOrNull {
+            it.activityInfo.packageName.contains("packageinstaller", ignoreCase = true)
+        } ?: candidates.firstOrNull { it.activityInfo.packageName != activity.packageName }
+        installer?.let {
+            intent.setClassName(it.activityInfo.packageName, it.activityInfo.name)
         }
         activity.startActivity(intent)
     }

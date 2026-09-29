@@ -47,6 +47,7 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -54,6 +55,12 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -353,7 +360,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         registerNetworkCallback()
         loadAuth()
         ExternalFileReceiver.restoreQueue(this)
-        UpdateManager(this).checkForUpdate()
+        updateManager = UpdateManager(this).also { it.checkForUpdate() }
         checkCampusAccess()
         if (!initialIntentProcessed) {
             initialIntentProcessed = true
@@ -443,6 +450,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onResume() {
         super.onResume()
         appInForeground = true
+        // 从「允许安装未知应用」设置页返回：已授权就复用已下载的安装包继续安装，不重新下载
+        updateManager?.onResumeFromSettings()
         if (networkGateShowing) checkCampusAccess()
         if (currentScreen == Screen.Camera && cameraPausedForBackground) {
             val shouldRestartLive = restartLiveOnResume
@@ -488,30 +497,23 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         startLocalMediaQueue(picked)
     }
 
-    // 拍照投屏：相机写入应用缓存目录的文件，拍完立刻加入投屏队列，可连续拍多张
-    private var pendingCaptureFile: File? = null
+    // 应用内拍照投屏：预览常驻、快门可连按，拍完立刻上传投屏；
+    // 不走系统相机的“完成 / 重拍”确认，因此可以连续拍多张
     private var captureSessionActive = false
+    private var captureShotCount = 0
+    private var captureUiRoot: View? = null
+    private var capturePreviewView: PreviewView? = null
+    private var captureImageCapture: ImageCapture? = null
+    private var captureCameraProvider: ProcessCameraProvider? = null
+    private var captureThumbRow: LinearLayout? = null
+    private var captureCountLabel: TextView? = null
+    /** 本次连拍会话已拍下的照片文件，用于重新进入拍照页时复原缩略图 */
+    private val captureFiles = mutableListOf<File>()
 
     private val capturePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) launchCameraCapture() else toast("需要相机权限才能拍照投屏")
-    }
-
-    private val captureLauncher = registerForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { saved: Boolean ->
-        val file = pendingCaptureFile
-        pendingCaptureFile = null
-        if (!saved) {
-            toast("已取消拍照")
-            return@registerForActivityResult
-        }
-        if (file == null || !file.exists() || file.length() == 0L) {
-            toast("没有拍下照片")
-            return@registerForActivityResult
-        }
-        addCaptureToQueue(file)
+        if (granted) showCaptureScreen() else toast("需要相机权限才能拍照投屏")
     }
 
     private val coursewarePickerLauncher = registerForActivityResult(
@@ -1480,6 +1482,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      */
     private var immersiveFullscreen = false
 
+    /** 更新管理器：保存实例，便于从「允许安装未知应用」设置页返回后继续安装 */
+    private var updateManager: UpdateManager? = null
+
     /**
      * 课件播放页开沉浸式全屏，其余页面恢复系统栏
      * （从边缘上滑可临时唤出系统栏，不影响手势导航）。
@@ -1502,6 +1507,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      * 只有课件播放页全屏，其余页面（连接码、菜单、课件列表等）保持系统栏。
      */
     private fun showScreenView(view: View) {
+        // 离开拍照页（内容视图不再是它）时释放相机，避免相机被一直占用
+        val captureRoot = captureUiRoot
+        if (captureRoot != null && captureRoot !== view) releaseCaptureCamera()
         setContentView(view)
         applyImmersiveFullscreen(
             currentScreen == Screen.Courseware &&
@@ -2111,6 +2119,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareSubScreen = CoursewareSubScreen.MediaSource
         // 回到本机图片视频入口即视为结束上一次连拍会话：下一次拍照从新队列开始
         captureSessionActive = false
+        captureFiles.clear()
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
         val localBtn = primaryButton("本机图片视频（拍照 / 相册）").apply {
@@ -2216,18 +2225,143 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         AlertDialog.Builder(this)
             .setTitle("本机图片视频")
             .setItems(arrayOf("拍照", "相册选择（可多选）")) { _, which ->
-                if (which == 0) launchCameraCapture() else launchMediaPicker()
+                if (which == 0) openCaptureScreen() else launchMediaPicker()
             }
             .setNegativeButton("取消", null)
             .show()
     }
 
-    /** 拍照投屏：相机把照片写进应用缓存文件，之后走与相册选择相同的上传 / 投屏链路 */
-    private fun launchCameraCapture() {
+    /** 拍照投屏入口：确认相机权限后进入应用内拍照页 */
+    private fun openCaptureScreen() {
         val cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
         if (!cameraGranted) {
             capturePermissionLauncher.launch(Manifest.permission.CAMERA)
+            return
+        }
+        showCaptureScreen()
+    }
+
+    /**
+     * 应用内拍照页：预览 + 大快门 + 已拍缩略图。
+     * 拍一张立刻上传投屏并留在本页（只更新右下角小预览），所以可以连续拍；
+     * 不再走系统相机那种“完成 / 重拍”确认。
+     */
+    private fun showCaptureScreen() {
+        currentScreen = Screen.Courseware
+        coursewareSubScreen = CoursewareSubScreen.MediaSource
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.BLACK)
+        }
+        val previewView = PreviewView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+        root.addView(previewView)
+
+        val thumbRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(4), dp(10), 0)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(64)
+            )
+            visibility = View.GONE
+        }
+        root.addView(thumbRow)
+
+        val controlRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(72)
+            )
+        }
+        val countLabel = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.parseColor("#CCDDEE"))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val shutterButton = compactButton(primaryButton("拍照"), 16f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(150), dp(56))
+            setOnClickListener { takeCapturePhoto() }
+        }
+        val doneButton = compactButton(secondaryButton("完成"), 15f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginStart = dp(10) }
+            setOnClickListener { finishCaptureSession() }
+        }
+        controlRow.addView(countLabel)
+        controlRow.addView(shutterButton)
+        controlRow.addView(doneButton)
+        root.addView(controlRow)
+
+        capturePreviewView = previewView
+        captureThumbRow = thumbRow
+        captureCountLabel = countLabel
+        captureUiRoot = root
+        if (captureSessionActive) rebuildCaptureThumbs()
+        updateCaptureCounts()
+
+        showScreenView(root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
+        bindCaptureCamera()
+    }
+
+    /** 绑定 CameraX 预览与拍照用例（优先后置摄像头，失败退回前置） */
+    private fun bindCaptureCamera() {
+        val previewView = capturePreviewView ?: return
+        val providerFuture = ProcessCameraProvider.getInstance(this)
+        providerFuture.addListener({
+            val provider = runCatching { providerFuture.get() }.getOrNull()
+            if (provider == null) {
+                toast("相机初始化失败")
+                return@addListener
+            }
+            captureCameraProvider = provider
+            val preview = Preview.Builder().build().also {
+                it.surfaceProvider = previewView.surfaceProvider
+            }
+            val imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .build()
+            captureImageCapture = imageCapture
+            runCatching {
+                provider.unbindAll()
+                provider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    imageCapture
+                )
+            }.recoverCatching {
+                provider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_FRONT_CAMERA,
+                    preview,
+                    imageCapture
+                )
+            }.onFailure { toast("无法打开相机：${it.message ?: "未知原因"}") }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    /** 按一次快门：写文件 → 立刻加入队列上传投屏，界面留在本页继续拍 */
+    private fun takeCapturePhoto() {
+        val imageCapture = captureImageCapture
+        if (imageCapture == null) {
+            toast("相机还没准备好，请稍候")
             return
         }
         val file = runCatching { createCaptureFile() }.getOrNull()
@@ -2235,17 +2369,49 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             toast("无法创建照片文件")
             return
         }
-        val uri = runCatching {
-            FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        }.getOrNull()
-        if (uri == null) {
-            toast("无法准备相机输出")
+        val options = ImageCapture.OutputFileOptions.Builder(file).build()
+        imageCapture.takePicture(
+            options,
+            ContextCompat.getMainExecutor(this),
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    if (!file.exists() || file.length() == 0L) {
+                        toast("拍照失败，请重试")
+                        return
+                    }
+                    addCaptureToQueue(file)
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    toast("拍照失败：${exception.message ?: "未知原因"}")
+                }
+            }
+        )
+    }
+
+    /** 离开拍照页时释放相机，避免一直占用 */
+    private fun releaseCaptureCamera() {
+        runCatching { captureCameraProvider?.unbindAll() }
+        captureCameraProvider = null
+        captureImageCapture = null
+        capturePreviewView = null
+        captureThumbRow = null
+        captureCountLabel = null
+        captureUiRoot = null
+    }
+
+    /** 拍完点「完成」：回到投屏页看最后一张；照片还在上传就先回来源页 */
+    private fun finishCaptureSession() {
+        val lastTitle = mediaQueue.getOrNull(mediaQueue.lastIndex)?.name
+        if (lastTitle == null) {
+            showMediaCastSourceScreen()
             return
         }
-        pendingCaptureFile = file
-        runCatching { captureLauncher.launch(uri) }.onFailure {
-            pendingCaptureFile = null
-            toast("无法打开相机")
+        if (coursewareUrl.isNotBlank()) {
+            showCoursewareScreen(title = coursewareTitle.ifBlank { lastTitle }, isUploading = false)
+        } else {
+            toast("照片仍在上传，稍后可用媒体列表切换")
+            showMediaCastSourceScreen()
         }
     }
 
@@ -2271,24 +2437,53 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             mediaQueue.clear()
             mediaQueueIndex = -1
             captureSessionActive = true
+            captureShotCount = 0
+            captureFiles.clear()
+            captureThumbRow?.removeAllViews()
         }
+        captureShotCount += 1
+        captureFiles.add(file)
         mediaQueue.add(LocalMediaItem(uri = uri, name = file.name))
+        appendCaptureThumbnail(file)
+        updateCaptureCounts()
         if (activeRoomCode == null) {
             toast("请先连接教室端，照片已加入队列")
             return
         }
         castMediaQueueItem(mediaQueue.lastIndex)
-        promptContinueCapture()
     }
 
-    /** 拍完一张后询问是否继续拍，方便连拍多张 */
-    private fun promptContinueCapture() {
-        AlertDialog.Builder(this)
-            .setTitle("已拍 ${mediaQueue.size} 张")
-            .setMessage("继续拍照会把新照片接在队列后面，可用「上一个 / 下一个」在大屏切换。")
-            .setPositiveButton("继续拍照") { _, _ -> launchCameraCapture() }
-            .setNegativeButton("完成", null)
-            .show()
+    /** 小预览：只加一张缩略图，不弹窗打断连续拍摄 */
+    private fun appendCaptureThumbnail(file: File) {
+        val row = captureThumbRow ?: return
+        val size = dp(52)
+        val options = BitmapFactory.Options().apply { inSampleSize = 8 }
+        val bitmap = runCatching { BitmapFactory.decodeFile(file.absolutePath, options) }.getOrNull()
+        val thumb = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(size, size).apply { marginEnd = dp(6) }
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Color.parseColor("#223344"))
+            if (bitmap != null) setImageBitmap(bitmap)
+        }
+        row.addView(thumb)
+        row.visibility = View.VISIBLE
+    }
+
+    /** 再次进入拍照页（例如从投屏页点「拍照」）时补齐已拍照片的缩略图 */
+    private fun rebuildCaptureThumbs() {
+        val row = captureThumbRow ?: return
+        row.removeAllViews()
+        // 用会话内记录的文件而不是 content URI：FileProvider 的 path 不是真实文件路径
+        captureFiles.forEach { appendCaptureThumbnail(it) }
+        if (captureFiles.isNotEmpty()) row.visibility = View.VISIBLE
+    }
+
+    private fun updateCaptureCounts() {
+        captureCountLabel?.text = if (captureShotCount > 0) {
+            "已拍 $captureShotCount 张，可继续拍"
+        } else {
+            "按「拍照」即投屏，可连续拍多张"
+        }
     }
 
     private fun launchMediaPicker() {
@@ -2388,7 +2583,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewarePageCount = 1
         coursewareScreen = 1
         coursewareScreenCount = 1
-        showCoursewareScreen(title = item.name, isUploading = true)
+        // 拍照页里连拍时不上屏本地页面，留在大预览继续拍；大屏仍会收到 courseware.open
+        if (captureUiRoot == null) {
+            showCoursewareScreen(title = item.name, isUploading = true)
+        }
 
         Thread {
             runCatching {
@@ -2414,10 +2612,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         signalingClient?.sendStop()
                         signalingClient?.sendCoursewareOpen(result.url, result.title, 1, 1)
                         toast("已投屏：${result.title}")
-                        showCoursewareScreen(title = result.title, isUploading = false)
+                        if (captureUiRoot == null) {
+                            showCoursewareScreen(title = result.title, isUploading = false)
+                        }
                     } else if (reconnectSignalingForCurrentRoom()) {
                         toast("已上传，正在重新连接教室端")
-                        showCoursewareScreen(title = result.title, isUploading = false)
+                        if (captureUiRoot == null) {
+                            showCoursewareScreen(title = result.title, isUploading = false)
+                        }
                     }
                     preloadRestOfMediaQueue()
                 }
@@ -3686,6 +3888,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 toast("已旋转 ${degrees}°，大屏同步")
             }
         }
+        // 投屏过程中也能随时拍照：新照片自动接到队列后面，可用「上一个 / 下一个」切换
+        val captureButton = compactButton(secondaryButton("拍照"), 14f).apply {
+            setOnClickListener { openCaptureScreen() }
+        }
         val gestureBackButton = compactButton(primaryButton("返回主菜单"), 14f).apply {
             setOnClickListener { pauseCoursewareAndReturnMenu() }
         }
@@ -3694,10 +3900,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         if (isLandscape) {
             // 横屏面板较窄：拆成两行，避免"返回主菜单"这类长文字被截断
-            gestureBar.addView(buildGestureRow(listOf(rotateButton)))
+            gestureBar.addView(buildGestureRow(listOf(rotateButton, captureButton)))
             gestureBar.addView(buildGestureRow(listOf(gestureBackButton, gestureEndButton)))
         } else {
-            gestureBar.addView(buildGestureRow(listOf(rotateButton, gestureBackButton, gestureEndButton)))
+            gestureBar.addView(buildGestureRow(listOf(rotateButton, captureButton, gestureBackButton, gestureEndButton)))
         }
 
         // 画笔模式工具栏：颜色 / 板擦 + 撤销 / 清空，按钮状态随笔迹数量变化
@@ -3929,6 +4135,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             addToActionRow(modeButton, dp(96), end = 6)
             addToActionRow(rollButton, dp(80), end = 6)
             addToActionRow(rotateButton, 0, weight = 1f, end = 6)
+            addToActionRow(captureButton, 0, weight = 1f, end = 6)
             addToActionRow(gestureBackButton, 0, weight = 1f, end = 6)
             addToActionRow(gestureEndButton, 0, weight = 1f)
 
