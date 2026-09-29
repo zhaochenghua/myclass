@@ -423,8 +423,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 // 共享屏幕页面布局简单，无需重建
             }
             Screen.Courseware -> {
-                // 根据子页面类型重建课件界面
-                when (coursewareSubScreen) {
+                // 根据子页面类型重建课件界面；正在拍照时重建拍照页本身，
+                // 否则横竖屏一转就把老师踢回来源页
+                if (captureUiRoot != null) {
+                    showCaptureScreen()
+                } else when (coursewareSubScreen) {
                     CoursewareSubScreen.Source -> showCoursewareSourceScreen()
                     CoursewareSubScreen.MediaSource -> showMediaCastSourceScreen()
                     CoursewareSubScreen.ListLoading -> showCoursewareListLoadingScreen()
@@ -506,6 +509,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var captureImageCapture: ImageCapture? = null
     private var captureCameraProvider: ProcessCameraProvider? = null
     private var captureThumbRow: LinearLayout? = null
+    private var captureThumbScroller: ScrollView? = null
+    /** 缩略图是否竖排（横屏右侧栏） */
+    private var captureThumbVertical = false
     private var captureCountLabel: TextView? = null
     /** 本次连拍会话已拍下的照片文件，用于重新进入拍照页时复原缩略图 */
     private val captureFiles = mutableListOf<File>()
@@ -2248,63 +2254,123 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      * 不再走系统相机那种“完成 / 重拍”确认。
      */
     private fun showCaptureScreen() {
+        // 旋转重建时先释放旧相机，避免重复绑定
+        if (captureUiRoot != null) releaseCaptureCamera()
         currentScreen = Screen.Courseware
         coursewareSubScreen = CoursewareSubScreen.MediaSource
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            // 横屏把控制项收进右侧竖栏，摄像头预览独占其余空间；
+            // 这样手机横屏时预览也不会被底部控件挤成一条
+            orientation = if (isLandscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
         }
+        // FIT_CENTER：完整显示取景画面，不裁切（宁可留黑边）
         val previewView = PreviewView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-            scaleType = PreviewView.ScaleType.FILL_CENTER
+            layoutParams = if (isLandscape) {
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            } else {
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            scaleType = PreviewView.ScaleType.FIT_CENTER
         }
         root.addView(previewView)
 
-        val thumbRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(4), dp(10), 0)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(64)
-            )
-            visibility = View.GONE
-        }
-        root.addView(thumbRow)
-
-        val controlRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(72)
-            )
+        val controlColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(6), dp(10), dp(8))
+            layoutParams = if (isLandscape) {
+                LinearLayout.LayoutParams(dp(124), ViewGroup.LayoutParams.MATCH_PARENT)
+            } else {
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
         }
         val countLabel = TextView(this).apply {
-            textSize = 13f
+            textSize = 12f
             setTextColor(Color.parseColor("#CCDDEE"))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                if (isLandscape) bottomMargin = dp(6) else topMargin = dp(6)
+            }
         }
+
+        // 缩略图容器：横屏竖排（右侧栏，可滚动），竖屏横排（底部）
+        val thumbContainer = LinearLayout(this).apply {
+            orientation = if (isLandscape) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+            gravity = if (isLandscape) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
+            setPadding(dp(2), dp(2), dp(2), dp(2))
+        }
+        val thumbScroller = ScrollView(this).apply {
+            layoutParams = if (isLandscape) {
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            } else {
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(66)
+                )
+            }
+            addView(thumbContainer)
+            visibility = View.GONE
+        }
+
         val shutterButton = compactButton(primaryButton("拍照"), 16f).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(150), dp(56))
+            layoutParams = if (isLandscape) {
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52))
+            } else {
+                LinearLayout.LayoutParams(0, dp(52), 1f)
+            }
             setOnClickListener { takeCapturePhoto() }
         }
         val doneButton = compactButton(secondaryButton("完成"), 15f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginStart = dp(10) }
+            layoutParams = if (isLandscape) {
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
+                    topMargin = dp(8)
+                }
+            } else {
+                LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(10) }
+            }
             setOnClickListener { finishCaptureSession() }
         }
-        controlRow.addView(countLabel)
-        controlRow.addView(shutterButton)
-        controlRow.addView(doneButton)
-        root.addView(controlRow)
+
+        if (isLandscape) {
+            // 右侧竖栏：计数 / 快门 / 完成固定在栏顶，缩略图在下面滚动，
+            // 这样连拍时快门位置不会随照片增多而移动，可以一直按
+            controlColumn.addView(countLabel)
+            controlColumn.addView(shutterButton)
+            controlColumn.addView(doneButton)
+            controlColumn.addView(thumbScroller)
+        } else {
+            // 竖屏：底部依次是缩略图行 / 计数 / 快门与完成
+            controlColumn.addView(thumbScroller)
+            controlColumn.addView(countLabel)
+            val actionRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            actionRow.addView(shutterButton)
+            actionRow.addView(doneButton)
+            controlColumn.addView(actionRow)
+        }
+        root.addView(controlColumn)
 
         capturePreviewView = previewView
-        captureThumbRow = thumbRow
+        captureThumbRow = thumbContainer
+        captureThumbScroller = thumbScroller
+        captureThumbVertical = isLandscape
         captureCountLabel = countLabel
         captureUiRoot = root
         if (captureSessionActive) rebuildCaptureThumbs()
@@ -2396,6 +2462,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         captureImageCapture = null
         capturePreviewView = null
         captureThumbRow = null
+        captureThumbScroller = null
         captureCountLabel = null
         captureUiRoot = null
     }
@@ -2444,7 +2511,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         captureShotCount += 1
         captureFiles.add(file)
         mediaQueue.add(LocalMediaItem(uri = uri, name = file.name))
-        appendCaptureThumbnail(file)
+        appendCaptureThumbnail(file, mediaQueue.lastIndex)
         updateCaptureCounts()
         if (activeRoomCode == null) {
             toast("请先连接教室端，照片已加入队列")
@@ -2453,19 +2520,45 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         castMediaQueueItem(mediaQueue.lastIndex)
     }
 
-    /** 小预览：只加一张缩略图，不弹窗打断连续拍摄 */
-    private fun appendCaptureThumbnail(file: File) {
+    /** 小预览：缩略图 + 右上角红叉（拍的过程中随时删掉不满意的照片） */
+    private fun appendCaptureThumbnail(file: File, index: Int) {
         val row = captureThumbRow ?: return
-        val size = dp(52)
+        val size = dp(54)
+        val badge = dp(20)
         val options = BitmapFactory.Options().apply { inSampleSize = 8 }
         val bitmap = runCatching { BitmapFactory.decodeFile(file.absolutePath, options) }.getOrNull()
-        val thumb = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(size, size).apply { marginEnd = dp(6) }
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.parseColor("#223344"))
-            if (bitmap != null) setImageBitmap(bitmap)
+        val holder = FrameLayout(this).apply {
+            layoutParams = if (captureThumbVertical) {
+                LinearLayout.LayoutParams(size, size).apply { topMargin = dp(6) }
+            } else {
+                LinearLayout.LayoutParams(size, size).apply { marginEnd = dp(6) }
+            }
+            addView(
+                ImageView(this@MainActivity).apply {
+                    layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    setBackgroundColor(Color.parseColor("#223344"))
+                    if (bitmap != null) setImageBitmap(bitmap)
+                }
+            )
+            addView(
+                TextView(this@MainActivity).apply {
+                    text = "✕"
+                    textSize = 11f
+                    gravity = Gravity.CENTER
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.parseColor("#E53935"))
+                    layoutParams = FrameLayout.LayoutParams(badge, badge, Gravity.END or Gravity.TOP)
+                    contentDescription = "删除这张照片"
+                    setOnClickListener { deleteCaptureAt(index) }
+                }
+            )
         }
-        row.addView(thumb)
+        row.addView(holder)
+        captureThumbScroller?.visibility = View.VISIBLE
         row.visibility = View.VISIBLE
     }
 
@@ -2474,15 +2567,48 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val row = captureThumbRow ?: return
         row.removeAllViews()
         // 用会话内记录的文件而不是 content URI：FileProvider 的 path 不是真实文件路径
-        captureFiles.forEach { appendCaptureThumbnail(it) }
-        if (captureFiles.isNotEmpty()) row.visibility = View.VISIBLE
+        captureFiles.forEachIndexed { index, file -> appendCaptureThumbnail(file, index) }
+        val empty = captureFiles.isEmpty()
+        captureThumbScroller?.visibility = if (empty) View.GONE else View.VISIBLE
+        if (empty) row.visibility = View.GONE
+    }
+
+    /**
+     * 删除某张已拍照片：缩略图、投屏队列、本地文件一起删。
+     * 删掉的正好是当前投屏的那张时，让大屏切到相邻的一张。
+     */
+    private fun deleteCaptureAt(index: Int) {
+        if (index !in mediaQueue.indices) return
+        val wasCurrent = index == mediaQueueIndex
+        mediaQueue.removeAt(index)
+        if (index < captureFiles.size) {
+            runCatching { captureFiles.removeAt(index).delete() }
+        }
+        captureShotCount = mediaQueue.size
+        if (mediaQueue.isEmpty()) {
+            mediaQueueIndex = -1
+            toast("照片已全部删除")
+            showMediaCastSourceScreen()
+            return
+        }
+        if (wasCurrent) {
+            mediaQueueIndex = index.coerceAtMost(mediaQueue.lastIndex)
+        } else if (index < mediaQueueIndex) {
+            mediaQueueIndex -= 1
+        }
+        rebuildCaptureThumbs()
+        updateCaptureCounts()
+        if (wasCurrent) {
+            // 正在投屏的那张被删掉：让大屏切到相邻的一张
+            castMediaQueueItem(mediaQueueIndex)
+        }
     }
 
     private fun updateCaptureCounts() {
         captureCountLabel?.text = if (captureShotCount > 0) {
-            "已拍 $captureShotCount 张，可继续拍"
+            "已拍 $captureShotCount 张\n点缩略图右上角 ✕ 可删除"
         } else {
-            "按「拍照」即投屏，可连续拍多张"
+            "按「拍照」即投屏\n可连续拍多张"
         }
     }
 
@@ -2565,7 +2691,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         videoUserScrubbing = false
         signalingClient?.sendStop()
         signalingClient?.sendCoursewareOpen(item.remoteUrl, coursewareTitle, 1, 1)
-        showCoursewareScreen(title = coursewareTitle, isUploading = false)
+        // 拍照页里切换（含删除当前照片后补投）不上屏本地页面，留在大预览继续拍
+        if (captureUiRoot == null) {
+            showCoursewareScreen(title = coursewareTitle, isUploading = false)
+        }
         preloadRestOfMediaQueue()
     }
 
