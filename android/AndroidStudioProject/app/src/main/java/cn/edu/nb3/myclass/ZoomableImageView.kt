@@ -57,6 +57,16 @@ class ZoomableImageView(context: Context) : View(context) {
     /** 笔迹数量变化（落笔 / 撤销 / 清空），用于刷新撤销、清空按钮可用性 */
     var onAnnotationCountChanged: (() -> Unit)? = null
 
+    /**
+     * 点动翻页：点击屏幕左半边向前翻（上一页）、右半边向后翻（下一页）。
+     * direction 为 -1 / +1，与「上一屏 / 下一屏」按钮同一条路径。
+     *
+     * 手势模式下单指点击即可；画笔模式下单指留给绘制，改为**双指点击**触发，
+     * 与 iOS 端的"点动翻页（非画笔单指、画笔双指）"一致。
+     * 与双击放大共用判定窗口：只有确认不是双击时才翻页，不会"放大一次又翻一页"。
+     */
+    var onPageTap: ((direction: Int) -> Unit)? = null
+
     /** 当前旋转角度（0 / 90 / 180 / 270），用于修正拍照方向不对的图片 */
     var rotationDegrees: Int = 0
         private set
@@ -161,6 +171,15 @@ class ZoomableImageView(context: Context) : View(context) {
     private var pendingStartX = 0f
     private var pendingStartY = 0f
     private var hasPendingStart = false
+    // 画笔模式的"双指点击翻页"：两指同时落下、几乎不移动、快速抬起才算点击，
+    // 一旦有缩放/拖动就取消，避免翻页与手势互相干扰。
+    private var twoFingerTapCandidate = false
+    private var twoFingerTapDownTime = 0L
+    private var twoFingerTapX = 0f
+    private var twoFingerTapP0X = 0f
+    private var twoFingerTapP0Y = 0f
+    private var twoFingerTapP1X = 0f
+    private var twoFingerTapP1Y = 0f
     private val pendingPoints = mutableListOf<AnnotationPoint>()
     private var strokeSeq = 0
     private var lastSyncAt = 0L
@@ -632,6 +651,7 @@ class ZoomableImageView(context: Context) : View(context) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 twoFingerActive = false
+                twoFingerTapCandidate = false
                 if (mode == ImageCastMode.Pen && event.pointerCount == 1) {
                     // 先只记录落点，等确认是单指绘制（移动超过阈值）才真正起笔，
                     // 避免双指缩放 / 平移时把落点提交成"只有一个点的笔画"而留下小点。
@@ -650,6 +670,16 @@ class ZoomableImageView(context: Context) : View(context) {
                 }
                 twoFingerActive = true
                 updateTwoFingerState(event)
+                // 画笔模式：单指留给绘制，翻页改用双指点击，这里先登记候选
+                twoFingerTapCandidate = mode == ImageCastMode.Pen && onPageTap != null
+                if (twoFingerTapCandidate) {
+                    twoFingerTapDownTime = event.eventTime
+                    twoFingerTapP0X = event.getX(0)
+                    twoFingerTapP0Y = event.getY(0)
+                    twoFingerTapP1X = event.getX(1)
+                    twoFingerTapP1Y = event.getY(1)
+                    twoFingerTapX = (twoFingerTapP0X + twoFingerTapP1X) / 2f
+                }
             }
             MotionEvent.ACTION_MOVE -> {
                 when {
@@ -671,6 +701,15 @@ class ZoomableImageView(context: Context) : View(context) {
                     event.pointerCount >= 2 -> {
                         // 双指手势期间丢弃待定落点，避免抬指后被当成单击画点
                         hasPendingStart = false
+                        if (twoFingerTapCandidate) {
+                            // 任一指移动超过阈值即视为缩放 / 拖动，不再算"双指点击翻页"
+                            val slop = TAP_PAGE_SLOP_DP * resources.displayMetrics.density
+                            val moved = maxOf(
+                                hypot(event.getX(0) - twoFingerTapP0X, event.getY(0) - twoFingerTapP0Y),
+                                hypot(event.getX(1) - twoFingerTapP1X, event.getY(1) - twoFingerTapP1Y)
+                            )
+                            if (moved > slop) twoFingerTapCandidate = false
+                        }
                         handleTwoFingerGesture(event)
                     }
                     // 手势模式下单指平移由 GestureListener.onScroll 负责
@@ -690,6 +729,12 @@ class ZoomableImageView(context: Context) : View(context) {
                     hasPendingStart = false
                     startStroke(pendingStartX, pendingStartY)
                 }
+                if (twoFingerTapCandidate) {
+                    twoFingerTapCandidate = false
+                    if (event.eventTime - twoFingerTapDownTime <= TWO_FINGER_TAP_TIMEOUT_MS) {
+                        onPageTap?.invoke(if (twoFingerTapX < width / 2f) -1 else 1)
+                    }
+                }
                 finishActiveStroke(notify = true)
                 notifyViewport(force = true)
                 performClick()
@@ -697,6 +742,7 @@ class ZoomableImageView(context: Context) : View(context) {
             MotionEvent.ACTION_CANCEL -> {
                 // 手势被取消：丢弃待定落点，不补画点
                 hasPendingStart = false
+                twoFingerTapCandidate = false
                 finishActiveStroke(notify = true)
                 notifyViewport(force = true)
             }
@@ -966,6 +1012,16 @@ class ZoomableImageView(context: Context) : View(context) {
             return true
         }
 
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            // 点动翻页：点击左半边向前翻、右半边向后翻。
+            // onSingleTapConfirmed 只在确认不是双击之后回调，与双击放大共用判定窗口，
+            // 不会出现"放大一次又翻一页"。画笔模式单指用于绘制，翻页走双指点击（见 onTouchEvent）。
+            if (mode == ImageCastMode.Pen) return false
+            val handler = onPageTap ?: return false
+            handler(if (e.x < width / 2f) -1 else 1)
+            return true
+        }
+
         override fun onDoubleTap(e: MotionEvent): Boolean {
             // 画笔模式下禁用双击缩放，避免绘制过程中的误触
             if (mode == ImageCastMode.Pen) return true
@@ -993,6 +1049,12 @@ class ZoomableImageView(context: Context) : View(context) {
 
         /** 平板舞台与课件比例接近，只在几乎不损失宽度时才收窄（对齐 iOS CW_FIT_TABLET_MAX_WIDTH_LOSS） */
         private const val FIT_TABLET_MAX_WIDTH_LOSS = 0.03f
+
+        /** 画笔模式双指点击翻页的最长按住时间（对齐 iOS 的 ≤500ms） */
+        private const val TWO_FINGER_TAP_TIMEOUT_MS = 500L
+
+        /** 判定"点击"的最大位移（dp），超过即视为缩放 / 拖动，不再翻页 */
+        private const val TAP_PAGE_SLOP_DP = 12f
         private const val NOTIFY_INTERVAL_MS = 80L
         /** 单次批量上报的最大点数，防止弱网下积压过多 */
         private const val MAX_PENDING_POINTS = 12

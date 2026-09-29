@@ -4129,9 +4129,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             val penMode = imageCastPenMode
             zoomable.mode = if (penMode) ImageCastMode.Pen else ImageCastMode.Gesture
             modeHint.text = if (penMode) {
-                "画笔模式：单指绘制，双指缩放拖动"
+                "画笔模式：单指绘制，双指点击翻页 / 缩放拖动"
             } else {
-                "手势模式：双指缩放 / 拖动，双击放大"
+                "手势模式：双指缩放 / 拖动，双击放大，点击左右两侧翻页"
             }
             modeButton.text = if (penMode) "手势" else "画笔"
             modeButton.backgroundTintList = ColorStateList.valueOf(
@@ -4309,6 +4309,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         prevButton.setOnClickListener { pagingOrStep(-1) }
         nextButton.setOnClickListener { pagingOrStep(1) }
+        // 点动翻页：点击屏幕左半边向前翻、右半边向后翻，与「上一屏 / 下一屏」走同一条路径
+        // （长页课件仍是先逐屏滚动、滚到边界才真正翻页，放大状态下直接翻页）
+        zoomable.onPageTap = { direction -> pagingOrStep(direction) }
         jumpButton.setOnClickListener { jumpToInputPage() }
         pageInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
