@@ -7,7 +7,7 @@ const { createHmac } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 
-async function startTestServer({ port = 0, withWeb = false } = {}) {
+async function startTestServer({ port = 0, withWeb = false, env = {} } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'myclass-classroom-test-'));
   const serverRoot = path.join(directory, 'server');
   await fs.mkdir(path.join(serverRoot, 'data'), { recursive: true });
@@ -33,7 +33,7 @@ async function startTestServer({ port = 0, withWeb = false } = {}) {
     cwd: directory, windowsHide: true,
     env: { ...process.env, NODE_PATH: path.join(__dirname, 'node_modules'), HOST: '0.0.0.0', PORT: String(port),
       HTTPS_PORT: '0', PATH_PREFIX: '/myclass', ALLOWED_HOSTS: '127.0.0.1,localhost,10.0.2.2',
-      AUTH_SECRET: secret, COURSEWARE_ROOT: path.join(directory, 'courseware') }
+      AUTH_SECRET: secret, COURSEWARE_ROOT: path.join(directory, 'courseware'), ...env }
   });
   let output = '';
   child.stderr.on('data', data => { output += data; });

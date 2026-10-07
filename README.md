@@ -116,7 +116,7 @@ HOST=0.0.0.0
 PORT=3000
 PATH_PREFIX=/myclass
 PUBLIC_BASE_URL=http://10.30.13.1/myclass
-ALLOWED_HOSTS=10.30.13.1,localhost,127.0.0.1
+ALLOWED_HOSTS=10.30.13.1,localhost,127.0.0.1,ai.nbsdszx.cn,sz.imst.xyz
 ROOM_TTL_MS=7200000
 APP_VERSION=1.1.28-20260622
 HTTPS_PORT=443
@@ -135,7 +135,7 @@ COURSEWARE_LIST_LIMIT=0
 
 PPT/PPTX 新上传时默认通过 ExpandAnimations 将“出现/消失”动画按点击展开成多个静态 PDF 页，网页及手机沿用原有翻页控制。无需 Windows 或 Microsoft Office。设置 `PPT_ANIMATION_MODE=static` 可恢复普通静态转换；旧课件需要重新上传才会展开。支持范围、Linux 实测对比、部署和回滚方式见 [PPT 动画展开说明](docs/ppt-animation-expansion.md)。
 
-HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认只允许 `10.30.13.1`、`localhost`、`127.0.0.1`。请不要把该服务直接暴露到公网。
+HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认允许 `10.30.13.1`、`localhost`、`127.0.0.1`、`ai.nbsdszx.cn` 和 `sz.imst.xyz`。可通过 `https://sz.imst.xyz/myclass/` 访问域名反向代理入口；若设置了 `ALLOWED_HOSTS`，该变量会覆盖默认名单，需同时包含上述域名。
 
 ### 任教班级与随机抽学生
 

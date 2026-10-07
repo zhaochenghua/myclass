@@ -93,7 +93,7 @@ const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 // 大屏断开后保留房间（连接码）的宽限期，默认 5 分钟，设为 0 可恢复“断开即失效”
 const VIEWER_GRACE_MS = Number(process.env.VIEWER_GRACE_MS || 5 * 60 * 1000);
 const ALLOWED_HOSTS = new Set(
-  (process.env.ALLOWED_HOSTS || `${SERVER_IP},localhost,127.0.0.1,ai.nbsdszx.cn`)
+  (process.env.ALLOWED_HOSTS || `${SERVER_IP},localhost,127.0.0.1,ai.nbsdszx.cn,sz.imst.xyz`)
     .split(',')
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean)
