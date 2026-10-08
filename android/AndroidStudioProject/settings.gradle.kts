@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "MyClass"
 include(":app")
+include(":tv")

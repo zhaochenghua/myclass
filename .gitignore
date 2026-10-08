@@ -20,6 +20,7 @@ android/AndroidStudioProject/.kotlin/
 android/AndroidStudioProject/build_apk.log
 android/AndroidStudioProject/local.properties
 android/AndroidStudioProject/app/build/
+android/AndroidStudioProject/tv/build/
 android/AndroidStudioProject/build/
 android/AndroidStudioProject/.idea/
 android/AndroidStudioProject/*.iml

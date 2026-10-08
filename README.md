@@ -60,6 +60,12 @@ myclass/
 └── README.md
 ```
 
+## Android 电视大屏接收端
+
+独立电视模块位于 `android/AndroidStudioProject/tv/`，最低支持 Android 5.0，默认使用
+`https://sz.imst.xyz/myclass/`。提供原生 WebRTC 接收、课件与图片显示、视频播放和遥控器操作，
+与手机发送端可共存。构建、安装、兼容限制及模拟器验证见 [电视端说明](android/AndroidStudioProject/tv/README.md)。
+
 ## Windows 电脑投屏客户端
 
 Windows 端客户端位于 `windows/`，使用 Electron 将指定显示器或单个应用窗口的画面和 Windows 系统输出声音通过现有 WebRTC 链路投到教室大屏。它复用当前连接码和 `/myclass/ws` 信令，不需要新增媒体中转服务；关闭窗口后程序继续驻留系统托盘。客户端设置中可以选择投屏时是否同时在笔记本上播放声音。
