@@ -41,6 +41,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var header: TextView
     private lateinit var serverLabel: TextView
+    private lateinit var cornerCode: TextView
     private lateinit var notice: TextView
     private lateinit var pageLabel: TextView
     private lateinit var surface: SurfaceViewRenderer
@@ -130,23 +131,36 @@ class MainActivity : Activity() {
         header = label("", 17f, teal).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
         brand.addView(header, LinearLayout.LayoutParams(0, -1, 1f))
         waiting.addView(brand, LinearLayout.LayoutParams(-1, dp(58)))
-        val center = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
-        center.addView(label("课堂连接码", 22f).apply { gravity = Gravity.CENTER })
-        code = label("----", 112f, teal).apply { gravity = Gravity.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
-        center.addView(code, LinearLayout.LayoutParams(-1, dp(145)))
-        status = label("正在连接服务器…", 21f).apply { gravity = Gravity.CENTER }
-        center.addView(status, LinearLayout.LayoutParams(-1, dp(42)))
-        serverLabel = label(Uri.parse(endpoint).host ?: "sz.imst.xyz", 16f, Color.DKGRAY).apply { gravity = Gravity.CENTER }
-        center.addView(serverLabel)
+        val center = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            isBaselineAligned = false
+        }
+        val connectionPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(0, 0, dp(18), 0)
+        }
+        connectionPanel.addView(label("课堂连接码", 22f).apply { gravity = Gravity.CENTER })
+        code = label("----", 96f, teal).apply {
+            gravity = Gravity.CENTER
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }
+        connectionPanel.addView(code, LinearLayout.LayoutParams(-1, dp(122)))
+        status = label("正在连接服务器…", 19f).apply { gravity = Gravity.CENTER }
+        connectionPanel.addView(status, LinearLayout.LayoutParams(-1, dp(38)))
+        serverLabel = label(Uri.parse(endpoint).host ?: "sz.imst.xyz", 15f, Color.DKGRAY).apply { gravity = Gravity.CENTER }
+        connectionPanel.addView(serverLabel, LinearLayout.LayoutParams(-1, dp(28)))
+        center.addView(connectionPanel, LinearLayout.LayoutParams(0, dp(220), 1f))
         val qrRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
         qrRow.addView(qrOption(cn.edu.nb3.myclass.tv.R.drawable.qr_windows, "Windows 客户端", "扫码下载安装"),
-            LinearLayout.LayoutParams(dp(156), dp(166)))
+            LinearLayout.LayoutParams(dp(142), dp(154)))
         qrRow.addView(qrOption(cn.edu.nb3.myclass.tv.R.drawable.qr_ios, "手机 / 平板", "扫码打开控制页"),
-            LinearLayout.LayoutParams(dp(156), dp(166)).apply { marginStart = dp(18) })
-        center.addView(qrRow, LinearLayout.LayoutParams(-1, dp(166)).apply { topMargin = dp(8) })
+            LinearLayout.LayoutParams(dp(142), dp(154)).apply { marginStart = dp(12) })
+        center.addView(qrRow, LinearLayout.LayoutParams(dp(300), dp(154)))
         waiting.addView(center, LinearLayout.LayoutParams(-1, 0, 1f))
         notice = label("", 18f, Color.WHITE).apply {
             gravity = Gravity.CENTER; setBackgroundColor(Color.rgb(148, 40, 40))
@@ -154,6 +168,18 @@ class MainActivity : Activity() {
             isFocusable = false
         }
         root.addView(notice, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(20) })
+        cornerCode = label("", 17f, Color.WHITE).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            setBackgroundColor(Color.argb(210, 30, 39, 43))
+            visibility = View.GONE
+            isFocusable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        }
+        root.addView(cornerCode, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(18)
+            rightMargin = dp(28)
+        })
         toolbar = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL; setPadding(dp(22), dp(8), dp(22), dp(8))
             setBackgroundColor(Color.rgb(237, 242, 243))
@@ -213,14 +239,19 @@ class MainActivity : Activity() {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             contentDescription = title
             setBackgroundColor(Color.WHITE)
-        }, LinearLayout.LayoutParams(dp(112), dp(112)))
+        }, LinearLayout.LayoutParams(dp(102), dp(102)))
         addView(label(title, 14f).apply {
             gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD
-        }, LinearLayout.LayoutParams(-1, dp(24)))
+        }, LinearLayout.LayoutParams(-1, dp(23)))
         addView(label(subtitle, 11f, Color.DKGRAY).apply {
             gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(-1, dp(20)))
+        }, LinearLayout.LayoutParams(-1, dp(19)))
+    }
+    private fun showCornerCode(show: Boolean) {
+        if (!::cornerCode.isInitialized) return
+        cornerCode.text = if (show && roomCode.isNotEmpty()) "重连码  $roomCode" else ""
+        cornerCode.visibility = if (show && roomCode.isNotEmpty()) View.VISIBLE else View.GONE
     }
     private fun command(name: String, action: () -> Unit) = Button(this).apply {
         text = name; textSize = 16f; isAllCaps = false; minWidth = 0; minimumWidth = 0
@@ -270,6 +301,7 @@ class MainActivity : Activity() {
                     endPresentation(false); clearTeacher()
                 }
                 roomCode = message.optString("code"); code.text = roomCode
+                showCornerCode(false)
                 notice.visibility = View.GONE; status.text = "等待教师连接"
                 updateControls()
             }
@@ -281,11 +313,13 @@ class MainActivity : Activity() {
                 }
                 token = incoming; username = message.optString("username")
                 connected = true; header.text = if (username.isEmpty()) "教师已连接" else username
+                showCornerCode(false)
                 status.text = "教师已连接"; notice.visibility = View.GONE
             }
             "teacher.offline" -> {
-                connected = false; receiver.closeVideo()
+                connected = false; header.text = ""; receiver.closeVideo()
                 if (kind == "live") endPresentation(false)
+                showCornerCode(true)
                 connectionStatus("教师已断开，等待重新连接")
             }
             "webrtc.offer" -> {
@@ -303,7 +337,7 @@ class MainActivity : Activity() {
             "room.snapshot" -> snapshot(message.optJSONObject("presentation"))
             "student.selection.set", "student.selection.get" -> receiveSelection(message)
             "student.roll" -> roll(message.optString("requestId"))
-            "room.expired" -> { clearTeacher(); endPresentation(false); receiver.start(endpoint, true) }
+            "room.expired" -> { showCornerCode(false); clearTeacher(); endPresentation(false); receiver.start(endpoint, true) }
             "error" -> showError(message.optString("message", "连接异常"))
         }
     }
@@ -590,7 +624,7 @@ class MainActivity : Activity() {
     }
     private fun clearTeacher() {
         token = ""; username = ""; connected = false; classId = ""; drawMode = "number"; drawCount = 50
-        drawing = false; drawn.clear(); header.text = ""
+        drawing = false; drawn.clear(); header.text = ""; showCornerCode(false)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
