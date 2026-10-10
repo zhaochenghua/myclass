@@ -207,7 +207,7 @@ async function connectCampus() {
   $('authVersion').textContent = versionText;
   $('connectVersion').textContent = versionText;
   $('menuVersion').textContent = `已登录：${state.username || ''}${versionText ? ` · ${versionText}` : ''}`;
-  $('connectServerHint').textContent = `服务地址：${window.location.host}${state.config.wsPath || ''}`;
+  $('connectServerHint').textContent = `投屏及管理地址：${window.location.host}/myclass`;
 
   // 启动即做一次版本自检：服务端已升级而本机仍是旧代码时提示更新
   checkForUpdate();
