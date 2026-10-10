@@ -290,6 +290,30 @@ input::placeholder {
   font-size: 0.72rem;
 }
 
+/* ---------- 连接投屏服务（Network 屏）---------- */
+.network-hint {
+  margin: 0;
+  text-align: center;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* 自检失败的具体原因（请求地址 / HTTP 状态）：允许选中复制，便于现场反馈 */
+.network-detail {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--muted);
+  word-break: break-all;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* ---------- 直播页 ---------- */
 .view-live {
   padding: 0;

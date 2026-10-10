@@ -81,9 +81,40 @@ const state = {
 // ---------------------------------------------------------------- 引导
 const classroom = createClassroom(state);
 let campusChecking = false;
+
+// 校园服务自检的超时时间：超过就判为失败，老师可点“重新检测”。
+const CAMPUS_TIMEOUT_MS = 5000;
+
+// 最近一次自检失败的原因（{ url, reason }）。Network 屏会把它显示出来，
+// 现场就能分辨是“超时”“连不上（多半是证书不受信任）”“HTTP 403”还是“被认证页拦截”。
+let campusFailure = null;
+
+/** 相对路径按“当前入口”解析：/myclass/ios/ 下的 ../health → /myclass/health */
+function campusUrl(relative) {
+  try {
+    return new URL(relative, window.location.href).href;
+  } catch {
+    return relative;
+  }
+}
+
+/** 抛错时捎带上排查信息，供 Network 屏展示 */
+function campusError(url, reason) {
+  const error = new Error(reason);
+  error.campusFailure = { url, reason };
+  return error;
+}
+
+/** 区分“超时”和“连不上”：后者常见于不在同一网段，或 https 自签证书未被信任 */
+function describeFetchError(error) {
+  if (error?.name === 'AbortError') return `超过 ${CAMPUS_TIMEOUT_MS / 1000} 秒没有响应`;
+  if (error instanceof TypeError) return '无法建立连接（网络不通，或 https 证书未被信任）';
+  return error?.message || '未知错误';
+}
+
 async function campusFetch(url, options = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), CAMPUS_TIMEOUT_MS);
   try { return await fetch(url, { ...options, signal: controller.signal }); }
   finally { clearTimeout(timer); }
 }
@@ -91,7 +122,35 @@ async function campusFetch(url, options = {}) {
 function showNetwork(message = '') {
   state.screen = 'Network';
   showView('Network');
-  $('networkMessage').textContent = message || (navigator.onLine === false ? '当前没有网络，请连接校园 Wi-Fi 后重试。' : '无法访问校园服务器，请确认已连接校园 Wi-Fi；若已连接，请检查网络或服务器状态。');
+  const messageNode = $('networkMessage');
+  const detailNode = $('networkDetail');
+  let detail = '';
+  if (message) {
+    messageNode.textContent = message;
+  } else if (navigator.onLine === false) {
+    messageNode.textContent = '当前没有网络，请连接校园 Wi-Fi 后重试。';
+  } else if (campusFailure) {
+    messageNode.textContent = `无法访问投屏服务：${campusFailure.reason}`;
+    detail = `请求地址：${campusFailure.url}`;
+  } else {
+    messageNode.textContent = '无法访问校园服务器，请确认已连接校园 Wi-Fi；若已连接，请检查网络或服务器状态。';
+  }
+  detailNode.textContent = detail;
+  detailNode.hidden = detail === '';
+}
+
+/** Network 屏兜底：清掉 Service Worker 与 Cache Storage 后重新打开。
+    主屏幕图标打不开、浏览器打开正常时，多半是旧图标 + 旧缓存，走这里即可，
+    不必让老师去删图标（清缓存入口原先只在设置菜单里，进不去菜单就用不上）。 */
+async function clearCacheAndReopen() {
+  $('networkRetry').disabled = true;
+  $('networkClearCache').disabled = true;
+  showNetwork('正在清除缓存并重新打开…');
+  await clearAppCaches();
+  const url = new URL(window.location.href);
+  // 此时还没有 state.config，用时间戳保证这次一定绕开 HTTP 缓存
+  url.searchParams.set('v', String(Date.now()));
+  window.location.replace(url.href);
 }
 
 async function bootstrap() {
@@ -100,6 +159,7 @@ async function bootstrap() {
   bindStaticEvents();
   registerServiceWorker();
   $('networkRetry').addEventListener('click', connectCampus);
+  $('networkClearCache').addEventListener('click', clearCacheAndReopen);
   window.addEventListener('online', () => { if (state.screen === 'Network') connectCampus(); });
   window.addEventListener('offline', () => { if (['Auth', 'Connect'].includes(state.screen)) showNetwork(); });
   await connectCampus();
@@ -110,11 +170,27 @@ async function connectCampus() {
   campusChecking = true;
   $('networkRetry').disabled = true;
   showNetwork('正在检测校园投屏服务…');
+  const healthUrl = campusUrl('../health');
   try {
-    const health = await campusFetch('../health', { cache: 'no-store' });
-    if (!health.ok || (await health.json()).service !== 'myclass') throw new Error('服务器不可达');
+    let health;
+    try {
+      health = await campusFetch(healthUrl, { cache: 'no-store' });
+    } catch (error) {
+      throw campusError(healthUrl, describeFetchError(error));
+    }
+    if (!health.ok) throw campusError(healthUrl, `服务器返回 HTTP ${health.status}`);
+    let payload;
+    try {
+      payload = await health.json();
+    } catch {
+      // 校园网认证页 / 代理可能以 200 返回一段 HTML，此时拿到的不是投屏服务
+      throw campusError(healthUrl, '返回内容不是投屏服务（可能被认证页或代理拦截）');
+    }
+    if (payload.service !== 'myclass') throw campusError(healthUrl, `服务标识不匹配（${payload.service ?? '未知'}）`);
     state.config = await loadConfig();
+    campusFailure = null;
   } catch (error) {
+    campusFailure = error?.campusFailure ?? { url: healthUrl, reason: describeFetchError(error) };
     showNetwork();
     campusChecking = false;
     $('networkRetry').disabled = false;
@@ -162,9 +238,19 @@ async function connectCampus() {
 }
 
 async function loadConfig() {
-  const response = await campusFetch('../api/config', { cache: 'no-store' });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
+  const url = campusUrl('../api/config');
+  let response;
+  try {
+    response = await campusFetch(url, { cache: 'no-store' });
+  } catch (error) {
+    throw campusError(url, describeFetchError(error));
+  }
+  if (!response.ok) throw campusError(url, `服务器返回 HTTP ${response.status}`);
+  try {
+    return await response.json();
+  } catch {
+    throw campusError(url, '返回内容不是服务配置（可能被认证页或代理拦截）');
+  }
 }
 
 async function apiMe() {

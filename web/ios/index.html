@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20260929b" />
+    <link rel="stylesheet" href="./style.css?v=20261010a" />
   </head>
   <body>
     <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
@@ -31,10 +31,14 @@
 
     <main class="app">
       <section class="view view-center" id="viewNetwork">
-        <div class="panel"><div class="panel-side"><h1 class="title">连接校园网络</h1>
+        <div class="panel"><div class="panel-side"><h1 class="title">连接投屏服务</h1>
           <p class="subtitle" id="networkMessage">正在检测校园投屏服务…</p></div>
-          <div class="panel-main"><p>请在 iPhone 设置中连接校园 Wi-Fi，然后返回本页面。</p>
-            <button class="btn btn-primary" id="networkRetry" type="button">重新检测</button></div></div>
+          <div class="panel-main">
+            <p class="network-hint">请确认 iPhone 已连接校园 Wi-Fi。若浏览器里打开正常、只有主屏幕图标不行，点下面的“清除缓存并重新打开”。</p>
+            <p class="network-detail" id="networkDetail" hidden></p>
+            <button class="btn btn-primary" id="networkRetry" type="button">重新检测</button>
+            <button class="btn btn-ghost" id="networkClearCache" type="button">清除缓存并重新打开</button>
+          </div></div>
       </section>
       <!-- ============ 登录 / 注册 ============ -->
       <section class="view view-center" id="viewAuth" hidden>
@@ -378,6 +382,6 @@
 
     <div class="toast" id="toast" hidden></div>
 
-    <script type="module" src="./js/app.js?v=20260929b"></script>
+    <script type="module" src="./js/app.js?v=20261010a"></script>
   </body>
 </html>
