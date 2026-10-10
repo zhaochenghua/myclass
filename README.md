@@ -37,11 +37,11 @@ myclass/
 │   ├── index.html
 │   ├── app.js
 │   ├── style.css
+│   ├── sw.js          # Service Worker（放根目录，作用域覆盖整个 /myclass/）
 │   ├── public/
 │   └── ios/            # iPhone 网页版（PWA）
 │       ├── index.html
 │       ├── style.css
-│       ├── sw.js
 │       ├── manifest.webmanifest
 │       └── js/
 ├── android/

@@ -154,6 +154,8 @@ async function clearCacheAndReopen() {
 }
 
 async function bootstrap() {
+  // 先把地址栏里上一次重载留下的 ?v= 抹掉，避免它被“添加到主屏幕”存进图标地址
+  cleanCacheBustParam();
   // 标注画板只依赖 DOM，最先初始化：即使后续配置/登录失败，画笔相关代码也不会拿到空画板
   setupAnnotationBoards();
   bindStaticEvents();
@@ -3417,16 +3419,40 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   if (!window.isSecureContext) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {
-      /* 注册失败不影响使用 */
-    });
+    dropLegacyServiceWorker()
+      .then(() => navigator.serviceWorker.register('../sw.js'))
+      .catch(() => {
+        /* 注册失败不影响使用 */
+      });
   });
+}
+
+/** 注销旧版注册在 `<前缀>/ios/` 作用域下的 Service Worker。
+    那个作用域收不到"不带结尾斜杠"的老入口（`<前缀>/ios` 只是 `<前缀>/ios/` 的前缀），
+    主屏幕图标按这个地址启动时拿不到任何离线兜底。新 SW 位于 `<前缀>/sw.js`，默认作用域
+    覆盖整个前缀目录；但"作用域更长者优先"，不注销旧注册的话它仍会接管 `<前缀>/ios/`。 */
+async function dropLegacyServiceWorker() {
+  try {
+    const keepScope = new URL('../', window.location.href).pathname;
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(
+      registrations
+        .filter((registration) => new URL(registration.scope).pathname !== keepScope)
+        .map((registration) => registration.unregister())
+    );
+  } catch {
+    /* 忽略：注销失败不影响本次注册 */
+  }
 }
 
 // ---------------------------------------------------------------- 版本自检 / 更新
 
 // 本机“上次运行的版本号”。与服务端 /api/config 的 iosVersion 不一致，说明服务器已升级。
 const VERSION_STORAGE_KEY = 'seenVersion';
+// 老师在更新提示里点过“稍后”的版本号。只放内存里的标记会随页面重载丢失，
+// 于是同一版本每次打开都再弹一次；存下来后同一个版本只提示一次，
+// 菜单里的“检查更新”仍可随时手动查看（它走 force）。
+const DISMISSED_VERSION_KEY = 'dismissedVersion';
 let updatePromptDismissed = false;
 
 function serverVersion() {
@@ -3435,6 +3461,10 @@ function serverVersion() {
 
 function seenVersion() {
   return String(storage.get(VERSION_STORAGE_KEY) || '').trim();
+}
+
+function dismissedVersion() {
+  return String(storage.get(DISMISSED_VERSION_KEY) || '').trim();
 }
 
 /** 启动自检：服务端版本与本机上次运行的版本不一致时提示更新 */
@@ -3448,7 +3478,22 @@ function checkForUpdate() {
     return;
   }
   if (seen === latest) return;
+  if (dismissedVersion() === latest) return; // 这个版本老师点过“稍后”，不再每次弹
   showUpdateDialog(seen, latest);
+}
+
+/** 去掉地址栏里的缓存穿透参数（applyUpdate / “清除缓存并重新打开”写入的 ?v=）。
+    它只对写入后的那一次重载有意义：留着会让“添加到主屏幕”存下一个带参数的地址，
+    也容易让人以为页面地址不对。只替换当前历史条目，不新增记录。 */
+function cleanCacheBustParam() {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('v')) return;
+    url.searchParams.delete('v');
+    window.history.replaceState(null, '', url.href);
+  } catch {
+    /* 忽略：个别 WebView 不允许 replaceState，留着参数也不影响使用 */
+  }
 }
 
 /** 菜单里的“检查更新”：主动拉取服务端版本对比，并始终给出清缓存入口 */
@@ -3483,6 +3528,9 @@ function showUpdateDialog(current, latest, options = {}) {
 
 function dismissUpdateDialog() {
   updatePromptDismissed = true;
+  // 记住“这个版本已经问过了”，否则下次打开还会再弹一次
+  const latest = serverVersion();
+  if (latest) storage.set(DISMISSED_VERSION_KEY, latest);
   $('updateDialog').hidden = true;
 }
 
@@ -3519,7 +3567,10 @@ async function nudgeServiceWorker() {
 /** 应用更新：记录最新版本号后带缓存穿透参数重新加载 */
 async function applyUpdate({ clearCache = false } = {}) {
   const latest = serverVersion();
-  if (latest) storage.set(VERSION_STORAGE_KEY, latest);
+  if (latest) {
+    storage.set(VERSION_STORAGE_KEY, latest);
+    storage.remove(DISMISSED_VERSION_KEY); // 已经更新到最新，之前的“稍后”标记作废
+  }
   $('updateDialog').hidden = true;
   showOverlay(clearCache ? '正在清除缓存并更新…' : '正在重新加载…');
   if (clearCache) await clearAppCaches();
