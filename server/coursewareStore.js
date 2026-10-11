@@ -20,6 +20,29 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
   fs.mkdirSync(objectsRoot, { recursive: true });
   let writes = Promise.resolve();
   let initialization;
+  const preparations = new Map();
+
+  // Only identical objects wait for each other. Conversion must never occupy
+  // the global metadata transaction queue (and block unrelated tiny uploads).
+  async function withObject(key, operation) {
+    const previous = preparations.get(key) || Promise.resolve();
+    const pending = previous.catch(() => {}).then(operation);
+    preparations.set(key, pending);
+    try {
+      return await pending;
+    } finally {
+      if (preparations.get(key) === pending) {
+        await mutate(async () => {
+          if (preparations.get(key) !== pending) return;
+          preparations.delete(key);
+          const items = await readIndex();
+          if (!items.some(item => item.storageKey === key)) {
+            await fs.promises.rm(objectDirectory(key), { recursive: true, force: true });
+          }
+        });
+      }
+    }
+  }
 
   function mutate(operation) {
     const result = writes.then(operation);
@@ -119,7 +142,8 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     }
   }
 
-  async function publish(file, originalName, userId) {
+  async function publish(file, originalName, userId, uploadRequestId = '') {
+    if (uploadRequestId && !/^[a-zA-Z0-9-]{1,80}$/.test(uploadRequestId)) throw storageError(400, '无效上传编号');
     const ext = path.extname(originalName).toLowerCase();
     if (!EXTENSIONS.includes(ext)) {
       throw storageError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP、图片、视频文件');
@@ -128,8 +152,8 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     const profile = OFFICE.has(ext) ? officeProfile(ext) : '';
     if (profile && !/^[a-z0-9-]{1,64}$/.test(profile)) throw new Error('Invalid Office conversion profile');
     const storageKey = `${await hashFile(file.path)}${ext}${profile ? `.${profile}` : ''}`;
-    return mutate(async () => {
-      const items = await readIndex();
+    return withObject(storageKey, async () => {
+      await readIndex();
       const bundle = objectDirectory(storageKey);
       const original = path.join(bundle, `original${ext}`);
       const preview = OFFICE.has(ext) ? path.join(bundle, 'preview.pdf') : original;
@@ -155,6 +179,13 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
             await fs.promises.rm(staging, { recursive: true, force: true });
           }
         }
+        return await mutate(async () => {
+        const items = await readIndex();
+        const existing = uploadRequestId && items.find(item => item.userId === userId && item.uploadRequestId === uploadRequestId);
+        if (existing) {
+          if (existing.storageKey !== storageKey) throw storageError(409, '上传编号已用于其他文件');
+          return existing;
+        }
         const originalStat = await fs.promises.stat(original);
         const previewStat = await fs.promises.stat(preview);
         const id = crypto.randomUUID();
@@ -162,6 +193,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
         const result = { id, userId: userId || 'legacy', title: path.basename(originalName, path.extname(originalName)),
           fileName: originalName, size: previewStat.size, createdAt: new Date().toISOString(),
           url: urlFor(id, outputExt), storageKey };
+        if (uploadRequestId) result.uploadRequestId = uploadRequestId;
         if (OFFICE.has(ext)) {
           try { result.conversion = JSON.parse(await fs.promises.readFile(path.join(bundle, 'conversion.json'), 'utf8')); }
           catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -186,6 +218,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
         }
         await saveIndex([result, ...items]);
         return result;
+        });
       } catch (error) {
         for (const alias of aliases) await fs.promises.rm(alias, { force: true });
         if (newBundle) await fs.promises.rm(bundle, { recursive: true, force: true });
@@ -224,7 +257,13 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
   function remember(item) {
     return mutate(async () => {
       const items = await readIndex();
+      const existing = item.uploadRequestId && items.find(entry => entry.userId === item.userId && entry.uploadRequestId === item.uploadRequestId);
+      if (existing) {
+        if (existing.linkUrl !== item.linkUrl) throw storageError(409, '上传编号已用于其他链接');
+        return existing;
+      }
       await saveIndex([item, ...items.filter(existing => existing.id !== item.id)]);
+      return item;
     });
   }
 
@@ -240,7 +279,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
       await saveIndex(remaining);
       if (!item.linkUrl) {
         for (const ext of EXTENSIONS) await fs.promises.rm(path.join(root, `${id}${ext}`), { force: true });
-        if (item.storageKey && !remaining.some(entry => entry.storageKey === item.storageKey)) {
+        if (item.storageKey && !preparations.has(item.storageKey) && !remaining.some(entry => entry.storageKey === item.storageKey)) {
           await fs.promises.rm(objectDirectory(item.storageKey), { recursive: true, force: true });
         }
       }

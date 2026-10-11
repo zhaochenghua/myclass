@@ -68,6 +68,7 @@ import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.doOnLayout
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
@@ -166,6 +167,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var classSettingsButton: MaterialButton? = null
     private var networkGateShowing = false
     private var campusCheckRunning = false
+    @Volatile private var selectedServerBaseUrl = BuildConfig.SERVER_BASE_URL
+    private fun serverBaseUrl(): String = selectedServerBaseUrl
     private var campusCheckGeneration = 0
     private var audioToggleButton: MaterialButton? = null
     private var cameraControls: LinearLayout? = null
@@ -194,6 +197,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareScreenCount = 1
     private var coursewareTitle = ""
     private var coursewareUrl = ""
+    private var coursewareRememberKey = ""
     /** 本次投屏课件的本地原文件：图片投屏时用它预览，避免从服务器重复下载 */
     private var coursewareLocalUri: Uri? = null
     private var castImageBitmap: Bitmap? = null
@@ -289,8 +293,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         override fun onAvailable(network: Network) {
+            if (appInForeground) switchToCampusNetworkSilently()
             runOnUiThread {
                 if (appInForeground && networkGateShowing) checkCampusAccess()
+                if (appInForeground) triggerPendingUploadIfReady()
                 // 网络恢复且有可用连接码但未连接时，立即重连
                 if (appInForeground && activeRoomCode != null &&
                     !roomJoined && !signalReconnectInProgress
@@ -300,6 +306,27 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
         }
+    }
+
+    /** Wi‑Fi 恢复后优先探测校园入口；公网使用中也会自动切回内网。 */
+    private fun switchToCampusNetworkSilently() {
+        Thread {
+            val available = runCatching {
+                val request = Request.Builder().url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/health").build()
+                campusHttpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful && JSONObject(response.body?.string().orEmpty()).optString("service") == "myclass") true else false
+                }
+            }.getOrDefault(false)
+            if (!available || selectedServerBaseUrl == BuildConfig.SERVER_BASE_URL || isDestroyed) return@Thread
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                selectedServerBaseUrl = BuildConfig.SERVER_BASE_URL
+                CoursewareApi.serverBaseUrl = selectedServerBaseUrl
+                if (activeRoomCode != null && !signalReconnectInProgress) {
+                    reconnectSignalingForCurrentRoom()
+                }
+            }
+        }.start()
     }
     private var coursewareSubScreen: CoursewareSubScreen = CoursewareSubScreen.None
     private var pendingLinkSuggestedName: String? = null
@@ -362,11 +389,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         ExternalFileReceiver.restoreQueue(this)
         updateManager = UpdateManager(this).also { it.checkForUpdate() }
         checkCampusAccess()
+        initialIntentProcessed = savedInstanceState?.getBoolean("initialIntentProcessed") ?: false
         if (!initialIntentProcessed) {
             initialIntentProcessed = true
             val capturedIntent = intent
             handleShareIntent(capturedIntent)
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("initialIntentProcessed", initialIntentProcessed)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -379,26 +412,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (intent?.action !in listOf(Intent.ACTION_SEND, Intent.ACTION_VIEW)) return
         val targetIntent = intent ?: return
         val normalizedIntent = normalizeLinkIntent(targetIntent)
-        Thread {
-            val result = ExternalFileReceiver.handleIncomingIntent(this, normalizedIntent)
-            runOnUiThread {
-                when (result) {
-                    ExternalFileReceiver.HandleResult.DUPLICATE -> toast("该文件已在待上传列表中")
-                    ExternalFileReceiver.HandleResult.FILE -> {
-                        if (ExternalFileReceiver.isLatestPendingVideo()) {
-                            showVideoNameDialog()
-                        } else {
-                            toast("课件已加入上传队列（${ExternalFileReceiver.pendingCount()} 个待上传）")
-                            triggerPendingUploadIfReady()
-                        }
-                    }
-                    ExternalFileReceiver.HandleResult.LINK -> {
-                        showLinkNameDialog()
-                    }
-                    ExternalFileReceiver.HandleResult.IGNORED -> { /* ignore */ }
-                }
-            }
-        }.start()
+        ImportUploadService.receive(this, normalizedIntent)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -453,6 +467,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onResume() {
         super.onResume()
         appInForeground = true
+        ImportUploadService.observe(this)
+        triggerPendingUploadIfReady()
         // 从「允许安装未知应用」设置页返回：已授权就复用已下载的安装包继续安装，不重新下载
         updateManager?.onResumeFromSettings()
         if (networkGateShowing) checkCampusAccess()
@@ -557,6 +573,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     override fun onDestroy() {
+        ImportUploadService.detach(this)
         campusCheckGeneration += 1
         classPickerDialog?.dismiss()
         unregisterNetworkCallback()
@@ -653,15 +670,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun triggerPendingUploadIfReady() {
-        if (authToken == null) return
-        val count = ExternalFileReceiver.pendingCount()
-        if (count > 0) {
-            toast("正在上传 ${count} 个待上传课件...")
-        }
-        Thread {
-            ExternalFileReceiver.processPendingQueue(this)
-            ExternalFileReceiver.processPendingLinks(this)
-        }.start()
+        ImportUploadService.start(this)
+    }
+
+    fun onImportStatus(message: String, finished: Boolean, rejectedToken: String?) {
+        if (isDestroyed || !appInForeground) return
+        if (currentScreen == Screen.Connect || currentScreen == Screen.Menu) updateStatus(message)
+        if (finished) toast(message)
+        if (rejectedToken != null) onAuthenticationExpired(rejectedToken)
     }
 
     private fun addAuthHeader(builder: Request.Builder) {
@@ -674,7 +690,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         Thread {
             runCatching {
                 val request = Request.Builder()
-                    .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/auth/me")
+                    .url("${serverBaseUrl().trimEnd('/')}/api/auth/me")
                     .get().header("Authorization", "Bearer $token")
                     .build()
                 authHttpClient.newCall(request).execute().use { response ->
@@ -685,6 +701,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 runOnUiThread {
                     if (authGeneration == generation && currentScreen == Screen.Auth) {
                         showConnectScreen()
+                        triggerPendingUploadIfReady()
                     }
                 }
             }.onFailure { error ->
@@ -710,10 +727,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val network = manager?.activeNetwork
         val capabilities = network?.let { manager.getNetworkCapabilities(it) }
         return when {
-            network == null -> "手机当前没有网络。请连接校园 Wi-Fi 后重试。"
+            network == null -> "当前没有网络。请连接 Wi-Fi 或移动网络后重试。"
             capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true ->
-                "当前无法连接校园服务器，请先连接校园 Wi-Fi。移动数据通常无法访问课堂投屏服务。"
-            else -> "已连接 Wi-Fi，但无法访问校园服务器。请确认连接的是校园 Wi-Fi；若已连接，请检查校园网络或服务器状态。"
+                "校园网不可用，可使用公网地址继续；建议连接 Wi-Fi 以获得更稳定的投屏体验。"
+            else -> "校园网地址暂不可达，可使用公网地址继续；建议连接 Wi-Fi 以获得更稳定的投屏体验。"
         }
     }
 
@@ -722,9 +739,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         currentScreen = Screen.Auth
         networkGateShowing = true
         val root = baseColumn().apply { setPadding(dp(28), dp(32), dp(28), dp(32)) }
-        root.addView(titleText(if (checking) "正在连接校园服务器" else "请连接校园网络", 24f))
+        root.addView(titleText(if (checking) "正在连接服务器" else "连接服务器", 24f))
         statusText = bodyText(message).apply { gravity = Gravity.CENTER }
         root.addView(statusText)
+        if (!checking) root.addView(bodyText("公网入口：https://sz.imst.xyz/myclass/\n建议连接 Wi-Fi 使用课堂投屏").apply { gravity = Gravity.CENTER })
         root.addView(primaryButton("打开 Wi-Fi 设置").apply {
             setOnClickListener { startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)) }
         })
@@ -742,20 +760,25 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val generation = ++campusCheckGeneration
         showCampusNetworkScreen("请稍候，正在检测校园投屏服务…", checking = true)
         Thread {
-            val available = runCatching {
-                val request = Request.Builder().url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/health").build()
-                campusHttpClient.newCall(request).execute().use { response ->
-                    response.isSuccessful && JSONObject(response.body?.string().orEmpty()).optString("service") == "myclass"
+            val available = listOf(BuildConfig.SERVER_BASE_URL, BuildConfig.EXTERNAL_SERVER_BASE_URL)
+                .firstNotNullOfOrNull { base ->
+                    runCatching {
+                        val request = Request.Builder().url("${base.trimEnd('/')}/health").build()
+                        campusHttpClient.newCall(request).execute().use { response ->
+                            if (response.isSuccessful && JSONObject(response.body?.string().orEmpty()).optString("service") == "myclass") base else null
+                        }
+                    }.getOrNull()
                 }
-            }.getOrDefault(false)
             runOnUiThread {
                 if (isDestroyed || generation != campusCheckGeneration) return@runOnUiThread
                 campusCheckRunning = false
-                if (available) {
+                if (available != null) {
+                    selectedServerBaseUrl = available
+                    CoursewareApi.serverBaseUrl = available
                     networkGateShowing = false
                     showAuthScreen()
                     if (authToken != null) {
-                        updateStatus("校园网络已连接，正在恢复登录…")
+                        updateStatus(if (available == BuildConfig.SERVER_BASE_URL) "校园网络已连接，正在恢复登录…" else "已通过公网连接，建议连接 Wi-Fi 使用投屏")
                         verifyTokenThenProceed()
                     }
                 } else showCampusNetworkScreen(campusNetworkMessage())
@@ -763,9 +786,27 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }.start()
     }
 
+    private val authRecheckRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun onAuthenticationExpired(rejectedToken: String?) {
+        if (rejectedToken == null || rejectedToken != authToken || !authRecheckRunning.compareAndSet(false, true)) return
+        Thread {
+            try {
+                val request = Request.Builder().url("${serverBaseUrl().trimEnd('/')}/api/auth/me")
+                    .header("Authorization", "Bearer $rejectedToken").build()
+                val expired = authHttpClient.newCall(request).execute().use { it.code == 401 }
+                if (expired) showAuthenticationExpired(rejectedToken)
+            } catch (e: IOException) {
+                Log.w("MyClassAuth", "Session verification unavailable; keeping credentials", e)
+            } finally {
+                authRecheckRunning.set(false)
+            }
+        }.start()
+    }
+
+    private fun showAuthenticationExpired(rejectedToken: String) {
         runOnUiThread {
-            if (rejectedToken == null || authToken != rejectedToken || isDestroyed) return@runOnUiThread
+            if (authToken != rejectedToken || prefs.getString("token", null) != rejectedToken || isDestroyed) return@runOnUiThread
             clearAuth()
             // Preserve the active projection until the teacher chooses to sign in.
             androidx.appcompat.app.AlertDialog.Builder(this)
@@ -941,7 +982,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
                 val body = json.toString()
                     .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-                val url = "${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/auth/${if (isRegister) "register" else "login"}"
+                val url = "${serverBaseUrl().trimEnd('/')}/api/auth/${if (isRegister) "register" else "login"}"
                 val request = Request.Builder().url(url).post(body).build()
                 authHttpClient.newCall(request).execute().use { response ->
                     val respBody = response.body?.string().orEmpty()
@@ -972,6 +1013,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }.start()
     }
+
+    private fun browserEntryAddress(): String =
+        serverBaseUrl().removePrefix("https://").removePrefix("http://").trimEnd('/')
 
     private fun showConnectScreen() {
         currentScreen = Screen.Connect
@@ -1033,7 +1077,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         val hintText = TextView(this).apply {
-            text = "浏览器进入 10.30.13.1/myclass 查看连接码"
+            text = "浏览器进入 ${browserEntryAddress()} 查看连接码"
             textSize = 13f
             gravity = Gravity.CENTER
             alpha = 0.6f
@@ -1142,7 +1186,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 signalingClient = null
                 activeRoomCode = null
                 roomJoined = false
-                ExternalFileReceiver.clearQueue(this@MainActivity)
+                // Pending imports retain their owner and resume only for that account.
                 clearAuth()
                 showAuthScreen()
             }
@@ -1237,7 +1281,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         if (index > 0) topMargin = dp(4)
                     }
                 }
-                row.addView(secondaryButton(coursewareButtonText(item)).apply {
+                addCoursewareThumbnail(row, item)
+                row.addView(coursewareProgressButton(item).apply {
                     maxLines = 2
                     setSingleLine(false)
                     ellipsize = TextUtils.TruncateAt.END
@@ -1247,7 +1292,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         1f
                     ).apply { marginEnd = dp(4) }
-                    setOnClickListener { openStoredCourseware(item) }
+                    setOnClickListener { openStoredCourseware(item, items) }
                     setOnLongClickListener {
                         showRenameCoursewareDialog(item)
                         true
@@ -1271,6 +1316,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(listScroll)
         }
 
+        if (ExternalFileReceiver.pendingCount() > 0) {
+            root.addView(bodyText(ImportUploadService.lastStatus.ifBlank { "有文件等待上传" }))
+            root.addView(secondaryButton("重试待上传文件").apply { setOnClickListener { triggerPendingUploadIfReady() } })
+        }
         root.addView(primaryButton("上传课件").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1306,56 +1355,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         showCoursewareManagementUploading(fileName)
         Thread {
             runCatching {
-                val totalBytes = contentLengthForUri(uri)
-                val requestBody = object : RequestBody() {
-                    override fun contentType() =
-                        (contentResolver.getType(uri) ?: "application/octet-stream").toMediaTypeOrNull()
-                    override fun contentLength(): Long = totalBytes
-                    override fun writeTo(sink: BufferedSink) {
-                        val input = contentResolver.openInputStream(uri)
-                            ?: throw IOException("无法读取文件")
-                        input.use {
-                            val buffer = ByteArray(8 * 1024)
-                            var uploadedBytes = 0L
-                            var lastProgressAt = 0L
-                            while (true) {
-                                val read = it.read(buffer)
-                                if (read == -1) break
-                                sink.write(buffer, 0, read)
-                                uploadedBytes += read
-                                val now = System.currentTimeMillis()
-                                if (now - lastProgressAt > 300L || uploadedBytes == totalBytes) {
-                                    lastProgressAt = now
-                                    runOnUiThread {
-                                        updateCoursewareUploadProgress(fileName, uploadedBytes, totalBytes)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                val multipartBody = MultipartBody.Builder()
-                    .setType(MultipartBody.FORM)
-                    .addFormDataPart(
-                        "displayNameBase64",
-                        Base64.encodeToString(fileName.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                    )
-                    .addFormDataPart("file", fileName, requestBody)
-                    .build()
-                val request = Request.Builder()
-                    .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware")
-                    .post(multipartBody)
-                    .also { addAuthHeader(it) }
-                    .build()
-                coursewareHttpClient.newCall(request).execute().use { response ->
-                    val body = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        val error = runCatching {
-                            JSONObject(body).optString("error")
-                        }.getOrNull().orEmpty()
-                        throw IOException(error.ifBlank { "上传失败：HTTP ${response.code}" })
-                    }
-                }
+                uploadCoursewareBlocking(uri, fileName)
             }.onSuccess {
                 runOnUiThread {
                     toast("课件上传成功")
@@ -1381,40 +1381,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             .show()
     }
 
-    private fun showVideoNameDialog() {
-        val input = android.widget.EditText(this).apply {
-            hint = "请输入视频名称"
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine(true)
-            filters = arrayOf(InputFilter.LengthFilter(50))
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-        }
-        AlertDialog.Builder(this)
-            .setTitle("导入视频")
-            .setMessage("请输入该视频的名称")
-            .setView(input)
-            .setNegativeButton("取消") { _, _ ->
-                ExternalFileReceiver.clearQueue(this)
-                toast("已取消视频导入")
-            }
-            .setPositiveButton("确定") { _, _ ->
-                val name = input.text.toString().trim()
-                if (name.isEmpty()) {
-                    toast("名称不能为空")
-                    showVideoNameDialog()
-                } else {
-                    ExternalFileReceiver.setLatestPendingName(name, this)
-                    toast("视频已加入上传队列")
-                    triggerPendingUploadIfReady()
-                }
-            }
-            .setOnCancelListener {
-                ExternalFileReceiver.clearQueue(this)
-                toast("已取消视频导入")
-            }
-            .show()
-    }
-
     private fun showLinkNameDialog() {
         // 剪贴板导入时可从分享文案中解析出标题，预填以减少输入
         val suggested = pendingLinkSuggestedName
@@ -1435,7 +1401,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             .setMessage("请输入该链接课件的名称")
             .setView(input)
             .setNegativeButton("取消") { _, _ ->
-                ExternalFileReceiver.clearQueue(this)
+                ExternalFileReceiver.cancelDraftLink(this)
                 toast("已取消链接导入")
             }
             .setPositiveButton("确定") { _, _ ->
@@ -1450,7 +1416,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
             .setOnCancelListener {
-                ExternalFileReceiver.clearQueue(this)
+                ExternalFileReceiver.cancelDraftLink(this)
                 toast("已取消链接导入")
             }
             .show()
@@ -1603,6 +1569,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 resumeOrShowCoursewareSource()
             }
         }
+        val disconnectBtn = secondaryButton("断开连接").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(50)
+            ).apply { topMargin = dp(12) }
+            setOnClickListener {
+                handleRoomInvalid("已断开课堂连接")
+            }
+        }
         statusText = bodyText("已连接课堂").apply {
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
@@ -1639,6 +1614,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             rightPanel.addView(mediaBtn)
             rightPanel.addView(screenBtn)
             rightPanel.addView(coursewareBtn)
+            rightPanel.addView(disconnectBtn)
 
             root.addView(leftPanel)
             root.addView(rightPanel)
@@ -1655,6 +1631,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(mediaBtn)
             root.addView(screenBtn)
             root.addView(coursewareBtn)
+            root.addView(disconnectBtn)
             root.addView(statusText)
             root.addView(versionLabel())
             showScreenView(root)
@@ -1679,7 +1656,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         classPickerLoading = true
         Thread {
             val loaded = runCatching {
-                val request = Request.Builder().url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/classes")
+                val request = Request.Builder().url("${serverBaseUrl().trimEnd('/')}/api/classes")
                     .header("Authorization", "Bearer $token").build()
                 authHttpClient.newCall(request).execute().use { response ->
                     if (response.code == 401) throw TokenExpiredException()
@@ -1778,24 +1755,28 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 countRow.visibility = if (position == 0) View.VISIBLE else View.GONE
                 countLabel.visibility = countRow.visibility
                 rememberDraft()
+                // 选择班级后立即同步，避免还要再点一次“同步到大屏”。
+                val selected = entries.getOrNull(position - 1)
+                if (selected != null && selected.id != selectedTeachingClassId && selected.size > 0) {
+                    sendPhoneClassSelection(
+                        selected.id,
+                        if (mode.selectedItemPosition == 1) "number" else "name",
+                        count.progress + 1
+                    )
+                }
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
-        val dialog = AlertDialog.Builder(this).setTitle("选择上课班级")
+        val dialog = AlertDialog.Builder(this).setTitle("选择上课班级（点选后自动同步）")
             .setView(ScrollView(this).apply { addView(content) })
-            .setNegativeButton("稍后设置") { _, _ -> classPickerDraft = null }.setPositiveButton("同步到大屏", null).create()
+            .setNegativeButton("稍后设置") { _, _ -> classPickerDraft = null }.setPositiveButton("关闭", null).create()
         classPickerDialog = dialog
         dialog.setOnCancelListener { classPickerDraft = null }
         dialog.setOnDismissListener { if (classPickerDialog === dialog) classPickerDialog = null }
         dialog.show()
         dialog.window?.setLayout((resources.displayMetrics.widthPixels * if (landscape) 0.92 else 0.94).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = pendingSelectionId == null
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val selected = entries.getOrNull(classes.selectedItemPosition - 1)
-            val total = count.progress + 1
-            if (selected?.size == 0) { toast("此班级还没有学生，请先在管理页面录入名单"); return@setOnClickListener }
-            sendPhoneClassSelection(selected?.id.orEmpty(), if (mode.selectedItemPosition == 1) "number" else "name", total)
-        }
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { dialog.dismiss() }
     }
 
     private fun sendPhoneClassSelection(classId: String, mode: String, count: Int) {
@@ -2683,7 +2664,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewareScreenCount = 1
         coursewareTitle = item.remoteTitle.ifBlank { item.name }
         coursewareUrl = item.remoteUrl
-        coursewareLocalUri = item.uri
+        coursewareLocalUri = item.uri.takeUnless { it == Uri.EMPTY }
         castImageBitmap = null
         videoPlaying = false
         videoPosition = 0.0
@@ -2722,6 +2703,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 uploadCoursewareBlocking(item.uri, item.name)
             }.onSuccess { result ->
                 runOnUiThread {
+                    if (mediaQueue.getOrNull(index) !== item) return@runOnUiThread
                     item.remoteUrl = result.url
                     item.remoteTitle = result.title
                     item.state = MediaQueueState.Ready
@@ -2754,6 +2736,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }.onFailure { error ->
                 runOnUiThread {
+                    if (mediaQueue.getOrNull(index) !== item) return@runOnUiThread
                     item.state = MediaQueueState.Failed
                     coursewareUploadInProgress = false
                     toast(coursewareUploadErrorMessage(error))
@@ -2773,7 +2756,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     /** 后台依次上传队列中尚未上传的文件（不打断当前投屏，也不刷新当前界面状态） */
     private fun preloadRestOfMediaQueue() {
-        if (mediaQueuePreloading || mediaQueue.isEmpty()) return
+        if (mediaQueuePreloading || mediaQueue.none { it.remoteUrl.isBlank() }) return
         mediaQueuePreloading = true
         // 队列可能被用户清空或重新选择，后台只按快照顺序上传，发现队列已变化就停止
         val snapshot = mediaQueue.toList()
@@ -2818,7 +2801,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         Thread {
             runCatching {
                 fetchServerCoursewareListBlocking().filter {
-                    mediaKindOf(it.url) != CastMediaKind.None
+                    it.linkUrl.isNotBlank() || mediaKindOf(it.url) == CastMediaKind.Image ||
+                        mediaKindOf(it.url) == CastMediaKind.Video
                 }
             }.onSuccess { items ->
                 runOnUiThread { showServerMediaList(items) }
@@ -2935,7 +2919,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             if (index > 0) topMargin = dp(4)
                         }
                     }
-                    row.addView(secondaryButton(coursewareButtonText(item)).apply {
+                    addCoursewareThumbnail(row, item)
+                row.addView(coursewareProgressButton(item).apply {
                         maxLines = 2
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
@@ -2944,7 +2929,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             ViewGroup.LayoutParams.WRAP_CONTENT,
                             1f
                         ).apply { marginEnd = dp(4) }
-                        setOnClickListener { openStoredCourseware(item) }
+                        setOnClickListener { openStoredCourseware(item, items) }
                     })
                     listColumn.addView(row)
                 }
@@ -3003,7 +2988,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             if (index > 0) topMargin = dp(4)
                         }
                     }
-                    row.addView(secondaryButton(coursewareButtonText(item)).apply {
+                    addCoursewareThumbnail(row, item)
+                row.addView(coursewareProgressButton(item).apply {
                         maxLines = 2
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
@@ -3012,7 +2998,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             ViewGroup.LayoutParams.WRAP_CONTENT,
                             1f
                         ).apply { marginEnd = dp(4) }
-                        setOnClickListener { openStoredCourseware(item) }
+                        setOnClickListener { openStoredCourseware(item, items) }
                     })
                     listColumn.addView(row)
                 }
@@ -3236,7 +3222,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             if (index > 0) topMargin = dp(4)
                         }
                     }
-                    row.addView(secondaryButton(coursewareButtonText(item)).apply {
+                    addCoursewareThumbnail(row, item)
+                row.addView(coursewareProgressButton(item).apply {
                         maxLines = 2
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
@@ -3245,7 +3232,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             ViewGroup.LayoutParams.WRAP_CONTENT,
                             1f
                         ).apply { marginEnd = dp(4) }
-                        setOnClickListener { openStoredCourseware(item) }
+                        setOnClickListener { openStoredCourseware(item, items) }
                         setOnLongClickListener {
                             showRenameCoursewareDialog(item)
                             true
@@ -3313,7 +3300,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             if (index > 0) topMargin = dp(4)
                         }
                     }
-                    row.addView(secondaryButton(coursewareButtonText(item)).apply {
+                    addCoursewareThumbnail(row, item)
+                row.addView(coursewareProgressButton(item).apply {
                         maxLines = 2
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
@@ -3322,7 +3310,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             ViewGroup.LayoutParams.WRAP_CONTENT,
                             1f
                         ).apply { marginEnd = dp(4) }
-                        setOnClickListener { openStoredCourseware(item) }
+                        setOnClickListener { openStoredCourseware(item, items) }
                         setOnLongClickListener {
                             showRenameCoursewareDialog(item)
                             true
@@ -3352,7 +3340,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun fetchServerCoursewareListBlocking(): List<StoredCoursewareItem> {
         val request = Request.Builder()
-            .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware")
+            .url("${serverBaseUrl().trimEnd('/')}/api/courseware")
             .get()
             .also { addAuthHeader(it) }
             .build()
@@ -3426,7 +3414,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun renameServerCoursewareBlocking(id: String, newTitle: String) {
         val json = JSONObject().put("title", newTitle)
         val request = Request.Builder()
-            .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware/$id/rename")
+            .url("${serverBaseUrl().trimEnd('/')}/api/courseware/$id/rename")
             .put(json.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
             .also { addAuthHeader(it) }
             .build()
@@ -3469,7 +3457,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun deleteServerCoursewareBlocking(item: StoredCoursewareItem) {
         val request = Request.Builder()
-            .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware/${item.id}")
+            .url("${serverBaseUrl().trimEnd('/')}/api/courseware/${item.id}")
             .delete()
             .also { addAuthHeader(it) }
             .build()
@@ -3480,17 +3468,61 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    private fun openStoredCourseware(item: StoredCoursewareItem) {
+    private fun openStoredCourseware(item: StoredCoursewareItem, sourceItems: List<StoredCoursewareItem> = listOf(item)) {
+        val isPdf = item.linkUrl.isBlank() && mediaKindOf(item.url) == CastMediaKind.Pdf
+        val remembered = rememberedCoursewarePage(item)
+        if (isPdf && remembered > 1) {
+            AlertDialog.Builder(this)
+                .setTitle("继续播放课件")
+                .setMessage("上次播放到第 ${remembered} 页，从哪里开始？")
+                .setNegativeButton("从第一页开始") { _, _ -> openStoredCoursewareNow(item, sourceItems, 1) }
+                .setPositiveButton("从第 ${remembered} 页继续") { _, _ -> openStoredCoursewareNow(item, sourceItems, remembered) }
+                .setOnCancelListener { openStoredCoursewareNow(item, sourceItems, remembered) }
+                .show()
+            return
+        }
+        openStoredCoursewareNow(item, sourceItems, 1)
+    }
+
+    private fun rememberedCoursewarePage(item: StoredCoursewareItem): Int =
+        getSharedPreferences("myclass_courseware", Context.MODE_PRIVATE)
+            .getInt("page_${item.id}", 1).coerceAtLeast(1)
+
+    private fun rememberCoursewarePage() {
+        if (coursewareRememberKey.isBlank() || coursewarePage < 1) return
+        getSharedPreferences("myclass_courseware", Context.MODE_PRIVATE)
+            .edit().putInt("page_${coursewareRememberKey}", coursewarePage).putInt("count_${coursewareRememberKey}", coursewarePageCount).apply()
+    }
+
+    private fun openStoredCoursewareNow(item: StoredCoursewareItem, sourceItems: List<StoredCoursewareItem>, startPage: Int) {
+        if (!roomJoined) {
+            toast("文件已在服务器课件库中；投屏时请先连接课堂")
+            return
+        }
         cancelCoursewareFastSeek()
-        // 服务器课件不属于本机媒体队列，清空队列避免投屏界面残留切换按钮
         mediaQueue.clear()
         mediaQueueIndex = -1
+        pendingMediaQueueIndex = null
+        // Server images use the same ready-to-cast queue and navigation as local
+        // images, but have no local URI and never need an upload.
+        if (item.linkUrl.isBlank() && mediaKindOf(item.url) == CastMediaKind.Image) {
+            val images = sourceItems.filter { it.linkUrl.isBlank() && mediaKindOf(it.url) == CastMediaKind.Image }
+            images.forEach {
+                mediaQueue.add(LocalMediaItem(Uri.EMPTY, it.title, MediaQueueState.Ready, it.url, it.title))
+            }
+            castMediaQueueItem(images.indexOfFirst { it.id == item.id }.coerceAtLeast(0))
+            return
+        }
+        coursewareLocalUri = null
+        castImageBitmap = null
+        coursewareUrl = item.url
         coursewareUploadInProgress = false
-        coursewarePage = 1
+        coursewarePage = startPage.coerceAtLeast(1)
         coursewarePageCount = 1
         coursewareScreen = 1
         coursewareScreenCount = 1
         coursewareTitle = item.title
+        coursewareRememberKey = item.id
 
         // 链接类型课件：通过信令推送到大屏网页端，提示用户跳转
         if (item.linkUrl.isNotBlank()) {
@@ -3520,6 +3552,37 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val source = if (item.originalUrl.isNotBlank()) item.originalUrl else item.url
         val ext = source.substringAfterLast('.', "").uppercase()
         return if (ext.isNotEmpty()) "[$ext]" else ""
+    }
+
+    private fun addCoursewareThumbnail(row: LinearLayout, item: StoredCoursewareItem) {
+        if (mediaKindOf(item.url) != CastMediaKind.Image) return
+        val url = absoluteCoursewareUrl(item.url) ?: return
+        row.addView(CoursewareThumbnail(this, url, dp(80)).apply {
+            contentDescription = "预览图片：${item.title}"
+            layoutParams = LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(8) }
+            setOnClickListener {
+                val preview = CoursewareThumbnail(this@MainActivity, url, dp(360)).apply {
+                    contentDescription = item.title
+                    minimumHeight = dp(300)
+                }
+                AlertDialog.Builder(this@MainActivity).setTitle(item.title).setView(preview)
+                    .setPositiveButton("关闭", null).show()
+            }
+        })
+    }
+
+    private fun coursewareProgressButton(item: StoredCoursewareItem): MaterialButton =
+        CoursewareProgressButton(this).apply {
+            text = coursewareButtonText(item)
+            textSize = 14f
+            playbackProgress = rememberedCoursewareProgress(item)
+        }
+
+    private fun rememberedCoursewareProgress(item: StoredCoursewareItem): Int {
+        val prefs = getSharedPreferences("myclass_courseware", Context.MODE_PRIVATE)
+        val page = prefs.getInt("page_" + item.id, 1)
+        val total = prefs.getInt("count_" + item.id, 0)
+        return if (page > 1 && total > 1) (page * 100 / total).coerceIn(1, 100) else 0
     }
 
     private fun coursewareButtonText(item: StoredCoursewareItem): String {
@@ -3613,67 +3676,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         fileName: String,
         reportProgress: Boolean = true
     ): CoursewareUploadResult {
-        val totalBytes = contentLengthForUri(uri)
-        val requestBody = object : RequestBody() {
-            override fun contentType() =
-                (contentResolver.getType(uri) ?: "application/octet-stream").toMediaTypeOrNull()
-
-            override fun contentLength(): Long = totalBytes
-
-            override fun writeTo(sink: BufferedSink) {
-                val input = contentResolver.openInputStream(uri)
-                    ?: throw IOException("无法读取所选课件")
-                input.use {
-                    val buffer = ByteArray(8 * 1024)
-                    var uploadedBytes = 0L
-                    var lastProgressAt = 0L
-                    while (true) {
-                        val read = it.read(buffer)
-                        if (read == -1) {
-                            break
-                        }
-                        sink.write(buffer, 0, read)
-                        uploadedBytes += read
-                        if (!reportProgress) continue
-                        val now = System.currentTimeMillis()
-                        if (now - lastProgressAt > 300L || uploadedBytes == totalBytes) {
-                            lastProgressAt = now
-                            updateCoursewareUploadProgress(fileName, uploadedBytes, totalBytes)
-                        }
-                    }
-                }
+        val token = authToken ?: throw IOException("请先登录")
+        try {
+            val json = CoursewareApi.upload(applicationContext, uri, fileName, token) { sent, total ->
                 if (reportProgress) {
-                    updateStatus("$fileName\n上传完成，服务器正在转换/处理...")
+                    if (total > 0 && sent >= total) updateStatus("$fileName\n已传输，服务器处理中…")
+                    else updateCoursewareUploadProgress(fileName, sent, total)
                 }
             }
-        }
-        val multipartBody = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart(
-                "displayNameBase64",
-                Base64.encodeToString(fileName.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-            )
-            .addFormDataPart("file", fileName, requestBody)
-            .build()
-        val request = Request.Builder()
-            .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/courseware")
-            .post(multipartBody)
-            .also { addAuthHeader(it) }
-            .build()
-
-        coursewareHttpClient.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                val message = runCatching {
-                    JSONObject(body).optString("error")
-                }.getOrNull().orEmpty()
-                throw IOException(message.ifBlank { "课件上传失败：HTTP ${response.code}" })
-            }
-            val json = JSONObject(body)
-            return CoursewareUploadResult(
-                title = json.optString("title", fileName),
-                url = json.getString("url")
-            )
+            return CoursewareUploadResult(json.optString("title", fileName), json.getString("url"))
+        } catch (e: CoursewareApi.AuthenticationRequired) {
+            onAuthenticationExpired(e.token)
+            throw e
         }
     }
 
@@ -4344,6 +4358,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         } else {
             loadImageCastBitmap { bitmap ->
                 if (currentScreen != Screen.Courseware ||
+                    zoomableImageView !== zoomable ||
                     mediaKindOf(coursewareUrl) != CastMediaKind.Image
                 ) {
                     return@loadImageCastBitmap
@@ -4403,6 +4418,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         imageHost.addView(
             zoomable,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        // 竖屏长课件在手机上可能整页可见，而大屏按横屏比例只显示其中一段。
+        // 叠加一个半透明框，帮助用户知道当前投屏区域；该层不拦截任何手势。
+        val viewportOverlay = CoursewareViewportOverlay(this)
+        imageHost.addView(
+            viewportOverlay,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -4728,6 +4753,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 coursewarePage = page
             }
             coursewarePageCount = total
+            rememberCoursewarePage()
             updatePageBar()
             if (notifyRemote) {
                 signalingClient?.sendCoursewarePage(page)
@@ -4814,7 +4840,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         coursewarePdfBitmaps.values.forEach { runCatching { it.recycle() } }
                         coursewarePdfBitmaps.clear()
                         coursewarePdfOpenedKey = cacheKey
-                        coursewarePage = 1
+                        // Keep the page selected before the PDF finishes opening.
+                        // The teacher may have chosen “continue from page N”.
+                        coursewarePage = coursewarePage.coerceAtLeast(1)
                     }
                     coursewarePdf?.close()
                     coursewarePdf = opened
@@ -4982,6 +5010,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomableImageView = zoomable
         // 视口与笔迹都带页码，大屏端按页处理；课件页方向固定，旋转恒为 0
         zoomable.onViewportChanged = { scale, centerX, centerY, _ ->
+            viewportOverlay.setViewport(zoomable.bigScreenViewportRectInView())
             signalingClient?.sendCoursewareImageViewport(
                 scale = scale,
                 centerX = centerX,
@@ -4990,6 +5019,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 page = coursewarePage,
                 progress = true
             )
+        }
+        imageHost.doOnLayout {
+            viewportOverlay.setViewport(zoomable.bigScreenViewportRectInView())
         }
         zoomable.onStrokeBegin = { strokeId, colorHex, width, isEraser, first ->
             signalingClient?.sendAnnotationBegin(strokeId, colorHex, width, isEraser, first, coursewarePage)
@@ -5096,7 +5128,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return url
         }
         val origin = Regex("^https?://[^/]+", RegexOption.IGNORE_CASE)
-            .find(BuildConfig.SERVER_BASE_URL.trim())?.value ?: return null
+            .find(serverBaseUrl().trim())?.value ?: return null
         return if (url.startsWith("/")) origin + url else "$origin/$url"
     }
 
@@ -5851,6 +5883,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun closeCoursewareAndReturnMenu() {
         cancelCoursewareFastSeek()
+        rememberCoursewarePage()
         if (!sendCoursewareCloseSignal() && activeRoomCode != null) {
             pendingCoursewareCloseAfterJoin = true
             reconnectSignalingForCurrentRoom()
@@ -5873,6 +5906,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun pauseCoursewareAndReturnMenu() {
         cancelCoursewareFastSeek()
+        rememberCoursewarePage()
         coursewareSubScreen = CoursewareSubScreen.None
         releaseMediaCastViews()
         savedCoursewareState = CoursewareState(
@@ -6065,7 +6099,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         startLiveButton?.isEnabled = false
         signalingClient?.close()
         signalingClient = SignalingClient(
-            serverBaseUrl = BuildConfig.SERVER_BASE_URL,
+            serverBaseUrl = serverBaseUrl(),
             roomCode = code,
             callback = this,
             authToken = authToken
@@ -7092,9 +7126,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             insetTop = 0
             insetBottom = 0
             minHeight = dp(36)
-            minimumWidth = dp(56)
+            minWidth = 0
+            minimumWidth = 0
+            setPadding(dp(4), 0, dp(4), 0)
             layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(48),
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }

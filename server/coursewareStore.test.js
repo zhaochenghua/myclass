@@ -46,6 +46,45 @@ test('simultaneous uploads reuse Office bytes and conversion, with independent o
   await assert.rejects(fs.access(f.bundle(b)), { code: 'ENOENT' });
 });
 
+test('a blocked Office conversion does not delay a small PDF or metadata mutations', { timeout: 5000 }, async t => {
+  let release;
+  let started;
+  const gate = new Promise(resolve => { release = resolve; });
+  const converting = new Promise(resolve => { started = resolve; });
+  const f = await fixture(t, { convertOfficeToPdf: async (source, ext, output) => {
+    started();
+    await gate;
+    await fs.writeFile(output, 'PDF');
+  } });
+  const office = f.upload('slow.pptx');
+  try {
+    await converting;
+    const small = await f.upload('small.pdf');
+    assert.equal(await f.store.rename(small.id, 'renamed', 'alice'), true);
+    assert.equal(await f.store.remove(small.id, 'alice'), true);
+  } finally {
+    release();
+    await office;
+  }
+  assert.equal((await f.store.list('alice')).length, 1);
+});
+
+test('retrying one upload returns its original publication, scoped to its owner', async t => {
+  const f = await fixture(t);
+  const publish = owner => f.store.publish({ path: f.input }, 'retry.pdf', owner, 'request-1');
+  const [first, retry] = await Promise.all([publish('alice'), publish('alice')]);
+  assert.equal(first.id, retry.id);
+  const other = await publish('bob');
+  assert.notEqual(first.id, other.id);
+  assert.equal((await f.store.readIndex()).length, 2);
+  await fs.writeFile(f.input, 'different bytes');
+  await assert.rejects(publish('alice'), { status: 409 });
+  const link = { id: 'link-1', userId: 'alice', title: 'link', url: 'https://example.org', linkUrl: 'https://example.org', uploadRequestId: 'link-request' };
+  const a = await f.store.remember(link);
+  const b = await f.store.remember({ ...link, id: 'link-2' });
+  assert.equal(a.id, b.id);
+});
+
 test('concurrent index writes retain more than 100 records and do not lose rename/delete updates', async t => {
   const f = await fixture(t);
   await Promise.all(Array.from({ length: 120 }, (_, i) => f.store.remember({ id: `link-${i}`,

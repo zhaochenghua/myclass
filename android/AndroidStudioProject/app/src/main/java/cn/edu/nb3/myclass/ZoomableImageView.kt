@@ -501,6 +501,48 @@ class ZoomableImageView(context: Context) : View(context) {
         return displayRect
     }
 
+    /**
+     * 返回按 16:9 横屏大屏估算的可视区域，并转换到本控件坐标。
+     * 课件在手机上可能整页可见，但大屏会裁掉上下部分；这个矩形用于在手机
+     * 页面上标出大屏当前正在显示的区域。返回值为独立副本，调用方可长期保存。
+     */
+    fun bigScreenViewportRectInView(bigScreenAspect: Float = 9f / 16f): RectF? {
+        val image = bitmap ?: return null
+        val imageRect = imageDisplayRect()?.let { RectF(it) } ?: return null
+        val (imageWidth, imageHeight) = rotatedSize(image)
+        if (imageWidth <= 0 || imageHeight <= 0) return null
+        val scale = userScale.coerceAtLeast(0.01f)
+        val imageAspect = imageWidth.toFloat() / imageHeight.toFloat()
+        val visibleWidth = (1f / scale).coerceIn(0f, 1f)
+        val visibleHeight = (bigScreenAspect / imageAspect / scale).coerceIn(0f, 1f)
+        val maxX = (1f - visibleWidth).coerceAtLeast(0f)
+        val maxY = (1f - visibleHeight).coerceAtLeast(0f)
+        val maxTranslateX = max(0f, (fitWidth * userScale - width) / 2f)
+        val maxTranslateY = max(0f, (fitHeight * userScale - height) / 2f)
+        val progressX = if (maxTranslateX > 0.5f) {
+            ((maxTranslateX - translateX) / (2f * maxTranslateX)).coerceIn(0f, 1f)
+        } else 0f
+        val progressY = if (maxTranslateY > 0.5f) {
+            ((maxTranslateY - translateY) / (2f * maxTranslateY)).coerceIn(0f, 1f)
+        } else if (bigScrollActive) {
+            bigProgressY.coerceIn(0f, 1f)
+        } else 0f
+        val centerX = 0.5f + (progressX - 0.5f) * maxX
+        val centerY = 0.5f + (progressY - 0.5f) * maxY
+        val normalized = RectF(
+            centerX - visibleWidth / 2f,
+            centerY - visibleHeight / 2f,
+            centerX + visibleWidth / 2f,
+            centerY + visibleHeight / 2f
+        )
+        return RectF(
+            imageRect.left + normalized.left * imageRect.width(),
+            imageRect.top + normalized.top * imageRect.height(),
+            imageRect.left + normalized.right * imageRect.width(),
+            imageRect.top + normalized.bottom * imageRect.height()
+        )
+    }
+
     /** 屏幕坐标 → 归一化图片坐标；落在图片外时返回 null（与大屏端一样忽略） */
     private fun toNormalized(viewX: Float, viewY: Float): AnnotationPoint? {
         val rect = imageDisplayRect() ?: return null

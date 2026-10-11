@@ -19,6 +19,11 @@ val myClassServerUrl = providers
     .orElse("http://10.30.13.1/myclass")
     .get()
 
+val myClassExternalServerUrl = providers
+    .gradleProperty("MYCLASS_EXTERNAL_SERVER_URL")
+    .orElse("https://sz.imst.xyz/myclass")
+    .get()
+
 val disableWebRtcNetworkMonitor = providers
     .gradleProperty("MYCLASS_WEBRTC_DISABLE_NETWORK_MONITOR")
     .orElse("false")
@@ -37,10 +42,12 @@ android {
         applicationId = "cn.edu.nb3.myclass"
         minSdk = 26
         targetSdk = 35
+        testInstrumentationRunner = "cn.edu.nb3.myclass.ImportFlowInstrumentation"
         versionCode = 2026092906
         versionName = "1.8.9-2026092906"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
+        buildConfigField("String", "EXTERNAL_SERVER_BASE_URL", myClassExternalServerUrl.asBuildConfigString())
         buildConfigField("int", "VIDEO_WIDTH", "1920")
         buildConfigField("int", "VIDEO_HEIGHT", "1440")
         buildConfigField("int", "VIDEO_FPS", "24")

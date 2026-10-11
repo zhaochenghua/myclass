@@ -532,7 +532,7 @@ app.post(`${PATH_PREFIX}/api/courseware`, requireAuth, upload.single('file'), as
     }
     // share=true → 所有人可见(owner=admin)；否则仅上传者可见(owner=userId)
     const ownerId = req.body.share === 'true' ? 'admin' : req.user.id;
-    const result = await publishCourseware(req.file, req.body, ownerId);
+    const result = await publishCourseware(req.file, req.body, ownerId, req.get('X-Upload-Id') || '');
     res.json(result);
   } catch (error) {
     next(error);
@@ -549,6 +549,11 @@ app.post(`${PATH_PREFIX}/api/courseware`, requireAuth, upload.single('file'), as
 app.post(`${PATH_PREFIX}/api/courseware/link`, requireAuth, express.json(), async (req, res, next) => {
   try {
     const { title, url } = req.body;
+    const uploadRequestId = req.get('X-Upload-Id') || '';
+    if (uploadRequestId && !/^[a-zA-Z0-9-]{1,80}$/.test(uploadRequestId)) {
+      res.status(400).json({ error: '无效上传编号' });
+      return;
+    }
     if (!title || !url) {
       res.status(400).json({ error: '请提供 title 和 url' });
       return;
@@ -574,8 +579,8 @@ app.post(`${PATH_PREFIX}/api/courseware/link`, requireAuth, express.json(), asyn
       url,
       createdAt: new Date().toISOString()
     };
-    await rememberCourseware(result);
-    res.json(result);
+    if (uploadRequestId) result.uploadRequestId = uploadRequestId;
+    res.json(await rememberCourseware(result));
   } catch (error) {
     next(error);
   }
@@ -766,8 +771,8 @@ function safeDownloadVersion(value) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-async function publishCourseware(file, fields = {}, userId) {
-  return coursewareStore.publish(file, preferredCoursewareName(file, fields), userId);
+async function publishCourseware(file, fields = {}, userId, uploadRequestId = '') {
+  return coursewareStore.publish(file, preferredCoursewareName(file, fields), userId, uploadRequestId);
 }
 
 async function convertOfficeToPdf(inputPath, ext, outputPdfPath, id) {
