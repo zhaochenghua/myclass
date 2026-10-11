@@ -194,6 +194,7 @@ class ZoomableImageView(context: Context) : View(context) {
     private val gestureDetector = GestureDetector(context, GestureListener())
 
     fun setImage(next: Bitmap?, atBottom: Boolean = false) {
+        reportedViewerRect = null
         bitmap = next
         // 换图后旧笔迹失去意义（大屏端打开新图片时也会清空标注），仅本地清理
         resetAnnotations()
@@ -552,6 +553,25 @@ class ZoomableImageView(context: Context) : View(context) {
 
     /** 大屏高宽比也用于手机整页显示时的逐屏翻动。 */
     var bigScreenHeightOverWidth = 9f / 16f
+
+    /** 大屏确认的页面可见范围；不直接覆盖正在进行的手势进度，避免网络回包导致跳动。 */
+    var reportedViewerRect: RectF? = null
+
+    private fun canDragViewerViewport(): Boolean =
+        fitMode == ImageFitMode.FitWidth && fitHeight > 0f &&
+            fitHeight * userScale <= height + 1f &&
+            (reportedViewerRect?.height() ?: 1f) < 0.999f
+
+    private fun dragViewerViewport(distanceY: Float): Boolean {
+        if (!canDragViewerViewport()) return false
+        val visibleFraction = reportedViewerRect?.height() ?: return false
+        val travel = fitHeight * userScale * (1f - visibleFraction)
+        if (travel <= 1f) return false
+        bigScrollActive = true
+        bigProgressY = (bigProgressY + distanceY / travel).coerceIn(0f, 1f)
+        notifyViewport()
+        return true
+    }
 
     private fun toNormalized(viewX: Float, viewY: Float): AnnotationPoint? {
         val rect = imageDisplayRect() ?: return null
@@ -1043,7 +1063,15 @@ class ZoomableImageView(context: Context) : View(context) {
     }
 
     private inner class GestureListener : GestureDetector.SimpleOnGestureListener() {
-        override fun onDown(e: MotionEvent): Boolean = true
+        override fun onDown(e: MotionEvent): Boolean {
+            // 从最新确认的位置开始；拖动期间保留本地累计值，不被迟到回包拉回。
+            if (canDragViewerViewport()) {
+                val rect = reportedViewerRect!!
+                bigProgressY = (rect.top / (1f - rect.height())).coerceIn(0f, 1f)
+                bigScrollActive = true
+            }
+            return true
+        }
 
         override fun onScroll(
             e1: MotionEvent?,
@@ -1054,6 +1082,7 @@ class ZoomableImageView(context: Context) : View(context) {
             // 画笔模式：单指留给绘制；双指缩放 / 平移由 onTouchEvent 自管，避免重复平移
             if (mode == ImageCastMode.Pen) return false
             if (e2.pointerCount > 1) return false
+            if (dragViewerViewport(distanceY)) return true
             translateX -= distanceX
             translateY -= distanceY
             clampTranslation()

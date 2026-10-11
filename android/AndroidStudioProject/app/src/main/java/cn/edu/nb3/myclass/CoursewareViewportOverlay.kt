@@ -7,7 +7,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.view.View
 
-/** 在手机课件预览上标出估算的大屏当前可视区域。 */
+/** 在手机课件预览上标出大屏确认的可视区域；整页可见时不显示。 */
 class CoursewareViewportOverlay(context: Context) : View(context) {
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(42, 255, 193, 7)

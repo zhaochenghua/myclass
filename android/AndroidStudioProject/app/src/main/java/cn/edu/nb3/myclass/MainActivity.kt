@@ -4740,7 +4740,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             modeHint.text = if (penMode) {
                 "画笔模式：单指绘制，双指点击翻页 / 缩放拖动"
             } else {
-                "手势模式：双指缩放 / 拖动，双击放大，点击左右两侧翻页"
+                "手势模式：上下滑动调整大屏区域，双指缩放，点击左右两侧翻页"
             }
             modeButton.text = if (penMode) "手势" else "画笔"
             modeButton.backgroundTintList = ColorStateList.valueOf(
@@ -6538,8 +6538,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val zoomable = zoomableImageView ?: return
         zoomable.bigScreenHeightOverWidth = coursewareViewportAspect
         val rect = viewerPageRect?.takeIf { viewerRectPage == coursewarePage && viewerRectUrl == coursewareUrl }
-        coursewareViewportOverlay?.setViewport(if (rect != null) zoomable.mapPageRectToView(rect)
-            else zoomable.bigScreenViewportRectInView(coursewareViewportAspect))
+        zoomable.reportedViewerRect = rect
+        // 只在大屏确认发生裁切时提示，整页可见或尚未确认时不画估算框。
+        val clipped = rect?.takeIf {
+            it.left > 0.001f || it.top > 0.001f || it.right < 0.999f || it.bottom < 0.999f
+        }
+        coursewareViewportOverlay?.setViewport(clipped?.let { zoomable.mapPageRectToView(it) })
     }
 
     override fun onViewerCoursewareViewport(message: JSONObject) {
