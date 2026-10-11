@@ -2968,12 +2968,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             val rightPanel = baseColumn().apply {
                 gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginStart = dp(20)
                 }
             }
+            compactLandscapeAction(backBtn, dp(58), dp(12))
             rightPanel.addView(backBtn)
-            rightPanel.addView(versionLabel())
+            rightPanel.addView(landscapeVersionLabel())
 
             root.addView(leftPanel)
             root.addView(rightPanel)
@@ -3289,13 +3290,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             val rightPanel = baseColumn().apply {
                 gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginStart = dp(20)
                 }
             }
+            compactLandscapeAction(uploadBtn, dp(58), dp(16))
+            compactLandscapeAction(backBtn, dp(58), dp(12))
             rightPanel.addView(uploadBtn)
             rightPanel.addView(backBtn)
-            rightPanel.addView(versionLabel())
+            rightPanel.addView(landscapeVersionLabel())
 
             root.addView(leftPanel)
             root.addView(rightPanel)
@@ -7023,7 +7026,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun versionLabel(onDark: Boolean = false): TextView =
         TextView(this).apply {
-            text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+            // 构建时间后缀用于内部发布追踪，界面只展示用户可读的语义版本。
+            text = "v${BuildConfig.VERSION_NAME.substringBefore('-')}"
             textSize = 12f
             gravity = Gravity.CENTER
             setTextColor(
@@ -7040,6 +7044,25 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 topMargin = dp(12)
             }
         }
+
+    private fun landscapeVersionLabel(): TextView = versionLabel().apply {
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(12) }
+    }
+
+    /** 横屏列表右侧操作栏按最长按钮文字自适应，不再占据半个屏幕。 */
+    private fun compactLandscapeAction(button: MaterialButton, height: Int, topMargin: Int) {
+        button.minWidth = 0
+        button.minimumWidth = 0
+        button.setSingleLine(true)
+        button.setPadding(dp(12), 0, dp(12), 0)
+        button.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            height
+        ).apply { this.topMargin = topMargin }
+    }
 
     private fun footerLabel(): TextView =
         TextView(this).apply {
