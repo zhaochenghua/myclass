@@ -198,6 +198,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareTitle = ""
     private var coursewareUrl = ""
     private var coursewareRememberKey = ""
+    /** 刷新课件列表（如删除后）时保留用户当前的滚动位置。 */
+    private var coursewareListScrollY = 0
     /** 本次投屏课件的本地原文件：图片投屏时用它预览，避免从服务器重复下载 */
     private var coursewareLocalUri: Uri? = null
     private var castImageBitmap: Bitmap? = null
@@ -1300,6 +1302,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 })
                 row.addView(deleteButton("删除").apply {
                     setOnClickListener {
+                        rememberCoursewareListScroll(row)
                         confirmDeleteManagementCourseware(item)
                     }
                 })
@@ -1313,6 +1316,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 ).apply { topMargin = dp(12) }
                 addView(listColumn)
             }
+            listScroll.post { listScroll.scrollTo(0, coursewareListScrollY) }
             root.addView(listScroll)
         }
 
@@ -1438,6 +1442,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
         }.start()
+    }
+
+    /** 从删除按钮向上找到所属 ScrollView，记录刷新前的滚动位置。 */
+    private fun rememberCoursewareListScroll(view: View) {
+        var parent = view.parent
+        while (parent is View) {
+            if (parent is ScrollView) {
+                coursewareListScrollY = parent.scrollY
+                return
+            }
+            parent = parent.parent
+        }
     }
 
     private fun applyOrientationPreference() {
@@ -2901,8 +2917,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     ).apply { topMargin = dp(24) }
                 })
             } else {
-                val listColumn = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
+                val listColumn = android.widget.GridLayout(this).apply {
+                    columnCount = 2
+                    useDefaultMargins = false
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
@@ -2918,6 +2935,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         ).apply {
                             if (index > 0) topMargin = dp(4)
                         }
+                    }
+                    row.layoutParams = android.widget.GridLayout.LayoutParams().apply {
+                        width = 0
+                        height = ViewGroup.LayoutParams.WRAP_CONTENT
+                        columnSpec = android.widget.GridLayout.spec(index % 2, 1, 1f)
+                        setMargins(if (index % 2 == 0) 0 else dp(6), dp(2), if (index % 2 == 0) dp(6) else 0, dp(2))
                     }
                     addCoursewareThumbnail(row, item)
                 row.addView(coursewareProgressButton(item).apply {
@@ -3204,8 +3227,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     ).apply { topMargin = dp(24) }
                 })
             } else {
-                val listColumn = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
+                val listColumn = android.widget.GridLayout(this).apply {
+                    columnCount = 2
+                    useDefaultMargins = false
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
@@ -3221,6 +3245,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         ).apply {
                             if (index > 0) topMargin = dp(4)
                         }
+                    }
+                    row.layoutParams = android.widget.GridLayout.LayoutParams().apply {
+                        width = 0
+                        height = ViewGroup.LayoutParams.WRAP_CONTENT
+                        columnSpec = android.widget.GridLayout.spec(index % 2, 1, 1f)
+                        setMargins(if (index % 2 == 0) 0 else dp(6), dp(2), if (index % 2 == 0) dp(6) else 0, dp(2))
                     }
                     addCoursewareThumbnail(row, item)
                 row.addView(coursewareProgressButton(item).apply {
@@ -3239,7 +3269,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         }
                     })
                     row.addView(deleteButton("删除").apply {
-                        setOnClickListener { confirmDeleteServerCourseware(item) }
+                        setOnClickListener {
+                            rememberCoursewareListScroll(row)
+                            confirmDeleteServerCourseware(item)
+                        }
                     })
                     listColumn.addView(row)
                 }
@@ -3250,6 +3283,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         1f
                     ).apply { topMargin = dp(16) }
                     addView(listColumn)
+                    post { scrollTo(0, coursewareListScrollY) }
                 })
             }
 
@@ -3317,7 +3351,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         }
                     })
                     row.addView(deleteButton("删除").apply {
-                        setOnClickListener { confirmDeleteServerCourseware(item) }
+                        setOnClickListener {
+                            rememberCoursewareListScroll(row)
+                            confirmDeleteServerCourseware(item)
+                        }
                     })
                     listColumn.addView(row)
                 }
@@ -3328,6 +3365,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         1f
                     ).apply { topMargin = dp(16) }
                     addView(listColumn)
+                    post { scrollTo(0, coursewareListScrollY) }
                 })
             }
 
