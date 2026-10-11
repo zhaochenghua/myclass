@@ -1735,11 +1735,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("学生姓名", "学生学号"))
             setSelection(if ((draft?.second ?: studentDrawMode) == "number") 1 else 0)
         }
-        val countLabel = bodyText("").apply { setTextColor(Color.DKGRAY) }
+        val initialCount = (draft?.third ?: studentDrawCount).coerceIn(1, 80)
+        val countLabel = bodyText("抽取人数：$initialCount 人（1–80）").apply {
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+        }
+        val countValue = TextView(this).apply {
+            text = initialCount.toString()
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+            contentDescription = "当前人数 $initialCount 人"
+        }
         val count = SeekBar(this).apply {
             contentDescription = "抽取人数"
             max = 79
-            progress = (draft?.third ?: studentDrawCount) - 1
+            progress = initialCount - 1
             minimumHeight = dp(48)
         }
         val countRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -1748,6 +1758,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener { count.progress -= 1 }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         countRow.addView(count, LinearLayout.LayoutParams(0, dp(48), 1f))
+        countRow.addView(countValue, LinearLayout.LayoutParams(dp(48), dp(48)))
         countRow.addView(compactButton(primaryButton("＋"), 22f).apply {
             contentDescription = "人数加一"
             setOnClickListener { count.progress += 1 }
@@ -1756,6 +1767,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             classPickerDraft = Triple(entries.getOrNull(classes.selectedItemPosition - 1)?.id.orEmpty(),
                 if (mode.selectedItemPosition == 1) "number" else "name", count.progress + 1)
             countLabel.text = "抽取人数：${count.progress + 1} 人（1–80）"
+            countValue.text = (count.progress + 1).toString()
+            countValue.contentDescription = "当前人数 ${count.progress + 1} 人"
         }
         count.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) { rememberDraft() }
@@ -1793,7 +1806,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
-        val dialog = AlertDialog.Builder(this).setTitle("选择上课班级（点选后自动同步）")
+        val dialog = AlertDialog.Builder(this).setTitle("选择上课班级")
             .setView(ScrollView(this).apply { addView(content) })
             .setNegativeButton("稍后设置") { _, _ -> classPickerDraft = null }.setPositiveButton("关闭", null).create()
         classPickerDialog = dialog
