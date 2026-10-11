@@ -213,3 +213,25 @@ test('active classrooms do not expire at the original two-hour deadline', async 
   assert(f.manager.rooms.has(room.code));
   assert(room.expiresAt > Date.now());
 });
+
+
+test('viewer viewport reports validate geometry, roles and presentation revision', async t => {
+  const f = await fixture(t);
+  f.send({ type: 'courseware.open', url: '/myclass/test.pdf', page: 1 });
+  const opened = await f.viewer.take('courseware.open');
+  const report = { type: 'viewer.courseware.viewport', width: 1600, height: 900,
+    left: 0, top: 0.2, right: 1, bottom: 0.6, page: 1, url: opened.url,
+    presentationRevision: opened.presentationRevision };
+  f.send(report);
+  assert.match((await f.teacher.take('error')).message, /教室端/);
+  f.viewer.sendJson(report);
+  assert.deepEqual(await f.teacher.take(report.type), report);
+  f.viewer.sendJson({ ...report, left: -1 });
+  f.viewer.sendJson({ ...report, bottom: 0.1 });
+  f.viewer.sendJson({ ...report, width: 0 });
+  f.viewer.sendJson({ ...report, presentationRevision: opened.presentationRevision - 1 });
+  f.viewer.sendJson({ type: 'client.ping' });
+  await f.viewer.take('server.pong');
+  await f.barrier();
+  assert.equal(f.teacher.messages.some(m => m.type === report.type), false);
+});

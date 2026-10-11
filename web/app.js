@@ -398,6 +398,8 @@ async function bootstrap() {
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
     elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
     window.addEventListener('resize', handleViewportResize);
+    new ResizeObserver(() => reportViewerCoursewareViewport()).observe(elements.videoView);
+    document.addEventListener('fullscreenchange', reportViewerCoursewareViewport);
     // 首次点击页面任意位置自动全屏（排除自身已是全屏入口的按钮、会跳转的链接与各类弹窗）
     const autoFullscreen = (e) => {
       if (e.target.closest('#downloadApkButton, #homeFullscreenButton, #action-btn-admin, #iosWebAppButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, #studentRollControls, #classPickerModal, #studentCountModal, .action-btn-exam, .action-btn-exit')) return;
@@ -1146,6 +1148,7 @@ async function handleSignalMessage(message) {
       setWaitingStatus(message.resumed ? '已恢复原连接码，等待教师连接...' : '等待教师连接...');
       break;
     case 'teacher.online':
+      reportViewerCoursewareViewport();
       setConnectionNotice('');
       state.teacherConnected = true;
       if (message.username && message.token) {
@@ -2466,6 +2469,7 @@ function applyCoursewareImageViewTransform() {
     canvas.style.transformOrigin = 'center center';
     canvas.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${view.scale})`;
     drawAnnotations();
+    reportViewerCoursewareViewport();
     return;
   }
   const img = elements.coursewareImage;
@@ -2475,6 +2479,29 @@ function applyCoursewareImageViewTransform() {
   // 显示区域（含缩放/平移/旋转）已经变化，需要按新区域重绘笔迹，
   // 否则已画的标注会停留在变换前的位置，不随内容移动。
   drawAnnotations();
+  reportViewerCoursewareViewport();
+}
+
+// Report the rendered PDF/container intersection in page coordinates. Keep the
+// trailing update so a stopped gesture or resize never leaves a stale rectangle.
+let viewerViewportTimer = null;
+function reportViewerCoursewareViewport() {
+  if (viewerViewportTimer !== null) return;
+  viewerViewportTimer = setTimeout(() => {
+    viewerViewportTimer = null;
+    if (!isCoursewarePdfVisible() || elements.videoView.hidden || !state.teacherConnected) return;
+    const viewport = elements.videoView.getBoundingClientRect();
+    const content = elements.coursewareCanvas.getBoundingClientRect();
+    if (viewport.width <= 0 || viewport.height <= 0 || content.width <= 0 || content.height <= 0) return;
+    const left = clamp((viewport.left - content.left) / content.width, 0, 1);
+    const top = clamp((viewport.top - content.top) / content.height, 0, 1);
+    const right = clamp((viewport.right - content.left) / content.width, 0, 1);
+    const bottom = clamp((viewport.bottom - content.top) / content.height, 0, 1);
+    if (right <= left || bottom <= top) return;
+    sendMessage({ type: 'viewer.courseware.viewport', width: viewport.width, height: viewport.height,
+      left, top, right, bottom, url: state.courseware.url, page: state.courseware.page,
+      presentationRevision: state.presentationRevision });
+  }, 80);
 }
 
 /** 仅复位状态（不渲染），用于打开新图片、关闭课件等场景 */
@@ -3238,8 +3265,10 @@ function handleViewportResize() {
     // 图片尺寸随窗口变化，需按新尺寸重算缩放/平移（内部会重绘笔迹）
     if (isImageViewVisible()) {
       applyCoursewareImageViewTransform();
+      reportViewerCoursewareViewport(true);
       return;
     }
+    reportViewerCoursewareViewport(true);
     drawAnnotations();
     return;
   }

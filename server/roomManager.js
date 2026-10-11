@@ -163,7 +163,7 @@ class RoomManager {
     const target =
       binding.role === 'teacher' ? room.viewerSocket : room.teacherSocket;
     room.expiresAt = Date.now() + this.roomTtlMs;
-    if (payload.type === 'courseware.state' && payload.presentationRevision != null &&
+    if (['courseware.state', 'viewer.courseware.viewport'].includes(payload.type) && payload.presentationRevision != null &&
         payload.presentationRevision !== room.presentationRevision) return false;
     if (['courseware.open', 'courseware.page', 'courseware.navigate', 'viewer.courseware.open'].includes(payload.type)) {
       room.presentationRevision += 1;

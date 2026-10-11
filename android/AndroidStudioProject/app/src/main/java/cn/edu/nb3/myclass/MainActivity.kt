@@ -198,6 +198,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewareTitle = ""
     private var coursewareUrl = ""
     private var coursewareRememberKey = ""
+    /** 大屏浏览器课件容器实际宽高比，未上报时使用 16:9 兼容默认值。 */
+    @Volatile private var coursewareViewportAspect = 9f / 16f
+    private var coursewareViewportOverlay: CoursewareViewportOverlay? = null
+    private var viewerPageRect: android.graphics.RectF? = null
+    private var viewerRectPage = 0
+    private var viewerRectUrl = ""
     /** 刷新课件列表（如删除后）时保留用户当前的滚动位置。 */
     private var coursewareListScrollY = 0
     /** 本次投屏课件的本地原文件：图片投屏时用它预览，避免从服务器重复下载 */
@@ -629,6 +635,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     signalingClient?.close()
                     signalingClient = null
                     activeRoomCode = null
+                    viewerPageRect = null
+                    coursewareViewportAspect = 9f / 16f
                     classPickerRoom = null
                     studentSelectionConfirmed = false
                     roomJoined = false
@@ -1187,6 +1195,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 signalingClient?.close()
                 signalingClient = null
                 activeRoomCode = null
+                viewerPageRect = null
+                coursewareViewportAspect = 9f / 16f
                 roomJoined = false
                 // Pending imports retain their owner and resume only for that account.
                 clearAuth()
@@ -4467,6 +4477,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         // 竖屏长课件在手机上可能整页可见，而大屏按横屏比例只显示其中一段。
         // 叠加一个半透明框，帮助用户知道当前投屏区域；该层不拦截任何手势。
         val viewportOverlay = CoursewareViewportOverlay(this)
+        coursewareViewportOverlay = viewportOverlay
         imageHost.addView(
             viewportOverlay,
             FrameLayout.LayoutParams(
@@ -5051,7 +5062,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomableImageView = zoomable
         // 视口与笔迹都带页码，大屏端按页处理；课件页方向固定，旋转恒为 0
         zoomable.onViewportChanged = { scale, centerX, centerY, _ ->
-            viewportOverlay.setViewport(zoomable.bigScreenViewportRectInView())
+            refreshCoursewareViewportOverlay()
             signalingClient?.sendCoursewareImageViewport(
                 scale = scale,
                 centerX = centerX,
@@ -5062,7 +5073,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             )
         }
         imageHost.doOnLayout {
-            viewportOverlay.setViewport(zoomable.bigScreenViewportRectInView())
+            refreshCoursewareViewportOverlay()
         }
         zoomable.onStrokeBegin = { strokeId, colorHex, width, isEraser, first ->
             signalingClient?.sendAnnotationBegin(strokeId, colorHex, width, isEraser, first, coursewarePage)
@@ -5618,6 +5629,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         castImageBitmap = null
         zoomableImageView?.releaseAnnotationLayer()
         zoomableImageView = null
+        coursewareViewportOverlay = null
         imageCastPenMode = false
         imageCastPenEraser = false
         releaseCoursewarePdf()
@@ -6261,6 +6273,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         signalReconnectInProgress = false
         roomJoined = false
         activeRoomCode = null
+        viewerPageRect = null
+        coursewareViewportAspect = 9f / 16f
         pendingStudentRollId = null
         resumeCameraAfterJoin = false
         resumeLiveAfterJoin = false
@@ -6517,6 +6531,31 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             coursewareSubScreen = CoursewareSubScreen.None
             resetMediaCastState()
             showMenuScreen()
+        }
+    }
+
+    private fun refreshCoursewareViewportOverlay() {
+        val zoomable = zoomableImageView ?: return
+        zoomable.bigScreenHeightOverWidth = coursewareViewportAspect
+        val rect = viewerPageRect?.takeIf { viewerRectPage == coursewarePage && viewerRectUrl == coursewareUrl }
+        coursewareViewportOverlay?.setViewport(if (rect != null) zoomable.mapPageRectToView(rect)
+            else zoomable.bigScreenViewportRectInView(coursewareViewportAspect))
+    }
+
+    override fun onViewerCoursewareViewport(message: JSONObject) {
+        val width = message.optDouble("width")
+        val height = message.optDouble("height")
+        val bounds = listOf("left", "top", "right", "bottom").map { message.optDouble(it) }
+        if (!width.isFinite() || !height.isFinite() || width <= 0 || height <= 0 ||
+            width > 100000 || height > 100000 || bounds.any { !it.isFinite() || it < 0 || it > 1 } ||
+            bounds[0] >= bounds[2] || bounds[1] >= bounds[3]) return
+        runOnUiThread {
+            if (message.optString("url") != coursewareUrl || message.optInt("page") != coursewarePage) return@runOnUiThread
+            coursewareViewportAspect = (height / width).toFloat()
+            viewerRectUrl = coursewareUrl
+            viewerRectPage = coursewarePage
+            viewerPageRect = android.graphics.RectF(bounds[0].toFloat(), bounds[1].toFloat(), bounds[2].toFloat(), bounds[3].toFloat())
+            refreshCoursewareViewportOverlay()
         }
     }
 

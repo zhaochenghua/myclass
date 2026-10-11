@@ -58,6 +58,8 @@ class SignalingClient(
         fun onCoursewareVideoAudio(muted: Boolean, volumePercent: Int)
         fun onViewerCoursewareOpen(url: String, title: String, page: Int, screen: Int)
         fun onViewerCoursewareClose()
+        /** 大屏实际课件显示区域，用于手机端准确绘制可视范围提示框 */
+        fun onViewerCoursewareViewport(message: JSONObject)
         /** 服务器明确返回的错误（连接本身仍存活，例如旧版服务器不支持某条消息类型） */
         fun onServerError(message: String)
         fun onStudentRollResult(requestId: String, status: String, message: String)
@@ -332,6 +334,7 @@ class SignalingClient(
                 screen = message.optInt("screen", 1).coerceAtLeast(1)
             )
             "viewer.courseware.close" -> callback.onViewerCoursewareClose()
+            "viewer.courseware.viewport" -> callback.onViewerCoursewareViewport(message)
             "viewer.annotation" -> callback.onViewerAnnotation(parseViewerAnnotation(message))
             "student.roll.result" -> callback.onStudentRollResult(
                 message.optString("requestId"), message.optString("status"), message.optString("message")

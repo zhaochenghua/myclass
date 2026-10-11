@@ -514,7 +514,7 @@ class ZoomableImageView(context: Context) : View(context) {
         val scale = userScale.coerceAtLeast(0.01f)
         val imageAspect = imageWidth.toFloat() / imageHeight.toFloat()
         val visibleWidth = (1f / scale).coerceIn(0f, 1f)
-        val visibleHeight = (bigScreenAspect / imageAspect / scale).coerceIn(0f, 1f)
+        val visibleHeight = (bigScreenAspect * imageAspect / scale).coerceIn(0f, 1f)
         val maxX = (1f - visibleWidth).coerceAtLeast(0f)
         val maxY = (1f - visibleHeight).coerceAtLeast(0f)
         val maxTranslateX = max(0f, (fitWidth * userScale - width) / 2f)
@@ -544,6 +544,15 @@ class ZoomableImageView(context: Context) : View(context) {
     }
 
     /** 屏幕坐标 → 归一化图片坐标；落在图片外时返回 null（与大屏端一样忽略） */
+    fun mapPageRectToView(rect: RectF): RectF? {
+        val image = imageDisplayRect() ?: return null
+        return RectF(image.left + rect.left * image.width(), image.top + rect.top * image.height(),
+            image.left + rect.right * image.width(), image.top + rect.bottom * image.height())
+    }
+
+    /** 大屏高宽比也用于手机整页显示时的逐屏翻动。 */
+    var bigScreenHeightOverWidth = 9f / 16f
+
     private fun toNormalized(viewX: Float, viewY: Float): AnnotationPoint? {
         val rect = imageDisplayRect() ?: return null
         if (rect.width() <= 0f || rect.height() <= 0f) return null
@@ -627,7 +636,7 @@ class ZoomableImageView(context: Context) : View(context) {
     private fun stepBigScreen(direction: Int): Boolean {
         val bmp = bitmap ?: return true
         val imageAspect = bmp.width.toFloat() / bmp.height.toFloat()
-        val bigAspectHOverW = 9f / 16f // 大屏高/宽（按 16:9 横屏估算）
+        val bigAspectHOverW = bigScreenHeightOverWidth
         val pageAspectHOverW = 1f / imageAspect // 页面高/宽
         val bigMaxYRatio = (pageAspectHOverW - bigAspectHOverW) / 2f // <=0 表示大屏整页
         if (bigMaxYRatio <= 0f) {

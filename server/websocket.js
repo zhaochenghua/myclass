@@ -44,7 +44,8 @@ const VIEWER_ONLY_MESSAGE_TYPES = new Set([
   'student.roll.result',
   'student.selection.state',
   'viewer.courseware.open',
-  'viewer.courseware.close'
+  'viewer.courseware.close',
+  'viewer.courseware.viewport'
 ]);
 
 function setupWebSocket(server, options) {
@@ -152,6 +153,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'teacher.stop':
     case 'viewer.courseware.open':
     case 'viewer.courseware.close':
+    case 'viewer.courseware.viewport':
     case 'viewer.annotation':
     case 'student.roll':
     case 'student.roll.result':
@@ -276,6 +278,20 @@ function handleForward(socket, message, roomManager, options) {
         confirmed: false, error: '大屏暂时未连接，请恢复连接后重试' });
     }
     return;
+  }
+
+  if (message.type === 'viewer.courseware.viewport') {
+    const width = Number(message.width);
+    const height = Number(message.height);
+    const page = Number(message.page);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1 || width > 100000 || height > 100000) {
+      return;
+    }
+    const { left, top, right, bottom, url, presentationRevision } = message;
+    if (![left, top, right, bottom].every(v => Number.isFinite(v) && v >= 0 && v <= 1) ||
+        right <= left || bottom <= top || typeof url !== 'string' || url.length > 4096 ||
+        !Number.isInteger(page) || page < 1 || !Number.isInteger(presentationRevision)) return;
+    message = { type: message.type, width, height, page, left, top, right, bottom, url, presentationRevision };
   }
 
   if (message.type === 'student.roll' || message.type === 'student.roll.result') {
