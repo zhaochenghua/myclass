@@ -161,6 +161,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var studentSelectionConfirmed = false
     private var pendingSelectionId: String? = null
     private var classPickerDialog: AlertDialog? = null
+    private var setClassPickerSaving: ((Boolean) -> Unit)? = null
     private var classPickerDraft: Triple<String, String, Int>? = null
     private var classPickerLoading = false
     private var classPickerRoom: String? = null
@@ -1724,19 +1725,28 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 else LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         if (landscape) right.setPadding(dp(16), 0, 0, 0)
-        val classes = android.widget.Spinner(this).apply {
-            contentDescription = "上课班级"
-            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                listOf("不选择班级（按人数抽学号）") + entries.map { "${it.name}（${it.size} 人）" })
-            setSelection(entries.indexOfFirst { it.id == (draft?.first ?: selectedTeachingClassId) }.let { if (it < 0) 0 else it + 1 })
+        val classes = android.widget.RadioGroup(this).apply {
+            orientation = android.widget.RadioGroup.VERTICAL
+            (listOf("不选择班级（按人数抽学号）") + entries.map { it.name + "（" + it.size + " 人）" }).forEachIndexed { index, label ->
+                addView(android.widget.RadioButton(this@MainActivity).apply {
+                    id = View.generateViewId()
+                    tag = index
+                    text = label
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
+                    minHeight = dp(48)
+                })
+            }
         }
+        val initialPosition = entries.indexOfFirst { it.id == (draft?.first ?: selectedTeachingClassId) }.let { if (it < 0) 0 else it + 1 }
+        classes.check(classes.getChildAt(initialPosition).id)
+        fun classPosition(): Int = classes.findViewById<View>(classes.checkedRadioButtonId)?.tag as? Int ?: 0
         val mode = android.widget.Spinner(this).apply {
             contentDescription = "抽取时显示"
             adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("学生姓名", "学生学号"))
             setSelection(if ((draft?.second ?: studentDrawMode) == "number") 1 else 0)
         }
         val initialCount = (draft?.third ?: studentDrawCount).coerceIn(1, 80)
-        val countLabel = bodyText("抽取人数：$initialCount 人（1–80）").apply {
+        val countLabel = bodyText("班级人数（1–80 人）").apply {
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
         }
         val countValue = TextView(this).apply {
@@ -1757,16 +1767,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             contentDescription = "人数减一"
             setOnClickListener { count.progress -= 1 }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        countRow.addView(count, LinearLayout.LayoutParams(0, dp(48), 1f))
-        countRow.addView(countValue, LinearLayout.LayoutParams(dp(48), dp(48)))
+        countRow.addView(countValue, LinearLayout.LayoutParams(0, dp(48), 1f))
         countRow.addView(compactButton(primaryButton("＋"), 22f).apply {
             contentDescription = "人数加一"
             setOnClickListener { count.progress += 1 }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val rememberDraft = {
-            classPickerDraft = Triple(entries.getOrNull(classes.selectedItemPosition - 1)?.id.orEmpty(),
+            classPickerDraft = Triple(entries.getOrNull(classPosition() - 1)?.id.orEmpty(),
                 if (mode.selectedItemPosition == 1) "number" else "name", count.progress + 1)
-            countLabel.text = "抽取人数：${count.progress + 1} 人（1–80）"
             countValue.text = (count.progress + 1).toString()
             countValue.contentDescription = "当前人数 ${count.progress + 1} 人"
         }
@@ -1775,47 +1783,74 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             override fun onStartTrackingTouch(bar: SeekBar?) = Unit
             override fun onStopTrackingTouch(bar: SeekBar?) = Unit
         })
-        val modeLabel = bodyText("抽取时显示").apply { setTextColor(Color.DKGRAY) }
-        left.addView(bodyText("上课班级").apply { setTextColor(Color.DKGRAY) })
+        val modeLabel = bodyText("抽取时显示").apply { setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface)) }
+        left.addView(bodyText("上课班级").apply { setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface)) })
         left.addView(classes)
         right.addView(modeLabel)
         right.addView(mode)
         right.addView(countLabel)
         right.addView(countRow)
+        right.addView(count)
         if (!landscape) left.addView(bodyText("上课中长按“抽学生”可修改设置。"))
         mode.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { rememberDraft() }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
-        classes.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                mode.visibility = if (position > 0) View.VISIBLE else View.GONE
-                modeLabel.visibility = mode.visibility
-                countRow.visibility = if (position == 0) View.VISIBLE else View.GONE
-                countLabel.visibility = countRow.visibility
-                rememberDraft()
-                // 选择班级后立即同步，避免还要再点一次“同步到大屏”。
-                val selected = entries.getOrNull(position - 1)
-                if (selected != null && selected.id != selectedTeachingClassId && selected.size > 0) {
-                    sendPhoneClassSelection(
-                        selected.id,
-                        if (mode.selectedItemPosition == 1) "number" else "name",
-                        count.progress + 1
-                    )
-                }
+        fun refreshChoice() {
+            val hasClass = classPosition() > 0
+            mode.visibility = if (hasClass) View.VISIBLE else View.GONE
+            modeLabel.visibility = mode.visibility
+            countRow.visibility = if (hasClass) View.GONE else View.VISIBLE
+            countLabel.visibility = countRow.visibility
+            count.visibility = countRow.visibility
+            rememberDraft()
+        }
+        refreshChoice()
+        classes.setOnCheckedChangeListener { _, _ ->
+            refreshChoice()
+            val selected = entries.getOrNull(classPosition() - 1)
+            if (selected != null) {
+                if (selected.size == 0) toast("该班级暂无学生，请先添加学生")
+                else sendPhoneClassSelection(selected.id, if (mode.selectedItemPosition == 1) "number" else "name", count.progress + 1)
             }
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
         val dialog = AlertDialog.Builder(this).setTitle("选择上课班级")
             .setView(ScrollView(this).apply { addView(content) })
-            .setNegativeButton("稍后设置") { _, _ -> classPickerDraft = null }.setPositiveButton("关闭", null).create()
+            .setNegativeButton("取消") { _, _ -> classPickerDraft = null }.setPositiveButton("确认", null).create()
         classPickerDialog = dialog
         dialog.setOnCancelListener { classPickerDraft = null }
-        dialog.setOnDismissListener { if (classPickerDialog === dialog) classPickerDialog = null }
+        dialog.setOnDismissListener {
+            if (classPickerDialog === dialog) {
+                classPickerDialog = null
+                setClassPickerSaving = null
+            }
+        }
         dialog.show()
         dialog.window?.setLayout((resources.displayMetrics.widthPixels * if (landscape) 0.92 else 0.94).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = pendingSelectionId == null
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { dialog.dismiss() }
+        setClassPickerSaving = { saving ->
+            fun enable(view: View) {
+                view.isEnabled = !saving
+                if (view is ViewGroup) for (i in 0 until view.childCount) enable(view.getChildAt(i))
+            }
+            enable(content)
+            dialog.setCancelable(!saving)
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).isEnabled = !saving
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).apply {
+                isEnabled = !saving
+                text = if (saving) "保存中…" else "确认"
+            }
+        }
+        setClassPickerSaving?.invoke(pendingSelectionId != null)
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val selected = entries.getOrNull(classPosition() - 1)
+            if (selected != null && selected.size == 0) {
+                toast("该班级暂无学生，请先添加学生")
+            } else {
+                rememberDraft()
+                sendPhoneClassSelection(selected?.id.orEmpty(),
+                    if (selected == null || mode.selectedItemPosition == 1) "number" else "name", count.progress + 1)
+            }
+        }
     }
 
     private fun sendPhoneClassSelection(classId: String, mode: String, count: Int) {
@@ -1828,12 +1863,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             toast("班级设置发送失败，请重试")
             return
         }
-        classPickerDialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = false
+        setClassPickerSaving?.invoke(true)
         reconnectHandler.postDelayed({
             if (pendingSelectionId == requestId) {
                 pendingSelectionId = null
-                classPickerDialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
-                toast("大屏未确认班级设置，请刷新大屏后重试")
+                setClassPickerSaving?.invoke(false)
+                toast("大屏未确认设置，修改已保留，请重试")
             }
         }, 8000L)
     }
@@ -1846,9 +1881,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (pendingSelectionId != null && requestId.isBlank()) return@runOnUiThread
             val pending = pendingSelectionId != null
             pendingSelectionId = null
-            classPickerDialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
+            setClassPickerSaving?.invoke(false)
             val error = message.optString("error")
             if (error.isNotBlank()) { toast(error); return@runOnUiThread }
+            if (pending && !message.optBoolean("confirmed")) {
+                toast("设置尚未保存，请重试")
+                return@runOnUiThread
+            }
             selectedTeachingClassId = message.optString("classId")
             studentDrawMode = message.optString("mode", "name")
             studentDrawCount = message.optInt("count", 50).coerceIn(1, 80)
