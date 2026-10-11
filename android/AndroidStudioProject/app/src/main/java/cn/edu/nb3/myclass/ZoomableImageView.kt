@@ -556,6 +556,7 @@ class ZoomableImageView(context: Context) : View(context) {
 
     /** 大屏确认的页面可见范围；不直接覆盖正在进行的手势进度，避免网络回包导致跳动。 */
     var reportedViewerRect: RectF? = null
+    private var viewerDragStarted = false
 
     private fun canDragViewerViewport(): Boolean =
         fitMode == ImageFitMode.FitWidth && fitHeight > 0f &&
@@ -567,6 +568,17 @@ class ZoomableImageView(context: Context) : View(context) {
         val visibleFraction = reportedViewerRect?.height() ?: return false
         val travel = fitHeight * userScale * (1f - visibleFraction)
         if (travel <= 1f) return false
+        if (!viewerDragStarted) {
+            val rect = reportedViewerRect ?: return false
+            // Only a real drag adopts the reported position. A tap must preserve
+            // the exact progress reached by the preceding screen step.
+            bigProgressY = when {
+                rect.bottom >= 0.999f -> 1f
+                rect.top <= 0.001f -> 0f
+                else -> (rect.top / (1f - rect.height())).coerceIn(0f, 1f)
+            }
+            viewerDragStarted = true
+        }
         bigScrollActive = true
         bigProgressY = (bigProgressY + distanceY / travel).coerceIn(0f, 1f)
         notifyViewport()
@@ -1064,12 +1076,7 @@ class ZoomableImageView(context: Context) : View(context) {
 
     private inner class GestureListener : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean {
-            // 从最新确认的位置开始；拖动期间保留本地累计值，不被迟到回包拉回。
-            if (canDragViewerViewport()) {
-                val rect = reportedViewerRect!!
-                bigProgressY = (rect.top / (1f - rect.height())).coerceIn(0f, 1f)
-                bigScrollActive = true
-            }
+            viewerDragStarted = false
             return true
         }
 
