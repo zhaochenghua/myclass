@@ -400,6 +400,10 @@ async function bootstrap() {
     window.addEventListener('resize', handleViewportResize);
     new ResizeObserver(() => reportViewerCoursewareViewport()).observe(elements.videoView);
     document.addEventListener('fullscreenchange', reportViewerCoursewareViewport);
+    document.addEventListener('visibilitychange', reportViewerCoursewareViewport);
+    // Repair a missed report after reconnect, background suspension or a layout
+    // that was temporarily zero-sized. Hidden/non-PDF views send nothing.
+    setInterval(reportViewerCoursewareViewport, 1500);
     // 首次点击页面任意位置自动全屏（排除自身已是全屏入口的按钮、会跳转的链接与各类弹窗）
     const autoFullscreen = (e) => {
       if (e.target.closest('#downloadApkButton, #homeFullscreenButton, #action-btn-admin, #iosWebAppButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, #studentRollControls, #classPickerModal, #studentCountModal, .action-btn-exam, .action-btn-exit')) return;
@@ -2489,7 +2493,10 @@ function reportViewerCoursewareViewport() {
   if (viewerViewportTimer !== null) return;
   viewerViewportTimer = setTimeout(() => {
     viewerViewportTimer = null;
-    if (!isCoursewarePdfVisible() || elements.videoView.hidden || !state.teacherConnected) return;
+    // teacherConnected is also cleared by teacher.stop before opening a PDF;
+    // it describes playback, not whether the signaling connection can send.
+    if (!isCoursewarePdfVisible() || elements.videoView.hidden ||
+        state.socket?.readyState !== WebSocket.OPEN) return;
     const viewport = elements.videoView.getBoundingClientRect();
     const content = elements.coursewareCanvas.getBoundingClientRect();
     if (viewport.width <= 0 || viewport.height <= 0 || content.width <= 0 || content.height <= 0) return;
@@ -3181,6 +3188,7 @@ function sendCoursewareState() {
     screenCount: courseware.screenCount,
     fitMode: courseware.fitMode
   });
+  reportViewerCoursewareViewport();
 }
 
 function cancelCoursewareRender(courseware) {
