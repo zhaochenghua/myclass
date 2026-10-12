@@ -978,7 +978,7 @@ input::placeholder {
     padding: 0.6rem 0.5rem 0.6rem 0.9rem;
   }
 
-  /* ---- 列表页：列表双列，按钮收进右侧竖栏 ---- */
+  /* ---- 列表页：列表双列，上传与标题同行，不占用列表宽度 ---- */
   .list-body {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -989,11 +989,11 @@ input::placeholder {
 
   #viewCoursewareList {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 11rem;
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas:
-      "header header"
-      "list   side";
+      "header upload"
+      "list   list";
   }
 
   #viewCoursewareList > .list-header {
@@ -1005,12 +1005,21 @@ input::placeholder {
   }
 
   #viewCoursewareList > .list-footer {
-    grid-area: side;
-    align-self: start;
+    grid-area: upload;
+    display: flex;
+    align-items: center;
     padding-top: 0;
+    padding-bottom: 0.6rem;
     padding-left: 0.75rem;
     border-top: none;
-    border-left: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+
+  #cwListUpload {
+    width: auto;
+    min-height: 2.5rem;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
   }
 
   /* ---- 图片视频投屏：左预览 + 右侧竖栏 ---- */
@@ -1043,6 +1052,11 @@ input::placeholder {
     border-left: 1px solid var(--line);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* 内容超过一屏时可滚动，不能压缩文字/按钮所在行造成相互覆盖。 */
+  #viewMediaCast > .list-footer > * {
+    flex-shrink: 0;
   }
 
   /* 竖栏较窄：按钮行允许换行，避免"旋转 90°"之类被挤扁 */
@@ -1468,6 +1482,43 @@ input::placeholder {
 
   .list-header {
     padding-bottom: 0.4rem;
+  }
+
+  #viewCoursewareList > .list-footer {
+    padding-bottom: 0.4rem;
+  }
+
+  #viewMediaCast > .list-footer {
+    min-height: 0;
+    gap: 0.4rem;
+  }
+
+  #mediaStatus {
+    margin: 0;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  #mediaImageActions:not([hidden]),
+  #mediaSwitchRow:not([hidden]) {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  #mediaImageActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #mediaSwitchRow {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  #viewMediaCast .media-row .btn {
+    min-width: 0;
+    min-height: 2.5rem;
+    padding: 0.35rem 0.3rem;
+    font-size: 0.78rem;
   }
 
   /* 直播页：侧栏更矮，按钮再压缩一点 */
