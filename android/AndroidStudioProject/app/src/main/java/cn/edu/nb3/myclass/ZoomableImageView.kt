@@ -551,6 +551,18 @@ class ZoomableImageView(context: Context) : View(context) {
             image.left + rect.right * image.width(), image.top + rect.bottom * image.height())
     }
 
+    /** 当前手持设备实际能看到的课件范围，使用课件归一化坐标。 */
+    fun visiblePageRect(): RectF? {
+        val image = imageDisplayRect() ?: return null
+        if (image.width() <= 0f || image.height() <= 0f || width <= 0 || height <= 0) return null
+        return RectF(
+            ((0f - image.left) / image.width()).coerceIn(0f, 1f),
+            ((0f - image.top) / image.height()).coerceIn(0f, 1f),
+            ((width - image.left) / image.width()).coerceIn(0f, 1f),
+            ((height - image.top) / image.height()).coerceIn(0f, 1f)
+        ).takeIf { it.width() > 0f && it.height() > 0f }
+    }
+
     /** 大屏高宽比也用于手机整页显示时的逐屏翻动。 */
     var bigScreenHeightOverWidth = 9f / 16f
 

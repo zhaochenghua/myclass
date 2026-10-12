@@ -6611,9 +6611,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomable.bigScreenHeightOverWidth = coursewareViewportAspect
         val rect = viewerPageRect?.takeIf { viewerRectPage == coursewarePage && viewerRectUrl == coursewareUrl }
         zoomable.reportedViewerRect = rect
-        // 只在大屏确认发生裁切时提示，整页可见或尚未确认时不画估算框。
-        val clipped = rect?.takeIf {
-            it.left > 0.001f || it.top > 0.001f || it.right < 0.999f || it.bottom < 0.999f
+        // 只有手持设备能看到的课件范围明显大于大屏范围时才提示。
+        // 横屏比例接近时两边看到的范围基本相同，整块黄色区域会遮住课件，直接隐藏。
+        val phoneRect = zoomable.visiblePageRect()
+        val clipped = rect?.takeIf { remote ->
+            val phone = phoneRect ?: return@takeIf false
+            val widthMore = phone.width() - remote.width() > 0.08f
+            val heightMore = phone.height() - remote.height() > 0.08f
+            val areaMore = phone.width() * phone.height() > remote.width() * remote.height() * 1.12f
+            widthMore || heightMore || areaMore
         }
         coursewareViewportOverlay?.setViewport(clipped?.let { zoomable.mapPageRectToView(it) })
     }
