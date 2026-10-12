@@ -3,8 +3,10 @@ package cn.edu.nb3.myclass
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.util.LruCache
+import android.view.ScaleGestureDetector
 import android.view.ViewTreeObserver
 import androidx.appcompat.widget.AppCompatImageView
 import okhttp3.Cache
@@ -17,7 +19,8 @@ import java.util.concurrent.TimeUnit
 
 /** Visible rows only; bounded downloads, sampled decoding, and shared HTTP/bitmap caches. */
 class CoursewareThumbnail(context: Context, private val url: String, private val targetPixels: Int,
-    private val pdfPage: Int? = null, private val video: Boolean = false) : AppCompatImageView(context) {
+    private val pdfPage: Int? = null, private val video: Boolean = false,
+    private val allowZoom: Boolean = false) : AppCompatImageView(context) {
     private var loading = false
     private var loaded = false
     @Volatile private var call: Call? = null
@@ -26,8 +29,20 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
     private var observedTree: ViewTreeObserver? = null
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener { loadIfVisible() }
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { loadIfVisible() }
+    private val zoomMatrix = Matrix()
+    private var previewBitmap: Bitmap? = null
+    private var previewBaseScale = 1f
+    private var previewScale = 1f
+    private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            if (!allowZoom || previewBitmap == null) return false
+            previewScale = (previewScale * detector.scaleFactor).coerceIn(1f, 4f)
+            applyPreviewMatrix(detector.focusX, detector.focusY)
+            return true
+        }
+    })
     init {
-        scaleType = ScaleType.FIT_CENTER
+        scaleType = if (allowZoom) ScaleType.MATRIX else ScaleType.CENTER_CROP
         setBackgroundColor(0xffeeeeee.toInt())
         setImageResource(android.R.drawable.ic_menu_gallery)
     }
@@ -45,7 +60,7 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
         if (isAttachedToWindow && isShown && !loading && !loaded && getLocalVisibleRect(Rect())) load()
     }
     private fun load() {
-        bitmaps.get(key)?.let { setImageBitmap(it); loaded = true; return }
+        bitmaps.get(key)?.let { showBitmap(it); loaded = true; return }
         loading = true
         val version = generation
         val app = context.applicationContext
@@ -111,11 +126,61 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
                 if (version == generation && isAttachedToWindow) {
                     loading = false
                     loaded = true
-                    if (bitmap != null) setImageBitmap(bitmap)
+                    if (bitmap != null) showBitmap(bitmap)
                     else contentDescription = "$contentDescription（预览不可用）"
                 }
             }
         }
+    }
+    private fun showBitmap(bitmap: Bitmap) {
+        if (!allowZoom) {
+            setImageBitmap(bitmap)
+            return
+        }
+        previewBitmap = bitmap
+        setImageBitmap(bitmap)
+        post { resetPreviewMatrix() }
+    }
+
+    private fun resetPreviewMatrix() {
+        val bitmap = previewBitmap ?: return
+        if (width <= 0 || height <= 0) return
+        previewBaseScale = minOf(width.toFloat() / bitmap.width, height.toFloat() / bitmap.height)
+        previewScale = 1f
+        applyPreviewMatrix(width / 2f, height / 2f)
+    }
+
+    private fun applyPreviewMatrix(focusX: Float, focusY: Float) {
+        val bitmap = previewBitmap ?: return
+        if (width <= 0 || height <= 0) return
+        val scale = previewBaseScale * previewScale
+        val drawWidth = bitmap.width * scale
+        val drawHeight = bitmap.height * scale
+        val left = (width - drawWidth) / 2f
+        val top = (height - drawHeight) / 2f
+        zoomMatrix.setScale(scale, scale)
+        // At zoom > 1, keep the pinch focus stable while retaining full fit at reset.
+        if (previewScale > 1f) {
+            val dx = (focusX - width / 2f) * (previewScale - 1f)
+            val dy = (focusY - height / 2f) * (previewScale - 1f)
+            zoomMatrix.postTranslate(left - dx, top - dy)
+        } else {
+            zoomMatrix.postTranslate(left, top)
+        }
+        imageMatrix = zoomMatrix
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (allowZoom && previewBitmap != null) resetPreviewMatrix()
+    }
+
+    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (allowZoom) {
+            scaleDetector.onTouchEvent(event)
+            return true
+        }
+        return super.onTouchEvent(event)
     }
     private fun renderVideo(app: Context, version: Int): Bitmap? {
         // Seek through HTTP ranges instead of downloading an entire video for its cover.

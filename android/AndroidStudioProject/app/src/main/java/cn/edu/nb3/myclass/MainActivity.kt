@@ -3678,7 +3678,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 contentDescription = "预览：$previewTitle"
                 layoutParams = LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(8) }
                 setOnClickListener {
-                    val preview = CoursewareThumbnail(this@MainActivity, url, dp(360), page, kind == CastMediaKind.Video).apply {
+                    val preview = CoursewareThumbnail(this@MainActivity, url, dp(360), page, kind == CastMediaKind.Video, true).apply {
                         contentDescription = previewTitle
                         minimumHeight = dp(300)
                     }
