@@ -3649,27 +3649,58 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (item.linkUrl.isNotBlank()) return "[链接]"
         // 优先用原始文件扩展名（PPT/DOC 转 PDF 后仍显示原格式）
         val source = if (item.originalUrl.isNotBlank()) item.originalUrl else item.url
-        val ext = source.substringAfterLast('.', "").uppercase()
+        val ext = source.substringBefore('?').substringBefore('#').substringAfterLast('.', "").uppercase(java.util.Locale.ROOT)
         return if (ext.isNotEmpty()) "[$ext]" else ""
     }
 
     private fun addCoursewareThumbnail(row: LinearLayout, item: StoredCoursewareItem) {
         val kind = mediaKindOf(item.url)
-        if (item.linkUrl.isNotBlank() || kind !in listOf(CastMediaKind.Image, CastMediaKind.Pdf)) return
+        val ext = coursewareFormatLabel(item).removeSurrounding("[", "]")
+        val (label, color) = when {
+            item.linkUrl.isNotBlank() -> "↗ 链接" to 0xff475569.toInt()
+            ext in listOf("PPT", "PPTX", "ODP") -> "PPT" to 0xffb54708.toInt()
+            ext in listOf("DOC", "DOCX", "ODT") -> "Word" to 0xff185abd.toInt()
+            ext in listOf("XLS", "XLSX", "ODS", "CSV") -> "Excel" to 0xff137333.toInt()
+            kind == CastMediaKind.Video -> "▶ 视频" to 0xff6d28d9.toInt()
+            kind == CastMediaKind.Image -> "图片" to 0xff007c83.toInt()
+            kind == CastMediaKind.Pdf -> "PDF" to 0xffc62828.toInt()
+            else -> "文件" to 0xff475569.toInt()
+        }
+        val tile = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(dp(80), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
+        }
+        row.addView(tile)
         val page = if (kind == CastMediaKind.Pdf) item.lastPage.coerceAtLeast(1) else null
         val previewTitle = if (page != null) "${item.title} · 第 $page 页" else item.title
-        val url = absoluteCoursewareUrl(item.url) ?: return
-        row.addView(CoursewareThumbnail(this, url, dp(80), page).apply {
-            contentDescription = "预览：$previewTitle"
-            layoutParams = LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(8) }
-            setOnClickListener {
-                val preview = CoursewareThumbnail(this@MainActivity, url, dp(360), page).apply {
-                    contentDescription = previewTitle
-                    minimumHeight = dp(300)
+        val url = absoluteCoursewareUrl(item.url)
+        if (url != null && item.linkUrl.isBlank() && kind in listOf(CastMediaKind.Image, CastMediaKind.Pdf, CastMediaKind.Video)) {
+            tile.addView(CoursewareThumbnail(this, url, dp(80), page, kind == CastMediaKind.Video).apply {
+                contentDescription = "预览：$previewTitle"
+                layoutParams = LinearLayout.LayoutParams(dp(80), dp(80))
+                setOnClickListener {
+                    val preview = CoursewareThumbnail(this@MainActivity, url, dp(360), page, kind == CastMediaKind.Video).apply {
+                        contentDescription = previewTitle
+                        minimumHeight = dp(300)
+                    }
+                    AlertDialog.Builder(this@MainActivity).setTitle(previewTitle).setView(preview)
+                        .setPositiveButton("关闭", null).show()
                 }
-                AlertDialog.Builder(this@MainActivity).setTitle(previewTitle).setView(preview)
-                    .setPositiveButton("关闭", null).show()
+            })
+        }
+        tile.addView(TextView(this).apply {
+            text = label
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(android.graphics.Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(3), dp(4), dp(3), dp(4))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(color)
+                cornerRadius = dp(4).toFloat()
             }
+            contentDescription = "文件类型：$label"
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         })
     }
 
@@ -3688,9 +3719,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun coursewareButtonText(item: StoredCoursewareItem): String {
         return if (item.linkUrl.isNotBlank()) {
-            "${item.title} [链接]"
+            item.title
         } else {
-            "${item.title} ${coursewareFormatLabel(item)}  ${formatCoursewareSize(item.size)}"
+            "${item.title}  ${formatCoursewareSize(item.size)}"
         }
     }
 

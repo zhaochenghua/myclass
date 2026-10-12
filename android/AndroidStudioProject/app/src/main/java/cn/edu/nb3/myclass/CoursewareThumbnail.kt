@@ -17,12 +17,12 @@ import java.util.concurrent.TimeUnit
 
 /** Visible rows only; bounded downloads, sampled decoding, and shared HTTP/bitmap caches. */
 class CoursewareThumbnail(context: Context, private val url: String, private val targetPixels: Int,
-    private val pdfPage: Int? = null) : AppCompatImageView(context) {
+    private val pdfPage: Int? = null, private val video: Boolean = false) : AppCompatImageView(context) {
     private var loading = false
     private var loaded = false
     @Volatile private var call: Call? = null
     @Volatile private var generation = 0
-    private val key = "$url@$targetPixels:page=$pdfPage"
+    private val key = "$url@$targetPixels:page=$pdfPage:video=$video"
     private var observedTree: ViewTreeObserver? = null
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener { loadIfVisible() }
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { loadIfVisible() }
@@ -52,6 +52,7 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
         executor.execute {
             if (version != generation) return@execute
             val bitmap = runCatching {
+                if (video) return@runCatching renderVideo(app, version)
                 val pdfFile = if (pdfPage != null) File(app.cacheDir, "courseware-thumbnail-pdfs").let { directory ->
                     directory.mkdirs()
                     val digest = java.security.MessageDigest.getInstance("SHA-256").digest(url.toByteArray())
@@ -115,6 +116,80 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
                 }
             }
         }
+    }
+    private fun renderVideo(app: Context, version: Int): Bitmap? {
+        // Seek through HTTP ranges instead of downloading an entire video for its cover.
+        val deadline = android.os.SystemClock.elapsedRealtime() + 25_000L
+        val source = object : android.media.MediaDataSource() {
+            private var length = -1L
+            private val blocks = object : LinkedHashMap<Long, ByteArray>(4, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, ByteArray>?) = size > 4
+            }
+            private fun block(start: Long): ByteArray = blocks[start] ?: run {
+                if (version != generation || android.os.SystemClock.elapsedRealtime() >= deadline)
+                    throw java.io.IOException("Preview cancelled or timed out")
+                val request = http(app).newCall(Request.Builder().url(url)
+                    .header("Range", "bytes=$start-${start + 262143}")
+                    .header("Accept-Encoding", "identity").build())
+                call = request
+                request.timeout().timeout((deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1), TimeUnit.MILLISECONDS)
+                if (version != generation) request.cancel()
+                request.execute().use { response ->
+                    if (response.code != 206) throw java.io.IOException("Video preview requires byte ranges")
+                    val range = response.header("Content-Range").orEmpty()
+                    if (!range.startsWith("bytes $start-")) throw java.io.IOException("Invalid video range")
+                    length = range.substringAfterLast('/').toLongOrNull()
+                        ?.takeIf { it > 0 } ?: throw java.io.IOException("Invalid video length")
+                    val body = response.body ?: throw java.io.IOException("Empty video range")
+                    val bytes = body.byteStream().use { it.readBytesBounded(262144) }
+                    if (bytes.isEmpty()) throw java.io.IOException("Empty video range")
+                    blocks[start] = bytes
+                    bytes
+                }
+            }
+            override fun getSize(): Long { if (length < 0) block(0); return length }
+            override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+                if (size == 0) return 0
+                if (position < 0 || position >= getSize()) return -1
+                val start = position / 262144 * 262144
+                val bytes = block(start)
+                val index = (position - start).toInt()
+                val count = minOf(size, bytes.size - index)
+                if (count <= 0) throw java.io.IOException("Incomplete video range")
+                bytes.copyInto(buffer, offset, index, index + count)
+                return count
+            }
+            override fun close() { blocks.clear() }
+        }
+        return source.use {
+            val retriever = android.media.MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(source)
+                if (android.os.Build.VERSION.SDK_INT >= 27) {
+                    retriever.getScaledFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                        targetPixels, targetPixels)
+                } else {
+                    retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { frame ->
+                        val scale = minOf(1f, targetPixels.toFloat() / maxOf(frame.width, frame.height))
+                        val scaled = Bitmap.createScaledBitmap(frame, (frame.width * scale).toInt().coerceAtLeast(1),
+                            (frame.height * scale).toInt().coerceAtLeast(1), true)
+                        if (scaled !== frame) frame.recycle()
+                        scaled
+                    }
+                }
+            } finally { retriever.release() }
+        }
+    }
+    private fun java.io.InputStream.readBytesBounded(limit: Int): ByteArray {
+        val output = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        while (true) {
+            val count = read(buffer)
+            if (count < 0) break
+            if (output.size() + count > limit) throw java.io.IOException("Video range too large")
+            output.write(buffer, 0, count)
+        }
+        return output.toByteArray()
     }
     private fun renderPdf(file: File): Bitmap {
         android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
