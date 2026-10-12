@@ -3653,10 +3653,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         return if (ext.isNotEmpty()) "[$ext]" else ""
     }
 
-    private fun addCoursewareThumbnail(row: LinearLayout, item: StoredCoursewareItem) {
+    private fun coursewareTypeBadge(item: StoredCoursewareItem): Pair<String, Int> {
         val kind = mediaKindOf(item.url)
         val ext = coursewareFormatLabel(item).removeSurrounding("[", "]")
-        val (label, color) = when {
+        return when {
             item.linkUrl.isNotBlank() -> "↗ 链接" to 0xff475569.toInt()
             ext in listOf("PPT", "PPTX", "ODP") -> "PPT" to 0xffb54708.toInt()
             ext in listOf("DOC", "DOCX", "ODT") -> "Word" to 0xff185abd.toInt()
@@ -3666,18 +3666,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             kind == CastMediaKind.Pdf -> "PDF" to 0xffc62828.toInt()
             else -> "文件" to 0xff475569.toInt()
         }
-        val tile = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(dp(80), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
-        }
-        row.addView(tile)
+    }
+
+    private fun addCoursewareThumbnail(row: LinearLayout, item: StoredCoursewareItem) {
+        val kind = mediaKindOf(item.url)
         val page = if (kind == CastMediaKind.Pdf) item.lastPage.coerceAtLeast(1) else null
         val previewTitle = if (page != null) "${item.title} · 第 $page 页" else item.title
         val url = absoluteCoursewareUrl(item.url)
         if (url != null && item.linkUrl.isBlank() && kind in listOf(CastMediaKind.Image, CastMediaKind.Pdf, CastMediaKind.Video)) {
-            tile.addView(CoursewareThumbnail(this, url, dp(80), page, kind == CastMediaKind.Video).apply {
+            row.addView(CoursewareThumbnail(this, url, dp(80), page, kind == CastMediaKind.Video).apply {
                 contentDescription = "预览：$previewTitle"
-                layoutParams = LinearLayout.LayoutParams(dp(80), dp(80))
+                layoutParams = LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(8) }
                 setOnClickListener {
                     val preview = CoursewareThumbnail(this@MainActivity, url, dp(360), page, kind == CastMediaKind.Video).apply {
                         contentDescription = previewTitle
@@ -3688,24 +3687,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             })
         }
-        tile.addView(TextView(this).apply {
-            text = label
-            textSize = 13f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(android.graphics.Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(dp(3), dp(4), dp(3), dp(4))
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(color)
-                cornerRadius = dp(4).toFloat()
-            }
-            contentDescription = "文件类型：$label"
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        })
     }
 
     private fun coursewareProgressButton(item: StoredCoursewareItem): MaterialButton =
         CoursewareProgressButton(this).apply {
+            isAllCaps = false
             text = coursewareButtonText(item)
             textSize = 14f
             playbackProgress = rememberedCoursewareProgress(item)
@@ -3717,11 +3703,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         return if (total > 0) (page * 100 / total).coerceIn(0, 100) else 0
     }
 
-    private fun coursewareButtonText(item: StoredCoursewareItem): String {
-        return if (item.linkUrl.isNotBlank()) {
+    private fun coursewareButtonText(item: StoredCoursewareItem): CharSequence {
+        val (label, color) = coursewareTypeBadge(item)
+        val badge = "\u00a0${label.replace(' ', '\u00a0')}\u00a0"
+        val title = if (item.linkUrl.isNotBlank()) {
             item.title
         } else {
             "${item.title}  ${formatCoursewareSize(item.size)}"
+        }
+        return android.text.SpannableString("$badge ${title}").apply {
+            val flags = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            setSpan(android.text.style.BackgroundColorSpan(color), 0, badge.length, flags)
+            setSpan(android.text.style.ForegroundColorSpan(android.graphics.Color.WHITE), 0, badge.length, flags)
+            setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, badge.length, flags)
         }
     }
 
