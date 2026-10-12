@@ -235,3 +235,20 @@ test('viewer viewport reports validate geometry, roles and presentation revision
   await f.barrier();
   assert.equal(f.teacher.messages.some(m => m.type === report.type), false);
 });
+
+
+test('progress persistence uses the authenticated teacher and rejects stale viewer state', async t => {
+  const f=await fixture(t), saved=[];
+  f.manager.savePlayback=(...args)=>{saved.push(args);return Promise.resolve(true)};
+  f.manager.rooms.get(f.room.code).teacherInfo={id:'alice',username:'alice'};
+  f.send({type:'courseware.open',url:'/myclass/book.pdf',page:1});
+  const opened=await f.viewer.take('courseware.open');
+  const state={type:'courseware.state',url:opened.url,page:4,pageCount:30,presentationRevision:opened.presentationRevision};
+  f.viewer.sendJson(state);
+  await f.teacher.take('courseware.state');
+  assert.deepEqual(saved,[['alice',opened.url,4,30]]);
+  f.viewer.sendJson({...state,page:1,presentationRevision:opened.presentationRevision-1});
+  f.viewer.sendJson({type:'client.ping'});
+  await f.viewer.take('server.pong');
+  assert.equal(saved.length,1);
+});

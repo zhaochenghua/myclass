@@ -452,7 +452,7 @@ async function loadCourseware() {
     }
     tbody.innerHTML = data.items.map((c) => `
       <tr>
-        <td>${escapeHtml(c.title)}</td>
+        <td>${escapeHtml(c.title)}${c.playbackProgress ? `<div class="muted">上次播放：第 ${Number(c.playbackProgress.page)} / ${Number(c.playbackProgress.pageCount)} 页</div><progress max="${Number(c.playbackProgress.pageCount)}" value="${Number(c.playbackProgress.page)}"></progress>` : ''}</td>
         <td>${escapeHtml(c.fileName).substring(0, 30)}</td>
         ${isAdmin ? `<td><span class="tag ${c.userId === 'admin' ? 'tag-public' : 'tag-private'}">${escapeHtml(c.owner || '未知')}</span></td>` : ''}
         <td>${formatBytes(c.size)}</td>

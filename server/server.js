@@ -678,6 +678,7 @@ app.use(
 
 // HTTP 与 HTTPS 共用一个 RoomManager，保证两种协议下拿到的连接码属于同一间教室。
 const roomManager = new RoomManager({
+  savePlayback: (...args) => coursewareStore.savePlayback(...args),
   roomTtlMs: ROOM_TTL_MS,
   viewerGraceMs: VIEWER_GRACE_MS
 });

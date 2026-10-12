@@ -2825,6 +2825,8 @@ function openCourseware(item) {
     return;
   }
 
+  const saved = Number(item.playbackProgress?.page) || 1;
+  const startPage = saved > 1 && window.confirm('上次播放到第 ' + saved + ' 页。确定继续，取消从第一页开始。') ? saved : 1;
   // 改播课件时清掉图片视频队列，避免投屏界面残留切换按钮
   resetMediaCastState();
   stopLive({ notify: false });
@@ -2834,7 +2836,7 @@ function openCourseware(item) {
     id: item.id || null,
     url: item.url,
     title: item.title || item.fileName || '课件',
-    page: 1,
+    page: startPage,
     pageCount: 1,
     screen: 1,
     screenCount: 1,
@@ -2846,7 +2848,7 @@ function openCourseware(item) {
   state.signaling?.sendCoursewareOpen({
     url: state.courseware.url,
     title: state.courseware.title,
-    page: 1,
+    page: startPage,
     screen: 1,
     linkUrl: state.courseware.linkUrl
   });

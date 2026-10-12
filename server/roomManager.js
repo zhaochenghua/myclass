@@ -24,6 +24,7 @@ class RoomManager {
   constructor(options = {}) {
     this.roomTtlMs = options.roomTtlMs || DEFAULT_ROOM_TTL_MS;
     this.viewerGraceMs = options.viewerGraceMs || DEFAULT_VIEWER_GRACE_MS;
+    this.savePlayback = options.savePlayback;
     this.rooms = new Map();
     this.socketIndex = new Map();
   }
@@ -132,7 +133,7 @@ class RoomManager {
 
     if (room.teacherInfo?.username !== teacherInfo?.username) room.presentation.reset();
     room.teacherSocket = teacherSocket;
-    room.teacherInfo = teacherInfo ? { username: teacherInfo.username, token: teacherInfo.token,
+    room.teacherInfo = teacherInfo ? { id: teacherInfo.id, username: teacherInfo.username, token: teacherInfo.token,
       supportsStudentSelection: teacherInfo.supportsStudentSelection === true } : null;
     this.socketIndex.set(teacherSocket, { code, role: 'teacher' });
 
@@ -171,6 +172,13 @@ class RoomManager {
     }
     const samePresentation = payload.type === 'courseware.open' && room.presentation.open?.url === payload.url;
     room.presentation.apply(payload, binding.role);
+    // Persist only the viewer's rendered page, never an unconfirmed navigation
+    // request. Old Android and iOS clients already produce these acknowledgements.
+    if (payload.type === 'courseware.state' && binding.role === 'viewer' &&
+        room.teacherInfo?.id && room.presentation.open?.url === payload.url && this.savePlayback) {
+      Promise.resolve(this.savePlayback(room.teacherInfo.id, payload.url, payload.page, payload.pageCount))
+        .catch(error => console.error('Failed to save courseware progress:', error.message));
+    }
     if (samePresentation && room.viewerSocket?.supportsRecovery) {
       return sendJson(target, { type: 'room.snapshot', presentation: room.presentation.snapshot(), presentationRevision: room.presentationRevision });
     }

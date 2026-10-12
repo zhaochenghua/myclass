@@ -133,7 +133,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val url: String,
         val size: Long,
         val originalUrl: String = "",
-        val linkUrl: String = ""
+        val linkUrl: String = "",
+        val lastPage: Int = 1,
+        val savedPageCount: Int = 0
     )
 
     private var currentScreen = Screen.Connect
@@ -3468,7 +3470,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     url = url,
                     size = item.optLong("size", 0L),
                     originalUrl = originalUrl,
-                    linkUrl = linkUrl
+                    linkUrl = linkUrl,
+                    lastPage = item.optJSONObject("playbackProgress")?.optInt("page", 1) ?: 1,
+                    savedPageCount = item.optJSONObject("playbackProgress")?.optInt("pageCount", 0) ?: 0
                 )
             }
         }
@@ -3587,15 +3591,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         openStoredCoursewareNow(item, sourceItems, 1)
     }
 
-    private fun rememberedCoursewarePage(item: StoredCoursewareItem): Int =
-        getSharedPreferences("myclass_courseware", Context.MODE_PRIVATE)
-            .getInt("page_${item.id}", 1).coerceAtLeast(1)
-
-    private fun rememberCoursewarePage() {
-        if (coursewareRememberKey.isBlank() || coursewarePage < 1) return
-        getSharedPreferences("myclass_courseware", Context.MODE_PRIVATE)
-            .edit().putInt("page_${coursewareRememberKey}", coursewarePage).putInt("count_${coursewareRememberKey}", coursewarePageCount).apply()
-    }
+    private fun rememberedCoursewarePage(item: StoredCoursewareItem): Int = item.lastPage.coerceAtLeast(1)
 
     private fun openStoredCoursewareNow(item: StoredCoursewareItem, sourceItems: List<StoredCoursewareItem>, startPage: Int) {
         if (!roomJoined) {
@@ -3682,10 +3678,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
     private fun rememberedCoursewareProgress(item: StoredCoursewareItem): Int {
-        val prefs = getSharedPreferences("myclass_courseware", Context.MODE_PRIVATE)
-        val page = prefs.getInt("page_" + item.id, 1)
-        val total = prefs.getInt("count_" + item.id, 0)
-        return if (page > 1 && total > 1) (page * 100 / total).coerceIn(1, 100) else 0
+        val page = item.lastPage
+        val total = item.savedPageCount
+        return if (total > 0) (page * 100 / total).coerceIn(0, 100) else 0
     }
 
     private fun coursewareButtonText(item: StoredCoursewareItem): String {
@@ -4857,7 +4852,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 coursewarePage = page
             }
             coursewarePageCount = total
-            rememberCoursewarePage()
             updatePageBar()
             if (notifyRemote) {
                 signalingClient?.sendCoursewarePage(page)
@@ -5988,7 +5982,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun closeCoursewareAndReturnMenu() {
         cancelCoursewareFastSeek()
-        rememberCoursewarePage()
         if (!sendCoursewareCloseSignal() && activeRoomCode != null) {
             pendingCoursewareCloseAfterJoin = true
             reconnectSignalingForCurrentRoom()
@@ -6011,7 +6004,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun pauseCoursewareAndReturnMenu() {
         cancelCoursewareFastSeek()
-        rememberCoursewarePage()
         coursewareSubScreen = CoursewareSubScreen.None
         releaseMediaCastViews()
         savedCoursewareState = CoursewareState(

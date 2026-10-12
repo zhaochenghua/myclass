@@ -224,3 +224,20 @@ test('animation profiles do not reuse static previews; cached metadata and refer
   assert.equal((await f.upload('same.pptx')).storageKey, old.storageKey);
   assert.equal(conversions, 2);
 });
+
+
+test('playback progress persists per teacher, survives restart and stays private', async t => {
+  const f = await fixture(t);
+  const shared = await f.upload('shared.pdf', 'admin');
+  const own = await f.upload('private.pdf', 'alice');
+  await Promise.all([f.store.savePlayback('alice', shared.url, 4, 20), f.store.savePlayback('bob', shared.url, 8, 20)]);
+  assert.equal(await f.store.savePlayback('bob', own.url, 3, 20), false);
+  assert.equal(await f.store.savePlayback('alice', own.url, 21, 20), false);
+  const reopened = createCoursewareStore({root: f.root, prefix:'/myclass'});
+  assert.equal((await reopened.list('alice')).find(i=>i.id===shared.id).playbackProgress.page,4);
+  const bob = (await reopened.list('bob')).find(i=>i.id===shared.id);
+  assert.equal(bob.playbackProgress.page,8);
+  assert.equal(bob.playbackByUser,undefined);
+  await reopened.savePlayback('alice',shared.url,1,20);
+  assert.equal((await reopened.list('alice')).find(i=>i.id===shared.id).playbackProgress.page,1);
+});

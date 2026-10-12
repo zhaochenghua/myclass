@@ -244,7 +244,8 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
           throw error;
         }
       }
-      visible.push(item);
+      const { playbackByUser, ...publicItem } = item;
+      visible.push({ ...publicItem, playbackProgress: playbackByUser?.[userId || item.userId] || null });
       if (listLimit > 0 && visible.length >= listLimit) break;
     }
     return visible;
@@ -299,7 +300,31 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     });
   }
 
-  return { publish, list, remember, remove, rename, readIndex };
+  function savePlayback(userId, url, page, pageCount) {
+    if (!userId || !Number.isInteger(page) || !Number.isInteger(pageCount) ||
+        page < 1 || pageCount < page || pageCount > 100000) return Promise.resolve(false);
+    return mutate(async () => {
+      const items = await readIndex();
+      const item = items.find(entry => entry.url === url);
+      if (!item || (item.userId && !['admin', 'legacy', userId].includes(item.userId))) return false;
+      const previous = item.playbackByUser?.[userId];
+      if (previous?.page === page && previous.pageCount === pageCount) return true;
+      item.playbackByUser = { ...item.playbackByUser,
+        [userId]: { page, pageCount, updatedAt: new Date().toISOString() } };
+      // Keep retries inside the mutation queue: an older retry must never
+      // overwrite a more recent page or another teacher's progress.
+      for (let attempt = 0; ; attempt++) {
+        try { await saveIndex(items); break; }
+        catch (error) {
+          if (attempt >= 2) throw error;
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
+      return true;
+    });
+  }
+
+  return { publish, list, remember, remove, rename, readIndex, savePlayback };
 }
 
 module.exports = { createCoursewareStore };
