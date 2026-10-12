@@ -596,11 +596,25 @@ class ZoomableImageView(context: Context) : View(context) {
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+        // 切换画笔模式时，平板横屏底部工具栏会增减一行，导致预览区域高度变化。
+        // 保留尺寸变化前的滚动位置，否则长页停在底部时会被强制跳回顶部，
+        // 而大屏仍停在底部，造成手机与大屏显示区域不一致。
+        val oldMaxY = max(0f, (fitHeight - oldh) / 2f)
+        val oldProgressY = if (oldMaxY > 0.5f) {
+            ((oldMaxY - translateY) / (2f * oldMaxY)).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
         measureFit()
         if (fitMode == ImageFitMode.FitWidth && userScale <= 1.01f) {
-            // 未放大时，尺寸变化（含横竖屏旋转）后重新从顶部对齐，
-            // 避免出现竖屏时画面停在页面中间的情况
-            translateY = (fitHeight - height) / 2f
+            val newMaxY = max(0f, (fitHeight - height) / 2f)
+            translateY = if (oldMaxY > 0.5f) {
+                // 0 是顶部，1 是底部；按比例映射到新的可滚动范围。
+                newMaxY - oldProgressY * 2f * newMaxY
+            } else {
+                // 首次布局或整页可见时仍从顶部开始。
+                newMaxY
+            }
             translateX = 0f
         }
         clampTranslation()
