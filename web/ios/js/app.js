@@ -7,7 +7,7 @@ import {
   $,
   storage,
   toast,
-  showView,
+  showView as showBaseView,
   showOverlay,
   hideOverlay,
   setOverlayText,
@@ -23,9 +23,19 @@ import { createClassroom } from './classroom.js?v=20260919f';
 import { LivePublisher } from './publisher.js';
 import { MediaPipeline } from './pipeline.js?v=20260920a';
 import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
-import { CoursewareClient, coursewareFormatLabel } from './courseware.js';
+import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261012-ios3';
+import { mediaKind, prepareImageFile, ensureMediaUploaded } from './mediaFiles.mjs?v=20261012-ios3';
 import { AnnotationBoard } from './annotation.js';
-import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20260921';
+import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261012-ios3';
+import { ListPreviews, playbackProgress } from './listPreviews.mjs?v=20261012-ios3';
+
+let mediaListPreviews = null;
+let coursewareListPreviews = null;
+function showView(name) {
+  if (name !== 'MediaQueue') { mediaListPreviews?.destroy(); mediaListPreviews = null; }
+  if (name !== 'CoursewareList') { coursewareListPreviews?.destroy(); coursewareListPreviews = null; }
+  showBaseView(name);
+}
 
 // 摄像头采集与推流参数。原先由功能菜单里的「画质」选项切换，实际只影响
 // getUserMedia 的期望长边与 WebRTC 码率，课堂投屏下看不出差别，已固定为原"标准"档。
@@ -666,30 +676,13 @@ async function handleImagePicked(event) {
   }
 }
 
-function fileToResizedDataUrl(file, maxEdge) {
+async function fileToResizedDataUrl(file, maxEdge) {
+  const prepared = await prepareImageFile(file, { maxEdge });
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight || 1));
-      const w = Math.max(1, Math.round(img.naturalWidth * scale));
-      const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      try {
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
-      } catch (e) {
-        reject(e instanceof Error ? e : new Error('图片处理失败'));
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('图片解码失败（iOS 可能不支持该图片格式）'));
-    };
-    img.src = url;
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('图片读取失败'));
+    reader.readAsDataURL(prepared);
   });
 }
 
@@ -939,10 +932,7 @@ const VIDEO_PATTERN = /\.(mp4|mov|avi|webm|mkv|3gp)(\?|$)/i;
 const IMAGE_PATTERN = /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i;
 
 function mediaKindOf(nameOrUrl) {
-  const value = String(nameOrUrl || '');
-  if (VIDEO_PATTERN.test(value)) return 'video';
-  if (IMAGE_PATTERN.test(value)) return 'image';
-  return 'other';
+  return mediaKind(nameOrUrl);
 }
 
 /**
@@ -984,7 +974,7 @@ function openMediaPicker() {
     const input = document.createElement('input');
     input.type = 'file';
     input.id = 'mediaPickerInput';
-    input.accept = 'image/*,video/*';
+    input.accept = 'image/jpeg,image/png,image/gif,image/webp,video/*';
     input.multiple = true;
     input.style.position = 'fixed';
     input.style.left = '-9999px';
@@ -1016,7 +1006,7 @@ function openMediaCamera() {
     const input = document.createElement('input');
     input.type = 'file';
     input.id = 'mediaCameraInput';
-    input.accept = 'image/*';
+    input.accept = 'image/jpeg,image/png';
     input.setAttribute('capture', 'environment');
     // 同 openMediaPicker：必须真实挂到 DOM，否则 iOS 不触发选择
     input.style.position = 'fixed';
@@ -1039,18 +1029,13 @@ async function handleMediaPicked(event) {
     toast('未选择到文件，请重试', { warn: true });
     return;
   }
-  if (!state.joined) {
-    toast('请先连接教室端', { warn: true });
-    return;
-  }
-
   // 连续多次选择时追加到已有队列后面，已投屏的内容不受影响
   const startIndex = state.media.queue.length;
   for (const file of files) {
     state.media.queue.push({
       file,
       name: file.name || 'media',
-      kind: mediaKindOf(file.name),
+      kind: mediaKind(file.name, file.type),
       status: 'pending',
       url: '',
       title: '',
@@ -1355,14 +1340,6 @@ function bindMediaGestures() {
 async function castMediaItem(index) {
   const item = state.media.queue[index];
   if (!item) return;
-  if (!state.joined) {
-    toast('请先连接教室端', { warn: true });
-    return;
-  }
-  if (item.status === 'uploading') {
-    toast('该文件正在上传，请稍候');
-    return;
-  }
   if (item.url) {
     switchToReadyMediaItem(index);
     return;
@@ -1389,15 +1366,15 @@ function switchToReadyMediaItem(index) {
   state.mediaBoard?.reset();
 
   stopLive({ notify: false });
-  state.signaling?.sendStop();
-  state.signaling?.sendCoursewareOpen({
+  if (state.joined) state.signaling?.sendStop();
+  if (state.joined) state.signaling?.sendCoursewareOpen({
     url: item.url,
     title: item.title || item.name,
     page: 1,
     screen: 1
   });
   // 大屏打开新图时会复位变换，这里把当前角度补发一次，避免手机端已旋转而大屏回到 0°
-  sendMediaViewport();
+  if (state.joined) sendMediaViewport();
   resetVideoState();
 
   state.screen = 'MediaCast';
@@ -1422,28 +1399,22 @@ async function uploadAndCastMediaItem(index) {
   showView('MediaCast');
   updateMediaCastUI(`正在上传：${item.name}`);
 
-  const controller = new AbortController();
-  state.uploadAbort = controller;
   showOverlay(`正在上传：${item.name}`, {
     progress: true,
-    onCancel: () => controller.abort()
+    onCancel: () => item.controller?.abort()
   });
 
   try {
-    const file = item.kind === 'image' ? await compressImageFile(item.file) : item.file;
-    const result = await state.coursewareClient.upload(
-      file,
+    const task = ensureMediaUploaded(item, state.coursewareClient,
       (ratio) => {
         setOverlayProgress(ratio);
         setOverlayText(`正在上传：${item.name}\n${Math.round(ratio * 100)}%`);
-      },
-      controller.signal
+      }
     );
+    state.uploadAbort = item.controller;
+    await task;
+    if (!state.media.queue.includes(item)) return;
     hideOverlay();
-    item.status = 'ready';
-    item.url = result.url;
-    item.title = result.title || item.name;
-    item.id = result.id || null;
     state.media.uploading = false;
     if (state.media.index !== index) {
       // 期间用户已切到别的文件：结果只入队，不覆盖当前界面
@@ -1452,6 +1423,7 @@ async function uploadAndCastMediaItem(index) {
     }
     switchToReadyMediaItem(index);
   } catch (error) {
+    if (!state.media.queue.includes(item)) return;
     hideOverlay();
     state.media.uploading = false;
     item.status = 'failed';
@@ -1469,19 +1441,14 @@ async function uploadAndCastMediaItem(index) {
 async function preloadRestOfMediaQueue() {
   if (state.media.preloading) return;
   state.media.preloading = true;
+  const queue = state.media.queue;
   try {
-    for (let index = 0; index < state.media.queue.length; index += 1) {
-      const item = state.media.queue[index];
+    for (let index = 0; index < queue.length; index += 1) {
+      if (queue !== state.media.queue) break;
+      const item = queue[index];
       if (!item || item.url || item.status === 'failed') continue;
-      if (!state.joined) break;
-      item.status = 'uploading';
       try {
-        const file = item.kind === 'image' ? await compressImageFile(item.file) : item.file;
-        const result = await state.coursewareClient.upload(file, null, null);
-        item.status = 'ready';
-        item.url = result.url;
-        item.title = result.title || item.name;
-        item.id = result.id || null;
+        await ensureMediaUploaded(item, state.coursewareClient);
       } catch {
         item.status = 'failed';
       }
@@ -1489,13 +1456,8 @@ async function preloadRestOfMediaQueue() {
     }
   } finally {
     state.media.preloading = false;
+    if (queue !== state.media.queue && state.media.queue.some(item => item.status === 'pending')) preloadRestOfMediaQueue();
   }
-}
-
-async function compressImageFile(file) {
-  const dataUrl = await fileToResizedDataUrl(file, 1920);
-  const blob = await (await fetch(dataUrl)).blob();
-  return new File([blob], file.name || 'image.jpg', { type: 'image/jpeg' });
 }
 
 function showMediaQueue() {
@@ -1506,6 +1468,8 @@ function showMediaQueue() {
 
 function renderMediaQueue() {
   const body = $('mediaQueueBody');
+  mediaListPreviews?.destroy();
+  mediaListPreviews = new ListPreviews(body);
   body.innerHTML = '';
   if (state.media.queue.length === 0) {
     body.innerHTML = '<p class="list-empty">还没有选择图片或视频</p>';
@@ -1532,14 +1496,16 @@ function renderMediaQueue() {
 
     const title = document.createElement('span');
     title.className = 'cw-item-title';
-    title.textContent = `${index + 1}. ${item.title || item.name}`;
+    const name = document.createElement('span');
+    name.textContent = `${index + 1}. ${item.title || item.name}`;
+    title.append(type, name);
 
     const meta = document.createElement('span');
     meta.className = 'cw-item-meta';
     meta.textContent = mediaStatusText(item, index);
 
     text.append(title, meta);
-    main.append(type, text);
+    main.append(mediaListPreviews.add(item, typeText), text);
     main.addEventListener('click', () => castMediaItem(index));
     row.appendChild(main);
     body.appendChild(row);
@@ -1579,6 +1545,7 @@ async function loadServerMedia() {
   try {
     const items = await state.coursewareClient.list();
     const media = items.filter((item) => mediaKindOf(item.url || item.originalUrl) !== 'other');
+    resetMediaCastState();
     state.media.queue = media.map((item) => ({
       file: null,
       name: item.title || 'media',
@@ -1651,8 +1618,8 @@ function updateMediaPreview(item, isVideo) {
   // 图片尺寸要等加载完才知道，旋转后的自适应缩放必须在 onload 里再算一次
   img.onload = () => applyMediaPreviewRotation();
   // 本机文件用本地 blob 预览（省流量），服务器文件用远程地址
-  if (item.file) {
-    mediaPreviewUrl = URL.createObjectURL(item.file);
+  if (item.preparedFile || item.file) {
+    mediaPreviewUrl = URL.createObjectURL(item.preparedFile || item.file);
     img.src = mediaPreviewUrl;
   } else {
     img.src = item.url;
@@ -1752,6 +1719,7 @@ function stopMediaCast() {
 }
 
 function resetMediaCastState() {
+  for (const item of state.media.queue) item.controller?.abort();
   if (mediaPreviewUrl) {
     URL.revokeObjectURL(mediaPreviewUrl);
     mediaPreviewUrl = null;
@@ -1767,6 +1735,7 @@ function resetMediaCastState() {
 /** 断线重连成功后：把当前文件重新推给大屏（视频不重发 open，避免从头播放） */
 function resumeMediaCast() {
   const item = state.media.queue[state.media.index];
+  if (item && !item.url && state.screen === 'MediaCast') return true;
   if (!item?.url) return false;
   if (item.kind === 'video' && state.video.duration > 0) {
     state.signaling?.sendCoursewareVideoControl('query');
@@ -2702,6 +2671,8 @@ async function loadServerCourseware({ forManage = false } = {}) {
 
 function renderCoursewareList(items, forManage) {
   const body = $('cwListBody');
+  coursewareListPreviews?.destroy();
+  coursewareListPreviews = new ListPreviews(body);
   body.innerHTML = '';
   if (items.length === 0) {
     body.innerHTML = '<p class="list-empty">暂无课件</p>';
@@ -2716,10 +2687,10 @@ function renderCoursewareList(items, forManage) {
     main.type = 'button';
     main.className = 'cw-item-main';
     main.innerHTML = `
-      <span class="cw-item-type"></span>
       <span class="cw-item-text">
-        <span class="cw-item-title"></span>
+        <span class="cw-item-title"><span class="cw-item-type"></span><span class="cw-item-name"></span></span>
         <span class="cw-item-meta"></span>
+        <span class="cw-item-progress-label"></span>
       </span>
     `;
     // 文件类型做成独立标签（原来混在 meta 文字里，一眼扫不出来）；链接、无扩展名的文件分别显示「链接」「文件」
@@ -2728,9 +2699,16 @@ function renderCoursewareList(items, forManage) {
     cwType.textContent = cwTypeText;
     cwType.className = `cw-item-type ${mediaTypeTone(cwTypeText)}`.trim();
 
-    main.querySelector('.cw-item-title').textContent = item.title || item.fileName || '未命名课件';
+    main.querySelector('.cw-item-name').textContent = item.title || item.fileName || '未命名课件';
     main.querySelector('.cw-item-meta').textContent =
       `${formatBytes(item.size)} · ${formatDate(item.createdAt)}`;
+    main.prepend(coursewareListPreviews.add(item, cwTypeText));
+    const progress = /\.pdf(?:[?#]|$)/i.test(item.url || '') ? playbackProgress(item) : null;
+    if (progress) {
+      main.classList.add('has-playback-progress');
+      main.style.setProperty('--playback-progress', `${progress.ratio * 100}%`);
+      main.querySelector('.cw-item-progress-label').textContent = `上次第 ${progress.page} / ${progress.pageCount} 页 · ${Math.round(progress.ratio * 100)}%`;
+    } else main.querySelector('.cw-item-progress-label').hidden = true;
 
     main.addEventListener('click', () => {
       if (forManage) {

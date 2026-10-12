@@ -18,6 +18,7 @@ const PDFJS_UMD_WORKER = [
 
 let pdfJsPromise = null;
 let fallbackIndex = -1;
+const documentTasks = new WeakMap();
 
 /** pdf.js 5.x 内部用到 Promise.withResolvers，旧版 Safari 需要兜底 */
 function ensurePromiseWithResolvers() {
@@ -80,8 +81,9 @@ export function pdfJsUsesLegacyBuild() {
   return fallbackIndex >= 0;
 }
 
-export async function openPdfDocument(url) {
+export async function openPdfDocument(url, { signal } = {}) {
   const pdfjsLib = await loadPdfJs();
+  if (signal?.aborted) throw new Error('cancelled');
   const task = pdfjsLib.getDocument({
     url,
     cMapUrl: '../vendor/pdfjs/cmaps/',
@@ -89,7 +91,14 @@ export async function openPdfDocument(url) {
     standardFontDataUrl: '../vendor/pdfjs/standard_fonts/',
     disableAutoFetch: true
   });
-  return task.promise;
+  const abort = () => { Promise.resolve(task.destroy()).catch(() => {}); };
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    const document = await task.promise;
+    documentTasks.set(document, task);
+    return document;
+  }
+  finally { signal?.removeEventListener('abort', abort); }
 }
 
 /**
@@ -128,7 +137,9 @@ export async function renderPdfPage(document, pageNumber, canvas, maxEdge = 2560
 export function destroyPdfDocument(document) {
   if (!document) return;
   try {
-    document.destroy?.();
+    const task = documentTasks.get(document);
+    documentTasks.delete(document);
+    return Promise.resolve(task ? task.destroy() : document.destroy?.()).catch(() => {});
   } catch {
     /* ignore */
   }

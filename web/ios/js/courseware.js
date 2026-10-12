@@ -21,8 +21,9 @@ export class CoursewareClient {
    * @param {(percent:number)=>void} onProgress
    * @param {AbortSignal} signal
    */
-  upload(file, onProgress, signal) {
+  upload(file, onProgress, signal, uploadId = '') {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(new Error('__ABORTED__')); return; }
       const form = new FormData();
       form.append('displayNameBase64', toBase64Utf8(file.name));
       form.append('file', file, file.name);
@@ -31,6 +32,10 @@ export class CoursewareClient {
       xhr.open('POST', `${this.apiBase}/courseware`);
       xhr.responseType = 'text';
       if (this.token) xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+      if (uploadId) xhr.setRequestHeader('X-Upload-Id', uploadId);
+      xhr.timeout = 30 * 60 * 1000;
+      const abort = () => xhr.abort();
+      xhr.onloadend = () => signal?.removeEventListener('abort', abort);
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable && typeof onProgress === 'function') {
@@ -57,7 +62,7 @@ export class CoursewareClient {
       xhr.ontimeout = () => reject(new Error('课件上传超时，请重试'));
 
       if (signal) {
-        signal.addEventListener('abort', () => xhr.abort(), { once: true });
+        signal.addEventListener('abort', abort, { once: true });
       }
       xhr.send(form);
     });
