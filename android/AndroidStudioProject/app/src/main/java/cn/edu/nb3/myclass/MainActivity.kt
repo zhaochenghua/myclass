@@ -14,6 +14,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.content.res.ColorStateList
@@ -2587,7 +2588,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val size = dp(54)
         val badge = dp(20)
         val options = BitmapFactory.Options().apply { inSampleSize = 8 }
-        val bitmap = runCatching { BitmapFactory.decodeFile(file.absolutePath, options) }.getOrNull()
+        val bitmap = runCatching {
+            BitmapFactory.decodeFile(file.absolutePath, options)?.let { applyExifOrientation(it, file) }
+        }.getOrNull()
         val holder = FrameLayout(this).apply {
             layoutParams = if (captureThumbVertical) {
                 LinearLayout.LayoutParams(size, size).apply { topMargin = dp(6) }
@@ -5239,8 +5242,51 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val options = BitmapFactory.Options().apply {
             inSampleSize = calculateImageSampleSize(bounds.outWidth, bounds.outHeight)
         }
-        return contentResolver.openInputStream(uri)?.use {
+        val decoded = contentResolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, options)
+        } ?: return null
+        val orientation = runCatching {
+            contentResolver.openInputStream(uri)?.use {
+                android.media.ExifInterface(it).getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION,
+                    android.media.ExifInterface.ORIENTATION_NORMAL
+                )
+            }
+        }.getOrNull() ?: android.media.ExifInterface.ORIENTATION_NORMAL
+        return applyExifOrientation(decoded, orientation)
+    }
+
+    private fun applyExifOrientation(bitmap: Bitmap, file: File): Bitmap {
+        val orientation = runCatching {
+            android.media.ExifInterface(file.absolutePath).getAttributeInt(
+                android.media.ExifInterface.TAG_ORIENTATION,
+                android.media.ExifInterface.ORIENTATION_NORMAL
+            )
+        }.getOrDefault(android.media.ExifInterface.ORIENTATION_NORMAL)
+        return applyExifOrientation(bitmap, orientation)
+    }
+
+    /** BitmapFactory 不会应用 JPEG 的 EXIF 方向，需在手机本地预览前统一修正。 */
+    private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+        when (orientation) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            android.media.ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            android.media.ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
+            else -> return bitmap
+        }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also { rotated ->
+            if (rotated !== bitmap) bitmap.recycle()
         }
     }
 
