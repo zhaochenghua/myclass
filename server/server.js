@@ -13,6 +13,7 @@ const { RoomManager } = require('./roomManager');
 const { createCoursewareStore } = require('./coursewareStore');
 const { expandAnimations, PROFILE: ANIMATION_PROFILE } = require('./expandAnimations');
 const { createClassStore } = require('./classStore');
+const { createUsageStore, chinaDay } = require('./usageStore');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
 const HOST = process.env.HOST || '0.0.0.0';
@@ -115,6 +116,12 @@ const INACTIVE_USER_DELETE_DAYS = Number(process.env.INACTIVE_USER_DELETE_DAYS |
 const usersPath = path.join(dataDir, 'users.json');
 const { readUsers, writeUsers } = require('./userStore').createUserStore(usersPath);
 const classStore = createClassStore(path.join(dataDir, 'classes.json'));
+const usageStore = createUsageStore(path.join(dataDir, 'usage'));
+usageStore.initialize().catch(error => console.error('Usage statistics unavailable:', error.message));
+function recordUsage(user, metric, details) {
+  // Analytics failure must never reject a login, upload or classroom message.
+  usageStore.record(user, metric, details).catch(error => console.error('Usage recording failed:', error.message));
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -335,6 +342,7 @@ app.post(`${PATH_PREFIX}/api/auth/login`, async (req, res, next) => {
     user.lastLoginAt = new Date().toISOString();
     await writeUsers(users);
     const role = user.role || (user.username === 'admin' ? 'admin' : 'user');
+    recordUsage(user, 'logins');
     res.json({ token: user.token, username: user.username, role });
   } catch (error) {
     next(error);
@@ -398,6 +406,24 @@ app.put(`${PATH_PREFIX}/api/auth/profile`, requireAuth, async (req, res, next) =
 });
 
 // -- 管理员接口（需管理员权限） --
+app.get(`${PATH_PREFIX}/api/admin/usage`, requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const from = req.query.from ?? chinaDay(Date.now() - 29 * 86400000);
+    const to = req.query.to ?? chinaDay(Date.now());
+    const users = await readUsers();
+    const report = await usageStore.report({ from, to, users });
+    const rooms = [...roomManager.rooms.values()];
+    report.online = {
+      classrooms: rooms.filter(room => room.viewerSocket?.readyState === 1).length,
+      teacherDevices: rooms.filter(room => room.teacherSocket?.readyState === 1).length,
+      users: new Set(rooms.filter(room => room.teacherSocket?.readyState === 1 && room.teacherInfo?.id)
+        .map(room => room.teacherInfo.id)).size
+    };
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(report);
+  } catch (error) { next(error); }
+});
+
 app.get(`${PATH_PREFIX}/api/admin/users`, requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const users = await readUsers();
@@ -533,6 +559,7 @@ app.post(`${PATH_PREFIX}/api/courseware`, requireAuth, upload.single('file'), as
     // share=true → 所有人可见(owner=admin)；否则仅上传者可见(owner=userId)
     const ownerId = req.body.share === 'true' ? 'admin' : req.user.id;
     const result = await publishCourseware(req.file, req.body, ownerId, req.get('X-Upload-Id') || '');
+    recordUsage(req.user, 'uploads', { bytes: result.size, uniqueId: result.id });
     res.json(result);
   } catch (error) {
     next(error);
@@ -580,7 +607,9 @@ app.post(`${PATH_PREFIX}/api/courseware/link`, requireAuth, express.json(), asyn
       createdAt: new Date().toISOString()
     };
     if (uploadRequestId) result.uploadRequestId = uploadRequestId;
-    res.json(await rememberCourseware(result));
+    const saved = await rememberCourseware(result);
+    recordUsage(req.user, 'uploads', { uniqueId: saved.id });
+    res.json(saved);
   } catch (error) {
     next(error);
   }
@@ -678,6 +707,7 @@ app.use(
 
 // HTTP 与 HTTPS 共用一个 RoomManager，保证两种协议下拿到的连接码属于同一间教室。
 const roomManager = new RoomManager({
+  recordUsage,
   savePlayback: (...args) => coursewareStore.savePlayback(...args),
   roomTtlMs: ROOM_TTL_MS,
   viewerGraceMs: VIEWER_GRACE_MS

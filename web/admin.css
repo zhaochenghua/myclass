@@ -8,6 +8,22 @@
 }
 
 .class-help { color: var(--muted); line-height: 1.7; }
+.usage-filters { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: end; }
+.usage-filters label { display: grid; gap: 0.4rem; color: var(--muted); }
+.usage-filters input, .usage-search input { color-scheme: dark; background: #101b24; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 0.55rem; font: inherit; }
+.usage-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 0.8rem; margin: 1.2rem 0 2rem; }
+.usage-card { border: 1px solid var(--line); border-radius: 8px; padding: 1rem; background: rgba(101,240,200,0.04); }
+.usage-card span { display: block; color: var(--muted); font-size: 0.9rem; }
+.usage-card strong { display: block; margin-top: 0.5rem; font-size: 1.8rem; font-variant-numeric: tabular-nums; }
+.usage-trend { max-height: 340px; overflow: auto; margin-bottom: 1.6rem; }
+.usage-day { display: grid; grid-template-columns: 100px minmax(40px, 1fr) 170px; gap: 0.8rem; align-items: center; padding: 0.35rem 0; font-size: 0.9rem; }
+.usage-bar { background: rgba(255,255,255,0.07); height: 10px; border-radius: 5px; }
+.usage-bar i { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
+.usage-day small { color: var(--muted); text-align: right; }
+.usage-notes { color: var(--muted); margin-top: 1.5rem; line-height: 1.8; }
+.usage-notes summary { cursor: pointer; }
+.usage-error { color: #ff9b9b; }
+@media (max-width: 600px) { .usage-day { grid-template-columns: 86px minmax(20px,1fr) 135px; gap: 0.4rem; font-size: 0.8rem; } .usage-search input { max-width: 160px; } }
 .class-management { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 2rem; }
 .class-create-form, #classEditor { display: flex; flex-direction: column; gap: 0.8rem; }
 #classEditor[hidden] { display: none; }

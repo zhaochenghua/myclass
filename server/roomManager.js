@@ -25,6 +25,7 @@ class RoomManager {
     this.roomTtlMs = options.roomTtlMs || DEFAULT_ROOM_TTL_MS;
     this.viewerGraceMs = options.viewerGraceMs || DEFAULT_VIEWER_GRACE_MS;
     this.savePlayback = options.savePlayback;
+    this.recordUsage = options.recordUsage;
     this.rooms = new Map();
     this.socketIndex = new Map();
   }
@@ -147,6 +148,8 @@ class RoomManager {
     sendJson(room.viewerSocket, onlineMsg);
     sendJson(teacherSocket, { type: isOpen(room.viewerSocket) ? 'viewer.online' : 'viewer.reconnecting' });
 
+    this.#recordUsage(teacherInfo, 'connections');
+
     return { ok: true, room };
   }
 
@@ -179,10 +182,26 @@ class RoomManager {
       Promise.resolve(this.savePlayback(room.teacherInfo.id, payload.url, payload.page, payload.pageCount))
         .catch(error => console.error('Failed to save courseware progress:', error.message));
     }
-    if (samePresentation && room.viewerSocket?.supportsRecovery) {
-      return sendJson(target, { type: 'room.snapshot', presentation: room.presentation.snapshot(), presentationRevision: room.presentationRevision });
+    const sent = samePresentation && room.viewerSocket?.supportsRecovery
+      ? sendJson(target, { type: 'room.snapshot', presentation: room.presentation.snapshot(), presentationRevision: room.presentationRevision })
+      : sendJson(target, payload);
+    if (sent) {
+      if (['courseware.open', 'viewer.courseware.open'].includes(payload.type) && typeof payload.url === 'string' && payload.url) {
+        this.#recordUsage(room.teacherInfo, 'presentations');
+      } else if (payload.type === 'webrtc.offer' && binding.role === 'teacher') {
+        this.#recordUsage(room.teacherInfo, 'realtime');
+      } else if (payload.type === 'student.roll.result' && binding.role === 'viewer' && payload.status === 'done') {
+        this.#recordUsage(room.teacherInfo, 'rolls', { uniqueId: `${room.recoveryKey}:${payload.requestId}` });
+      }
     }
-    return sendJson(target, payload);
+    return sent;
+  }
+
+  #recordUsage(user, metric, details) {
+    try {
+      Promise.resolve(this.recordUsage?.(user, metric, details))
+        .catch(error => console.error('Usage recording failed:', error.message));
+    } catch (error) { console.error('Usage recording failed:', error.message); }
   }
 
   getBinding(socket) {

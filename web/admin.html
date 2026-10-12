@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管理后台 - 上课投屏平台</title>
   <link rel="stylesheet" href="./style.css">
-  <link rel="stylesheet" href="./admin.css?v=20260919a">
+  <link rel="stylesheet" href="./admin.css?v=20261012-usage">
 </head>
 <body>
   <main class="admin-page">
@@ -60,6 +60,46 @@
     <section class="admin-main" id="mainPanel" hidden>
       <!-- 标签切换（根据角色动态渲染） -->
       <nav class="admin-tabs" id="adminTabs"></nav>
+
+      <div class="tab-panel" id="tab-usage" hidden>
+        <div class="panel-header">
+          <h2>系统使用统计</h2>
+          <button class="btn-secondary" id="exportUsageButton" type="button" disabled>导出教师明细 CSV</button>
+        </div>
+        <form id="usageFilters" class="usage-filters">
+          <label>开始日期 <input id="usageFrom" type="date" required></label>
+          <label>结束日期 <input id="usageTo" type="date" required></label>
+          <button class="btn-secondary" type="button" data-usage-days="7">近 7 天</button>
+          <button class="btn-secondary" type="button" data-usage-days="30">近 30 天</button>
+          <button class="btn-secondary" type="button" data-usage-days="90">近 90 天</button>
+          <button class="btn-secondary" id="refreshUsageButton" type="submit">查询 / 刷新</button>
+        </form>
+        <p id="usageStatus" class="class-help" role="status" aria-live="polite"></p>
+        <div id="usageSummary" class="usage-summary"></div>
+        <h3>每日使用趋势</h3>
+        <p class="class-help">按北京时间统计；每行展示当天活跃账号数，以及课件、图片、视频和链接的投屏打开次数。</p>
+        <div id="usageTrend" class="usage-trend" aria-label="每日使用趋势"></div>
+        <div class="panel-header">
+          <h3>教师使用明细</h3>
+          <label class="usage-search">搜索账号 <input id="usageSearch" type="search" placeholder="输入用户名" maxlength="80"></label>
+        </div>
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead><tr><th>账号</th><th>角色</th><th>活跃天数</th><th>登录</th><th>课堂连接</th><th>投屏打开</th><th>实时投屏协商</th><th>上传</th><th>上传大小</th><th>抽选完成</th><th>期间最后使用</th></tr></thead>
+            <tbody id="usageTableBody"></tbody>
+          </table>
+        </div>
+        <details class="usage-notes">
+          <summary>统计口径</summary>
+          <ul>
+            <li>从统计功能上线开始记录，不补算历史行为；管理员也计入活跃账号，明细中标明角色。未登录设备单列，不计入活跃账号数。</li>
+            <li>登录仅计成功的登录请求；课堂连接包含断线重连。投屏打开统计成功转发的打开指令，包含重复打开，不等同于实际上课节数或完整播放次数。</li>
+            <li>实时投屏协商包含摄像头、屏幕等 WebRTC 协商与重协商，不计翻页、画笔移动及心跳。</li>
+            <li>上传包含文件和链接，同账号同日同一上传结果只计一次，链接大小为零；抽选只计大屏返回完成的结果，同日相同请求去重。</li>
+            <li>在线情况为刷新时的即时状态，不受日期筛选影响。未记录授课时长；仅凭连接无法判断老师是否正在授课。</li>
+          </ul>
+        </details>
+      </div>
 
       <!-- 用户管理（仅管理员可见） -->
       <div class="tab-panel" id="tab-users" hidden>
@@ -222,6 +262,6 @@
   </main>
 
   <script src="./studentRoster.js?v=20260919a"></script>
-  <script src="./admin.js?v=20260919a"></script>
+  <script src="./admin.js?v=20261012-usage"></script>
 </body>
 </html>

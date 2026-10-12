@@ -5,6 +5,8 @@ let teachingClasses = [];
 let editingClass = null;
 let rosterDirty = false;
 let classBusy = false;
+let usageData = null;
+let usageRequest = 0;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -26,6 +28,11 @@ async function bootstrap() {
 }
 
 function showLogin() {
+  usageRequest++;
+  usageData = null;
+  $('#usageTableBody').replaceChildren();
+  $('#usageSummary').replaceChildren();
+  $('#usageTrend').replaceChildren();
   resetClassEditor();
   $('#loginPanel').hidden = false;
   $('#mainPanel').hidden = true;
@@ -50,6 +57,7 @@ function renderTabs(role) {
   const tabs = $('#adminTabs');
   const items = [];
   if (role === 'admin') {
+    items.push({ id: 'usage', label: '使用统计' });
     items.push({ id: 'users', label: '用户管理' });
     items.push({ id: 'courseware', label: '课件管理' });
   } else {
@@ -70,10 +78,12 @@ function renderTabs(role) {
       btn.classList.add('is-active');
       const tab = btn.dataset.tab;
       $('#tab-users').hidden = tab !== 'users';
+      $('#tab-usage').hidden = tab !== 'usage';
       $('#tab-courseware').hidden = tab !== 'courseware';
       $('#tab-account').hidden = tab !== 'account';
       $('#tab-classes').hidden = tab !== 'classes';
       if (tab === 'users') loadUsers();
+      if (tab === 'usage') loadUsage();
       if (tab === 'courseware') loadCourseware();
       if (tab === 'account') loadProfile();
       if (tab === 'classes') loadTeachingClasses();
@@ -354,6 +364,103 @@ function loadProfile() {
     $('#profileUsername').value = currentUser.username;
   }
 }
+
+// --- Usage statistics (administrator only) ---
+function usageDate(time) { return new Date(time + 8 * 3600000).toISOString().slice(0, 10); }
+function setUsageRange(days) {
+  $('#usageFrom').value = usageDate(Date.now() - (days - 1) * 86400000);
+  $('#usageTo').value = usageDate(Date.now());
+}
+function usageTime(iso) {
+  return iso ? new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—';
+}
+const usageRoles = { admin: '管理员', user: '教师', deleted: '已删除账号', anonymous: '未登录设备' };
+
+async function loadUsage() {
+  if (currentUser?.role !== 'admin') return;
+  if (!$('#usageFrom').value) setUsageRange(30);
+  const from = $('#usageFrom').value;
+  const to = $('#usageTo').value;
+  const request = ++usageRequest;
+  usageData = null;
+  $('#exportUsageButton').disabled = true;
+  $('#usageSummary').replaceChildren();
+  $('#usageTrend').replaceChildren();
+  $('#usageTableBody').replaceChildren();
+  $('#usageStatus').classList.remove('usage-error');
+  $('#usageStatus').textContent = '正在加载使用统计…';
+  try {
+    const data = await apiGet(`/admin/usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    if (request !== usageRequest || currentUser?.role !== 'admin') return;
+    if (data.error || !data.totals) throw new Error(data.error || '统计数据加载失败');
+    usageData = data;
+    const t = data.totals;
+    const cards = [
+      ['活跃账号 / 注册账号', `${t.activeUsers} / ${t.registeredUsers}`],
+      ['课堂连接次数', t.connections], ['投屏打开次数', t.presentations], ['实时投屏协商次数', t.realtime],
+      ['上传次数', t.uploads], ['抽选完成次数', t.rolls],
+      ['当前在线教师账号', data.online.users], ['当前在线大屏', data.online.classrooms]
+    ];
+    for (const [label, value] of cards) {
+      const card = document.createElement('div'); card.className = 'usage-card';
+      const title = document.createElement('span'); title.textContent = label;
+      const number = document.createElement('strong'); number.textContent = String(value);
+      card.append(title, number); $('#usageSummary').append(card);
+    }
+    const max = Math.max(1, ...data.daily.map(day => day.presentations));
+    const fragment = document.createDocumentFragment();
+    for (const day of [...data.daily].reverse()) {
+      const row = document.createElement('div'); row.className = 'usage-day';
+      const date = document.createElement('span'); date.textContent = day.date;
+      const track = document.createElement('div'); track.className = 'usage-bar'; track.setAttribute('aria-hidden', 'true');
+      const bar = document.createElement('i'); bar.style.width = `${day.presentations / max * 100}%`; track.append(bar);
+      const count = document.createElement('small'); count.textContent = `${day.activeUsers} 活跃 · ${day.presentations} 次投屏`;
+      row.append(date, track, count); fragment.append(row);
+    }
+    $('#usageTrend').append(fragment);
+    $('#usageStatus').textContent = `${data.from} 至 ${data.to}（北京时间） · 统计始于 ${usageTime(data.startedAt)} · 刷新于 ${usageTime(data.generatedAt)}${t.activeUsers || t.connections || t.uploads ? '' : ' · 所选期间暂无使用记录'}`;
+    $('#exportUsageButton').disabled = false;
+    renderUsageUsers();
+  } catch (error) {
+    if (request !== usageRequest) return;
+    $('#usageStatus').textContent = `加载失败：${error.message}`;
+    $('#usageStatus').classList.add('usage-error');
+  }
+}
+function filteredUsageUsers() {
+  const query = $('#usageSearch').value.trim().toLocaleLowerCase();
+  return (usageData?.users || []).filter(user => user.username.toLocaleLowerCase().includes(query));
+}
+function usageCells(user) {
+  return [user.username, usageRoles[user.role] || user.role, user.activeDays, user.logins, user.connections,
+    user.presentations, user.realtime, user.uploads, formatBytes(user.uploadBytes), user.rolls, usageTime(user.lastAt)];
+}
+function renderUsageUsers() {
+  const body = $('#usageTableBody'); body.replaceChildren();
+  const users = filteredUsageUsers();
+  if (!users.length) {
+    const row = document.createElement('tr'); const cell = document.createElement('td');
+    cell.colSpan = 11; cell.textContent = '暂无匹配账号'; row.append(cell); body.append(row); return;
+  }
+  for (const user of users) {
+    const row = document.createElement('tr');
+    for (const value of usageCells(user)) { const cell = document.createElement('td'); cell.textContent = String(value); row.append(cell); }
+    body.append(row);
+  }
+}
+$('#usageFilters').addEventListener('submit', event => { event.preventDefault(); loadUsage(); });
+$$('[data-usage-days]').forEach(button => button.addEventListener('click', () => { setUsageRange(Number(button.dataset.usageDays)); loadUsage(); }));
+$('#usageSearch').addEventListener('input', renderUsageUsers);
+$('#exportUsageButton').addEventListener('click', () => {
+  if (!usageData || currentUser?.role !== 'admin') return;
+  const headers = ['账号', '角色', '活跃天数', '登录', '课堂连接', '投屏打开', '实时投屏协商', '上传', '上传大小', '抽选完成', '期间最后使用'];
+  const quote = value => `"${String(value).replace(/^[=+@\-\t\r]/, match => `'${match}`).replaceAll('"', '""')}"`;
+  const csv = '\uFEFF' + [headers, ...filteredUsageUsers().map(usageCells)].map(row => row.map(quote).join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a'); link.href = url;
+  link.download = `使用统计_${usageData.from}_${usageData.to}.csv`; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 
 // --- API ---
 async function apiGet(path) {
