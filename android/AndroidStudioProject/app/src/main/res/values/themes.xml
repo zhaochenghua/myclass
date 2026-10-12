@@ -1,15 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MyClass" parent="Theme.Material3.DayNight.NoActionBar">
+    <!-- 整个应用的页面底色/文字色都是本项目 myclass_* 深色常量，所以主题必须固定深色，
+         不能再继承 Theme.Material3.DayNight：手机处于浅色模式（白天）时，Material3 会把
+         对话框、下拉框的底色算成近白色，而文字色依然是近白的 myclass_on_surface，
+         于是「选择上课班级」等弹窗变成白底白字看不清，只有切到深色模式（晚上）才正常。 -->
+    <style name="Theme.MyClass" parent="Theme.Material3.Dark.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowBackground">@color/myclass_background</item>
+        <item name="android:colorBackground">@color/myclass_background</item>
         <item name="android:navigationBarColor">@color/myclass_background</item>
         <item name="android:statusBarColor">@color/myclass_background</item>
+        <!-- 系统自带的 spinner/列表布局按这两项取字色，必须一起压成深色模式的字色 -->
+        <item name="android:textColorPrimary">@color/myclass_on_surface</item>
+        <item name="android:textColorSecondary">@color/myclass_muted</item>
+
         <item name="colorPrimary">@color/myclass_primary</item>
         <item name="colorOnPrimary">@color/myclass_on_primary</item>
+        <item name="colorPrimaryContainer">@color/myclass_surface_high</item>
+        <item name="colorOnPrimaryContainer">@color/myclass_on_surface</item>
         <item name="colorSecondary">@color/myclass_secondary</item>
+        <item name="colorOnSecondary">@color/myclass_on_primary</item>
+        <item name="colorError">@color/myclass_alert</item>
+        <item name="colorOnError">@color/myclass_on_primary</item>
+        <item name="colorControlActivated">@color/myclass_primary</item>
+
+        <!-- Material3 的弹窗底取 colorSurfaceContainerHigh，下拉/菜单取 colorSurface，
+             这里全部指向项目的深色底，避免再出现浅底色配浅字 -->
         <item name="colorSurface">@color/myclass_surface</item>
+        <item name="colorSurfaceDim">@color/myclass_surface</item>
+        <item name="colorSurfaceBright">@color/myclass_surface_high</item>
+        <item name="colorSurfaceContainerLowest">@color/myclass_background</item>
+        <item name="colorSurfaceContainerLow">@color/myclass_surface</item>
+        <item name="colorSurfaceContainer">@color/myclass_surface</item>
+        <item name="colorSurfaceContainerHigh">@color/myclass_surface_high</item>
+        <item name="colorSurfaceContainerHighest">@color/myclass_surface_high</item>
+        <item name="colorSurfaceVariant">@color/myclass_surface_high</item>
         <item name="colorOnSurface">@color/myclass_on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/myclass_muted</item>
+        <item name="colorOnBackground">@color/myclass_on_surface</item>
+        <item name="colorOutline">@color/myclass_outline</item>
+        <item name="colorOutlineVariant">@color/myclass_outline</item>
     </style>
 </resources>

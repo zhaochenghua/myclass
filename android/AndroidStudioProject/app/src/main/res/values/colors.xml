@@ -2,6 +2,9 @@
 <resources>
     <color name="myclass_background">#000000</color>
     <color name="myclass_surface">#121822</color>
+    <!-- 弹窗、下拉框等 Material 组件比页面抬高一级的底色 -->
+    <color name="myclass_surface_high">#1A2230</color>
+    <color name="myclass_outline">#3C4A5C</color>
     <color name="myclass_primary">#4DA6FF</color>
     <color name="myclass_on_primary">#FFFFFF</color>
     <color name="myclass_secondary">#7C5CFC</color>
