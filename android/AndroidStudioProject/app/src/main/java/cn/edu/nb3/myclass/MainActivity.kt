@@ -11,10 +11,8 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.database.Cursor
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.content.res.ColorStateList
@@ -2587,9 +2585,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val row = captureThumbRow ?: return
         val size = dp(54)
         val badge = dp(20)
-        val options = BitmapFactory.Options().apply { inSampleSize = 8 }
         val bitmap = runCatching {
-            BitmapFactory.decodeFile(file.absolutePath, options)?.let { applyExifOrientation(it, file) }
+            ImageBitmapDecoder.decode(size * 2) { file.inputStream() }
         }.getOrNull()
         val holder = FrameLayout(this).apply {
             layoutParams = if (captureThumbVertical) {
@@ -5234,61 +5231,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }.start()
     }
 
-    private fun decodeBitmapFromUri(uri: Uri): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, bounds)
-        } ?: return null
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = calculateImageSampleSize(bounds.outWidth, bounds.outHeight)
+    private fun decodeBitmapFromUri(uri: Uri): Bitmap? =
+        ImageBitmapDecoder.decode(maxImagePreviewEdge) {
+            contentResolver.openInputStream(uri)
         }
-        val decoded = contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, options)
-        } ?: return null
-        val orientation = runCatching {
-            contentResolver.openInputStream(uri)?.use {
-                android.media.ExifInterface(it).getAttributeInt(
-                    android.media.ExifInterface.TAG_ORIENTATION,
-                    android.media.ExifInterface.ORIENTATION_NORMAL
-                )
-            }
-        }.getOrNull() ?: android.media.ExifInterface.ORIENTATION_NORMAL
-        return applyExifOrientation(decoded, orientation)
-    }
-
-    private fun applyExifOrientation(bitmap: Bitmap, file: File): Bitmap {
-        val orientation = runCatching {
-            android.media.ExifInterface(file.absolutePath).getAttributeInt(
-                android.media.ExifInterface.TAG_ORIENTATION,
-                android.media.ExifInterface.ORIENTATION_NORMAL
-            )
-        }.getOrDefault(android.media.ExifInterface.ORIENTATION_NORMAL)
-        return applyExifOrientation(bitmap, orientation)
-    }
-
-    /** BitmapFactory 不会应用 JPEG 的 EXIF 方向，需在手机本地预览前统一修正。 */
-    private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
-        val matrix = Matrix()
-        when (orientation) {
-            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-            android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
-            android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
-            android.media.ExifInterface.ORIENTATION_TRANSPOSE -> {
-                matrix.postRotate(90f)
-                matrix.postScale(-1f, 1f)
-            }
-            android.media.ExifInterface.ORIENTATION_TRANSVERSE -> {
-                matrix.postRotate(270f)
-                matrix.postScale(-1f, 1f)
-            }
-            else -> return bitmap
-        }
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also { rotated ->
-            if (rotated !== bitmap) bitmap.recycle()
-        }
-    }
 
     /**
      * 课件接口返回的是站内相对地址（形如 /myclass/public/courseware/xxx.jpg），
@@ -5311,22 +5257,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val bytes = coursewareHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) null else response.body?.bytes()
         } ?: return null
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = calculateImageSampleSize(bounds.outWidth, bounds.outHeight)
-        }
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-    }
-
-    /** 按屏幕可见需求降采样，避免大图导致内存溢出 */
-    private fun calculateImageSampleSize(width: Int, height: Int): Int {
-        val maxEdge = maxOf(width, height)
-        var sample = 1
-        while (maxEdge / sample > maxImagePreviewEdge) {
-            sample *= 2
-        }
-        return sample
+        return ImageBitmapDecoder.decode(maxImagePreviewEdge) { bytes.inputStream() }
     }
 
     /** 视频投屏界面：手机端作为遥控器控制大屏播放（不重复下载视频，也不产生两处声音） */

@@ -2,7 +2,6 @@ package cn.edu.nb3.myclass
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.util.LruCache
@@ -123,13 +122,7 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
                             }
                             return@use rendered
                         }
-                        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        BitmapFactory.decodeFile(temporary.path, options)
-                        if (options.outWidth <= 0 || options.outHeight <= 0) return@use null
-                        options.inJustDecodeBounds = false
-                        options.inSampleSize = 1
-                        while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > targetPixels * 2) options.inSampleSize *= 2
-                        BitmapFactory.decodeFile(temporary.path, options)
+                        ImageBitmapDecoder.decode(targetPixels * 2) { temporary.inputStream() }
                     } finally { temporary.delete() }
                 }
             }.getOrNull()
