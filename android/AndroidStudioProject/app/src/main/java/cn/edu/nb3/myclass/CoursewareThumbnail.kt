@@ -33,11 +33,23 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
     private var previewBitmap: Bitmap? = null
     private var previewBaseScale = 1f
     private var previewScale = 1f
+    private var previewTranslateX = 0f
+    private var previewTranslateY = 0f
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+    private var panActive = false
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
             if (!allowZoom || previewBitmap == null) return false
-            previewScale = (previewScale * detector.scaleFactor).coerceIn(1f, 4f)
-            applyPreviewMatrix(detector.focusX, detector.focusY)
+            val oldScale = previewScale
+            val nextScale = (oldScale * detector.scaleFactor).coerceIn(1f, 4f)
+            val factor = nextScale / oldScale
+            // 保持双指焦点下的图片内容不动，手指向外移动时图片同步向外放大。
+            previewTranslateX = detector.focusX - (detector.focusX - previewTranslateX) * factor
+            previewTranslateY = detector.focusY - (detector.focusY - previewTranslateY) * factor
+            previewScale = nextScale
+            clampPreviewTranslation()
+            applyPreviewMatrix()
             return true
         }
     })
@@ -147,10 +159,23 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
         if (width <= 0 || height <= 0) return
         previewBaseScale = minOf(width.toFloat() / bitmap.width, height.toFloat() / bitmap.height)
         previewScale = 1f
-        applyPreviewMatrix(width / 2f, height / 2f)
+        previewTranslateX = 0f
+        previewTranslateY = 0f
+        applyPreviewMatrix()
     }
 
-    private fun applyPreviewMatrix(focusX: Float, focusY: Float) {
+    private fun clampPreviewTranslation() {
+        val bitmap = previewBitmap ?: return
+        val scale = previewBaseScale * previewScale
+        val drawWidth = bitmap.width * scale
+        val drawHeight = bitmap.height * scale
+        val maxX = ((drawWidth - width) / 2f).coerceAtLeast(0f)
+        val maxY = ((drawHeight - height) / 2f).coerceAtLeast(0f)
+        previewTranslateX = previewTranslateX.coerceIn(-maxX, maxX)
+        previewTranslateY = previewTranslateY.coerceIn(-maxY, maxY)
+    }
+
+    private fun applyPreviewMatrix() {
         val bitmap = previewBitmap ?: return
         if (width <= 0 || height <= 0) return
         val scale = previewBaseScale * previewScale
@@ -159,14 +184,7 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
         val left = (width - drawWidth) / 2f
         val top = (height - drawHeight) / 2f
         zoomMatrix.setScale(scale, scale)
-        // At zoom > 1, keep the pinch focus stable while retaining full fit at reset.
-        if (previewScale > 1f) {
-            val dx = (focusX - width / 2f) * (previewScale - 1f)
-            val dy = (focusY - height / 2f) * (previewScale - 1f)
-            zoomMatrix.postTranslate(left - dx, top - dy)
-        } else {
-            zoomMatrix.postTranslate(left, top)
-        }
+        zoomMatrix.postTranslate(left + previewTranslateX, top + previewTranslateY)
         imageMatrix = zoomMatrix
     }
 
@@ -178,6 +196,39 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
     override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
         if (allowZoom) {
             scaleDetector.onTouchEvent(event)
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    lastTouchX = event.x
+                    lastTouchY = event.y
+                    panActive = true
+                }
+                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
+                    panActive = false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (event.pointerCount == 1 && panActive && previewScale > 1f) {
+                        previewTranslateX += event.x - lastTouchX
+                        previewTranslateY += event.y - lastTouchY
+                        clampPreviewTranslation()
+                        applyPreviewMatrix()
+                    }
+                    if (event.pointerCount == 1) {
+                        lastTouchX = event.x
+                        lastTouchY = event.y
+                    }
+                }
+                android.view.MotionEvent.ACTION_POINTER_UP -> {
+                    val remaining = if (event.actionIndex == 0) 1 else 0
+                    if (event.pointerCount > remaining) {
+                        lastTouchX = event.getX(remaining)
+                        lastTouchY = event.getY(remaining)
+                    }
+                    panActive = true
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    panActive = false
+                }
+            }
             return true
         }
         return super.onTouchEvent(event)
