@@ -3654,17 +3654,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun addCoursewareThumbnail(row: LinearLayout, item: StoredCoursewareItem) {
-        if (mediaKindOf(item.url) != CastMediaKind.Image) return
+        val kind = mediaKindOf(item.url)
+        if (item.linkUrl.isNotBlank() || kind !in listOf(CastMediaKind.Image, CastMediaKind.Pdf)) return
+        val page = if (kind == CastMediaKind.Pdf) item.lastPage.coerceAtLeast(1) else null
+        val previewTitle = if (page != null) "${item.title} · 第 $page 页" else item.title
         val url = absoluteCoursewareUrl(item.url) ?: return
-        row.addView(CoursewareThumbnail(this, url, dp(80)).apply {
-            contentDescription = "预览图片：${item.title}"
+        row.addView(CoursewareThumbnail(this, url, dp(80), page).apply {
+            contentDescription = "预览：$previewTitle"
             layoutParams = LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(8) }
             setOnClickListener {
-                val preview = CoursewareThumbnail(this@MainActivity, url, dp(360)).apply {
-                    contentDescription = item.title
+                val preview = CoursewareThumbnail(this@MainActivity, url, dp(360), page).apply {
+                    contentDescription = previewTitle
                     minimumHeight = dp(300)
                 }
-                AlertDialog.Builder(this@MainActivity).setTitle(item.title).setView(preview)
+                AlertDialog.Builder(this@MainActivity).setTitle(previewTitle).setView(preview)
                     .setPositiveButton("关闭", null).show()
             }
         })

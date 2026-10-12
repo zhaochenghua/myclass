@@ -16,12 +16,13 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Visible rows only; bounded downloads, sampled decoding, and shared HTTP/bitmap caches. */
-class CoursewareThumbnail(context: Context, private val url: String, private val targetPixels: Int) : AppCompatImageView(context) {
+class CoursewareThumbnail(context: Context, private val url: String, private val targetPixels: Int,
+    private val pdfPage: Int? = null) : AppCompatImageView(context) {
     private var loading = false
     private var loaded = false
     @Volatile private var call: Call? = null
     @Volatile private var generation = 0
-    private val key = "$url@$targetPixels"
+    private val key = "$url@$targetPixels:page=$pdfPage"
     private var observedTree: ViewTreeObserver? = null
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener { loadIfVisible() }
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { loadIfVisible() }
@@ -51,13 +52,23 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
         executor.execute {
             if (version != generation) return@execute
             val bitmap = runCatching {
+                val pdfFile = if (pdfPage != null) File(app.cacheDir, "courseware-thumbnail-pdfs").let { directory ->
+                    directory.mkdirs()
+                    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(url.toByteArray())
+                    File(directory, digest.joinToString("") { "%02x".format(it) } + ".pdf")
+                } else null
+                if (pdfFile != null && pdfFile.length() > 0) {
+                    pdfFile.setLastModified(System.currentTimeMillis())
+                    return@runCatching renderPdf(pdfFile)
+                }
                 val request = http(app).newCall(Request.Builder().url(url).build())
                 call = request
                 if (version != generation) { request.cancel(); return@runCatching null }
                 request.execute().use { response ->
                     if (!response.isSuccessful) return@use null
                     val body = response.body ?: return@use null
-                    if (body.contentLength() > MAX_BYTES) return@use null
+                    val maxBytes = if (pdfPage != null) MAX_PDF_BYTES else MAX_BYTES
+                    if (body.contentLength() > maxBytes) return@use null
                     val temporary = File.createTempFile("thumbnail-", ".image", app.cacheDir)
                     try {
                         body.byteStream().use { input -> temporary.outputStream().use { output ->
@@ -67,10 +78,23 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
                                 val read = input.read(buffer)
                                 if (read < 0) break
                                 count += read
-                                if (count > MAX_BYTES) throw java.io.IOException("Image too large for preview")
+                                if (count > maxBytes) throw java.io.IOException("File too large for preview")
                                 output.write(buffer, 0, read)
                             }
                         } }
+                        if (pdfFile != null) {
+                            val rendered = renderPdf(temporary)
+                            // Unique temporary files keep simultaneous preview downloads independent.
+                            if (!pdfFile.exists()) temporary.renameTo(pdfFile)
+                            var total = pdfFile.parentFile?.listFiles()?.sumOf { it.length() } ?: 0L
+                            pdfFile.parentFile?.listFiles()?.sortedBy { it.lastModified() }?.forEach { cached ->
+                                if (total > MAX_PDF_BYTES && cached != pdfFile) {
+                                    val size = cached.length()
+                                    if (cached.delete()) total -= size
+                                }
+                            }
+                            return@use rendered
+                        }
                         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                         BitmapFactory.decodeFile(temporary.path, options)
                         if (options.outWidth <= 0 || options.outHeight <= 0) return@use null
@@ -92,6 +116,20 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
             }
         }
     }
+    private fun renderPdf(file: File): Bitmap {
+        android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+            android.graphics.pdf.PdfRenderer(descriptor).use { renderer ->
+                renderer.openPage(((pdfPage ?: 1) - 1).coerceIn(0, renderer.pageCount - 1)).use { page ->
+                    val scale = targetPixels.toFloat() / maxOf(page.width, page.height).coerceAtLeast(1)
+                    return Bitmap.createBitmap((page.width * scale).toInt().coerceAtLeast(1),
+                        (page.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888).also { bitmap ->
+                        bitmap.eraseColor(android.graphics.Color.WHITE)
+                        page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    }
+                }
+            }
+        }
+    }
     override fun onDetachedFromWindow() {
         observedTree?.takeIf { it.isAlive }?.let {
             it.removeOnScrollChangedListener(scrollListener)
@@ -105,6 +143,7 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
     }
     companion object {
         private const val MAX_BYTES = 32L * 1024 * 1024
+        private const val MAX_PDF_BYTES = 256L * 1024 * 1024
         private val executor = Executors.newFixedThreadPool(2)
         private val bitmaps = object : LruCache<String, Bitmap>(12 * 1024 * 1024) {
             override fun sizeOf(key: String, value: Bitmap) = value.byteCount
