@@ -479,6 +479,16 @@ app.get(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) =>
   try { res.set('Cache-Control', 'no-store').json({ item: await classStore.get(req.user.id, req.params.id) }); }
   catch (error) { next(error); }
 });
+app.get(`${PATH_PREFIX}/api/classes/:id/touch-calibration`, requireAuth, async (req, res, next) => {
+  try {
+    const item = await classStore.get(req.user.id, req.params.id);
+    res.set('Cache-Control', 'no-store').json({ profile: item.touchCalibration || null, revision: item.touchCalibrationRevision || 0 });
+  } catch (error) { next(error); }
+});
+app.put(`${PATH_PREFIX}/api/classes/:id/touch-calibration`, requireAuth, async (req, res, next) => {
+  try { res.json(await classStore.setCalibration(req.user.id, req.params.id, req.body)); }
+  catch (error) { next(error); }
+});
 app.put(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) => {
   try { res.json({ item: await classStore.update(req.user.id, req.params.id, req.body) }); }
   catch (error) { next(error); }

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>上课投屏平台</title>
-    <link rel="stylesheet" href="./style.css?v=20260919c">
+    <link rel="stylesheet" href="./style.css?v=20261014-calibration">
   </head>
   <body>
     <main class="stage" aria-live="polite">
@@ -312,7 +312,28 @@
       <span class="courseware-conn-code" id="coursewareConnCode">----</span>
     </div>
 
+    <button id="touchCalibrationButton" class="touch-calibration-button">触屏校准</button>
+    <section id="touchCalibrationOverlay" class="touch-calibration-overlay" role="dialog" aria-modal="true" aria-label="触屏校准" hidden>
+      <div id="touchCalibrationSurface" class="touch-calibration-surface">
+        <canvas id="touchCalibrationPreview"></canvas>
+        <div id="touchCalibrationTarget" class="touch-calibration-target" hidden></div>
+      </div>
+      <div class="touch-calibration-panel">
+        <strong>触屏校准</strong>
+        <p id="touchCalibrationStatus" role="status"></p>
+        <p id="touchCalibrationMessage" role="status"></p>
+        <div class="touch-calibration-actions">
+          <button id="touchCalibrationFullscreen">进入全屏</button>
+          <button id="touchCalibrationStart">开始 / 重新校准</button>
+          <button id="touchCalibrationSave" hidden>保存校准</button>
+          <button id="touchCalibrationReset">恢复默认</button>
+          <button id="touchCalibrationClose">关闭</button>
+        </div>
+      </div>
+    </section>
     <script defer src="./studentRoster.js?v=20260919g"></script>
-    <script defer src="./app.js?v=20260929a"></script>
+    <script defer src="./touchCalibrationMath.js?v=20261014-calibration"></script>
+    <script defer src="./touchCalibration.js?v=20261014-calibration"></script>
+    <script defer src="./app.js?v=20261014-calibration"></script>
   </body>
 </html>

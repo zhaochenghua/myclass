@@ -406,6 +406,10 @@ async function bootstrap() {
     setInterval(reportViewerCoursewareViewport, 1500);
     // 首次点击页面任意位置自动全屏（排除自身已是全屏入口的按钮、会跳转的链接与各类弹窗）
     const autoFullscreen = (e) => {
+      if (e.target.closest('#touchCalibrationButton, #touchCalibrationOverlay')) {
+        document.removeEventListener('click', autoFullscreen);
+        return;
+      }
       if (e.target.closest('#downloadApkButton, #homeFullscreenButton, #action-btn-admin, #iosWebAppButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, #studentRollControls, #classPickerModal, #studentCountModal, .action-btn-exam, .action-btn-exit')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
@@ -420,10 +424,10 @@ async function bootstrap() {
     document.addEventListener('click', unmuteOnFirstInteraction, { once: true });
     document.addEventListener('touchstart', unmuteOnFirstInteraction, { once: true });
     document.addEventListener('keydown', unmuteOnFirstInteraction, { once: true });
-    elements.annotationCanvas.addEventListener('pointerdown', beginAnnotationStroke);
-    elements.annotationCanvas.addEventListener('pointermove', continueAnnotationStroke);
-    elements.annotationCanvas.addEventListener('pointerup', finishAnnotationStroke);
-    elements.annotationCanvas.addEventListener('pointercancel', finishAnnotationStroke);
+    elements.annotationCanvas.addEventListener('pointerdown', event => beginAnnotationStroke(TouchCalibration.eventFor(event)));
+    elements.annotationCanvas.addEventListener('pointermove', event => continueAnnotationStroke(TouchCalibration.eventFor(event)));
+    elements.annotationCanvas.addEventListener('pointerup', event => finishAnnotationStroke(TouchCalibration.eventFor(event)));
+    elements.annotationCanvas.addEventListener('pointercancel', event => finishAnnotationStroke(TouchCalibration.eventFor(event)));
     elements.annotationCanvas.addEventListener('lostpointercapture', finishLockedVideoPan);
     elements.annotationCanvas.addEventListener('wheel', zoomLockedVideoWheel, { passive: false });
     elements.annotationCanvas.addEventListener('dblclick', resetLockedVideoOnDoubleClick);
@@ -431,10 +435,10 @@ async function bootstrap() {
     elements.annotationCanvas.addEventListener('wheel', handleImageWheel, { passive: false });
     elements.annotationCanvas.addEventListener('dblclick', handleImageDoubleClick);
     // 黑板事件
-    elements.blackboardCanvas.addEventListener('pointerdown', beginBlackboardStroke);
-    elements.blackboardCanvas.addEventListener('pointermove', continueBlackboardStroke);
-    elements.blackboardCanvas.addEventListener('pointerup', finishBlackboardStroke);
-    elements.blackboardCanvas.addEventListener('pointercancel', finishBlackboardStroke);
+    elements.blackboardCanvas.addEventListener('pointerdown', event => beginBlackboardStroke(TouchCalibration.eventFor(event)));
+    elements.blackboardCanvas.addEventListener('pointermove', event => continueBlackboardStroke(TouchCalibration.eventFor(event)));
+    elements.blackboardCanvas.addEventListener('pointerup', event => finishBlackboardStroke(TouchCalibration.eventFor(event)));
+    elements.blackboardCanvas.addEventListener('pointercancel', event => finishBlackboardStroke(TouchCalibration.eventFor(event)));
     elements.blackboardToggleButton.addEventListener('click', toggleBlackboard);
     elements.blackboardCloseButton.addEventListener('click', () => toggleBlackboard(false));
     elements.blackboardPrevPageButton.addEventListener('click', () => navigateBlackboardPage(-1));
@@ -488,6 +492,7 @@ async function bootstrap() {
     window.addEventListener('resize', resizeBlackboardCanvas);
     // 黑板板擦光标跟踪（文档级，绕过 canvas 指针捕获）
     document.addEventListener('pointermove', (event) => {
+      event = TouchCalibration.eventFor(event);
       if (!state.blackboard.active || state.blackboard.tool !== 'eraser') return;
       elements.blackboardEraserCursor.style.left = event.clientX + 'px';
       elements.blackboardEraserCursor.style.top = event.clientY + 'px';
@@ -504,6 +509,7 @@ async function bootstrap() {
     });
     // 普通标注板擦光标跟踪（文档级，绕过 canvas 指针捕获）
     document.addEventListener('pointermove', (event) => {
+      event = TouchCalibration.eventFor(event);
       if (state.annotations.tool !== 'eraser') return;
       elements.annotationEraserCursor.style.left = event.clientX + 'px';
       elements.annotationEraserCursor.style.top = event.clientY + 'px';
@@ -678,6 +684,7 @@ function setupStudentRoller() {
 
   function updateClassControls() {
     const selected = classes.find(item => item.id === selectedClassId);
+    TouchCalibration.setContext({ token, classId: selectedClassId, name: selected?.name || '' });
     classButton.textContent = selected ? `班级：${selected.name}` : '班级：不选择';
     classButton.title = selected?.name || '选择任教班级或按人数抽学号';
     btn.textContent = selectedClassId ? (displayMode === 'name' ? '抽姓名' : '抽学号') : '抽学号';

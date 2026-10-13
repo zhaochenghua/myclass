@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { validateProfile } = require('../web/touchCalibrationMath');
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
@@ -66,6 +67,18 @@ function createClassStore(filename) {
   return {
     async list(ownerId) { return (await load()).filter(item => item.ownerId === ownerId); },
     async get(ownerId, id) { return find(await load(), ownerId, id); },
+    setCalibration(ownerId, id, body) {
+      if (!body || (body.profile !== null && !validateProfile(body.profile))) throw fail(400, '校准数据无效，请重新校准');
+      return change(items => {
+        const item = find(items, ownerId, id);
+        const revision = item.touchCalibrationRevision || 0;
+        if (body.revision !== revision) throw fail(409, '校准已在其他大屏修改，请关闭后重新打开校准');
+        const p = body.profile;
+        item.touchCalibration = p === null ? null : { version: 1, matrix: [...p.matrix], width: p.width, height: p.height, fullscreen: p.fullscreen };
+        item.touchCalibrationRevision = revision + 1;
+        return { profile: item.touchCalibration, revision: item.touchCalibrationRevision };
+      });
+    },
     create(ownerId, body) {
       const name = textField(body?.name, '班级名称', 40);
       return change(items => {
