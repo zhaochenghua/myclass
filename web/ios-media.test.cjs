@@ -103,6 +103,14 @@ function gestureFixture(rotation) {
   const context = vm.createContext({state, clamp, $: id => nodes[id], MAX_MEDIA_ZOOM: 8, MIN_MEDIA_ZOOM: 1});
   vm.runInContext(fs.readFileSync(`${__dirname}/ios/js/mediaGeometry.js`, 'utf8').replace('export ', ''), context);
   const source = fs.readFileSync(`${__dirname}/ios/js/app.js`, 'utf8');
+  // Extract the real gesture thresholds along with the handlers. Keeping them
+  // in the isolated VM avoids missing globals and drifting test-only values.
+  for (const name of ['CW_TAP_MOVE_SLOP_PX', 'CW_PINCH_SLOP_PX', 'CW_TAP_MAX_DURATION_MS',
+    'CW_SWIPE_MIN_DISTANCE_PX', 'CW_SWIPE_AXIS_RATIO']) {
+    const declaration = source.match(new RegExp(`^const ${name} = [^;\\r\\n]+;`, 'm'));
+    assert.ok(declaration, `Missing gesture threshold: ${name}`);
+    vm.runInContext(declaration[0], context);
+  }
   for (const name of ['sendMediaViewport', 'zoomByMedia', 'panByMedia', 'clampMediaPan', 'currentMediaGeometry',
     'applyMediaPreviewRotation', 'updateMediaZoomStatus', 'bindMediaGestures']) {
     const start = source.indexOf(`function ${name}(`);
@@ -119,6 +127,7 @@ test('single and two-finger drags follow screen axes and distance at all four im
     const touches = (dx, dy) => Array.from({length: fingers}, (_, i) => ({clientX: 100 + i * 100 + dx, clientY: 100 + dy}));
     f.handlers.touchstart({touches: touches(0, 0)});
     f.handlers.touchmove({touches: touches(30, -20), preventDefault() {}});
+    f.handlers.touchend({touches: []});
     const match = f.img.style.transform.match(/^translate\(([-.\d]+)px, ([-.\d]+)px\)/);
     assert.ok(match, f.img.style.transform);
     assert.ok(Math.abs(Number(match[1]) - 30) < 1e-6);
