@@ -158,6 +158,14 @@
     renderStatus();
   }
   window.addEventListener('resize', resized); document.addEventListener('fullscreenchange', resized);
+  const home = byId('joinView');
+  const teachingViews = ['videoView', 'blackboardOverlay', 'videoPlayerOverlay'].map(byId);
+  function updateButtonVisibility() {
+    byId('touchCalibrationButton').hidden = home.hidden || teachingViews.some(view => !view.hidden);
+  }
+  const visibilityObserver = new MutationObserver(updateButtonVisibility);
+  [home, ...teachingViews].forEach(view => visibilityObserver.observe(view, { attributes: true, attributeFilter: ['hidden'] }));
+  updateButtonVisibility();
   window.TouchCalibration = { setContext, eventFor };
   profile = readLocal(); renderStatus();
 })();
