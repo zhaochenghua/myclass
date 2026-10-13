@@ -1685,6 +1685,8 @@ video {
 }
 
 .blackboard-toolbar {
+  width: max-content;
+  max-width: calc(100vw - 2.4rem);
   position: absolute;
   left: 50%;
   bottom: 1.2rem;
@@ -1701,6 +1703,8 @@ video {
   flex-wrap: wrap;
   justify-content: center;
 }
+
+#studentRollBlackboardSlot { min-width: 0; max-width: 100%; }
 
 .blackboard-page-indicator {
   color: var(--text);
