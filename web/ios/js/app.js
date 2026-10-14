@@ -1,3 +1,4 @@
+import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount, firstState } from './coursewarePages.mjs';
 // iPhone 网页版教师端主流程。
 // 界面状态机与 Android MainActivity 一致：
@@ -337,7 +338,7 @@ function showConnect() {
   state.screen = 'Connect';
   showView('Connect');
   $('connectHint').textContent = '请输入教室大屏上的 4 位连接码';
-  setTimeout(() => $('roomCodeInput')?.focus(), 120);
+  setTimeout(() => { if ($('clipboardDialog').hidden) $('roomCodeInput')?.focus(); }, 120);
 }
 
 function showMenu() {
@@ -2655,7 +2656,9 @@ function showCoursewareSource() {
   showView('CoursewareSource');
 }
 
+let coursewareManageMode = false;
 async function loadServerCourseware({ forManage = false } = {}) {
+  coursewareManageMode = forManage;
   if (!state.coursewareClient) return;
   state.screen = 'CoursewareList';
   showView('CoursewareList');
@@ -3111,6 +3114,10 @@ function pinDocumentSoon() {
 }
 
 function bindStaticEvents() {
+  setupClipboardLink({
+    getSession: () => ({ token: state.token, apiBase: state.apiBase }),
+    onSaved: () => { if (state.screen === 'CoursewareList') return loadServerCourseware({ forManage: coursewareManageMode }); }
+  });
   // 蓝牙翻页笔 / 外接键盘翻页（视图隐藏时下面这些按钮不存在，所以挂在 document 上）
   document.addEventListener('keydown', handleCoursewarePagingKey);
 
@@ -3247,7 +3254,7 @@ function bindStaticEvents() {
   $('cwFileInput').addEventListener('change', (event) => uploadCourseware(event.target.files?.[0]));
 
   $('cwListBack').addEventListener('click', () => showMenu());
-  $('cwListRefresh').addEventListener('click', () => loadServerCourseware());
+  $('cwListRefresh').addEventListener('click', () => loadServerCourseware({ forManage: coursewareManageMode }));
   $('cwListUpload').addEventListener('click', () => pickCoursewareFile());
   $('cwListFileInput').addEventListener('change', (event) => uploadCourseware(event.target.files?.[0]));
 

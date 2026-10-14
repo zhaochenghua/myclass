@@ -1,0 +1,23 @@
+const {chromium}=require('playwright');
+const {startTestServer}=require('../server/testSupport');
+const assert=require('node:assert/strict');
+(async()=>{const server=await startTestServer({withWeb:true});const browser=await chromium.launch({channel:'msedge',headless:true});try{
+const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+await page.addInitScript(()=>{localStorage.setItem('myclass.ios.token',JSON.stringify('alice-test-token'));localStorage.setItem('myclass.ios.username',JSON.stringify('alice_test'));window.clipReads=0;window.clipValue='【课前备课-哔哩哔哩】 https://example.com/lesson';Object.defineProperty(navigator,'clipboard',{value:{readText:()=>{window.clipReads++;return window.clipFail?Promise.reject(Error('denied')):Promise.resolve(window.clipValue)}}});});
+await page.goto(server.base+'/ios/');await page.locator('#connectButton').waitFor({state:'visible'});
+assert.equal(await page.evaluate(()=>window.clipReads),0);
+const open=()=>page.locator('[data-clipboard-link]:visible').click();
+await open();await page.waitForFunction(()=>!document.querySelector('#clipboardSave').disabled);assert.equal(await page.locator('#clipboardName').inputValue(),'课前备课');
+await page.locator('#clipboardName').fill('');await page.locator('#clipboardSave').click();await page.getByText('请填写链接显示名称。',{exact:true}).waitFor();
+await page.locator('#clipboardName').fill('课堂链接');await page.screenshot({path:require('node:path').join(require('node:os').tmpdir(),'ios-clipboard-portrait.png'),fullPage:true});
+await page.locator('#clipboardSave').click();await page.getByText('已保存到服务器列表，可在“课件管理”中查看。',{exact:true}).waitFor();
+let list=await (await server.api('/courseware')).json();assert.ok(JSON.stringify(list).includes('课堂链接'));await page.locator('#clipboardClose').click();
+await open();await page.getByText('该链接已在当前账号的服务器列表中，无需重复上传。',{exact:true}).waitFor();assert.ok(await page.locator('#clipboardSave').isDisabled());await page.locator('#clipboardClose').click();
+await page.evaluate(()=>{window.clipFail=true});await open();await page.waitForFunction(()=>document.querySelector('#clipboardStatus').textContent.includes('无法直接读取'));
+await page.locator('#clipboardText').fill('另一份课件 https://example.com/cancel');await page.locator('#clipboardCheck').click();await page.waitForFunction(()=>!document.querySelector('#clipboardSave').disabled);assert.equal(await page.locator('#clipboardName').inputValue(),'另一份课件');
+await page.setViewportSize({width:844,height:390});await page.locator('#clipboardClose').scrollIntoViewIfNeeded();await page.screenshot({path:require('node:path').join(require('node:os').tmpdir(),'ios-clipboard-landscape.png'),fullPage:true});await page.locator('#clipboardClose').click();
+assert.deepEqual(await (await server.api('/courseware')).json(),list);
+await page.setViewportSize({width:1024,height:768});await open();await page.waitForFunction(()=>!document.querySelector('#clipboardCheck').disabled);await page.locator('#clipboardText').fill('手动保存 https://example.com/manual');await page.locator('#clipboardCheck').click();await page.waitForFunction(()=>!document.querySelector('#clipboardSave').disabled);await page.screenshot({path:require('node:path').join(require('node:os').tmpdir(),'ios-clipboard-ipad.png'),fullPage:true});await page.locator('#clipboardSave').click();await page.getByText('已保存到服务器列表，可在“课件管理”中查看。',{exact:true}).waitFor();
+assert.ok(JSON.stringify(await (await server.api('/courseware')).json()).includes('手动保存'));assert.deepEqual(errors,[]);console.log('PASS: no room, no automatic reads, autofill, empty name, save, duplicate, denied clipboard fallback, cancel, portrait/landscape/iPad; no page errors');
+}finally{await browser.close();await server.close();}})().catch(e=>{console.error(e);process.exitCode=1});

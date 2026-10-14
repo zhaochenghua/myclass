@@ -1658,3 +1658,12 @@ input::placeholder {
     display: none;
   }
 }
+
+.clipboard-card { width: min(560px, 100%); }
+.clipboard-card label { display:block; margin:12px 0 6px; font-weight:600; }
+.clipboard-card textarea,.clipboard-card input { box-sizing:border-box; width:100%; padding:10px; border:1px solid #64748b; border-radius:8px; background:#fff; color:#172033; font:inherit; font-size:16px; }
+.clipboard-card textarea { resize:vertical; }
+.clipboard-card p { overflow-wrap:anywhere; }
+.clipboard-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.clipboard-actions > button { flex:1 1 150px; }
+#clipboardStatus { min-height:2.8em; }

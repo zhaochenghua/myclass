@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20261012-ios4" />
+    <link rel="stylesheet" href="./style.css?v=20261014-clipboard" />
   </head>
   <body>
     <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
@@ -94,6 +94,7 @@
               autocomplete="off"
               placeholder="----"
             />
+            <button class="btn btn-ghost" data-clipboard-link type="button">剪贴板链接</button>
             <button class="btn btn-primary" id="connectButton" type="button">连接</button>
             <div class="split-row">
               <button class="btn btn-ghost" id="manageCoursewareButton" type="button">
@@ -274,6 +275,7 @@
         </header>
         <div class="list-body" id="cwListBody"></div>
         <footer class="list-footer">
+          <button class="btn btn-ghost" data-clipboard-link type="button">剪贴板链接</button>
           <button class="btn btn-primary" id="cwListUpload" type="button">本地上传</button>
         </footer>
         <input id="cwListFileInput" type="file" hidden />
@@ -368,6 +370,28 @@
       </section>
     </div>
 
+    <div class="classroom-modal" id="clipboardDialog" hidden>
+        <section class="classroom-card clipboard-card" role="dialog" aria-modal="true" aria-labelledby="clipboardTitle">
+        <h2 id="clipboardTitle">保存剪贴板链接</h2>
+        <p>无需连接教室，确认后保存到当前账号的服务器列表。</p>
+        <label for="clipboardText">链接或分享文案</label>
+        <textarea id="clipboardText" rows="3" placeholder="可在这里长按粘贴链接和名称">
+        </textarea>
+        <div class="clipboard-actions">
+        <button class="btn btn-ghost" id="clipboardRead" type="button">再次读取剪贴板</button>
+        <button class="btn btn-ghost" id="clipboardCheck" type="button">检查链接</button>
+        </div>
+        <label for="clipboardName">链接显示名称</label>
+        <input id="clipboardName" type="text" maxlength="50" placeholder="请输入显示名称" autocomplete="off" />
+        <p id="clipboardStatus" role="status" aria-live="polite">
+        </p>
+        <footer class="clipboard-actions">
+        <button class="btn btn-ghost" id="clipboardClose" type="button">关闭</button>
+        <button class="btn btn-primary" id="clipboardSave" type="button" disabled>保存到服务器</button>
+        </footer>
+        </section>
+        </div>
+
     <!-- 通用遮罩 -->
     <div class="overlay" id="overlay" hidden>
       <div class="overlay-card">
@@ -382,6 +406,6 @@
 
     <div class="toast" id="toast" hidden></div>
 
-    <script type="module" src="./js/app.js?v=20261012-ios3"></script>
+    <script type="module" src="./js/app.js?v=20261014-clipboard"></script>
   </body>
 </html>
