@@ -88,7 +88,7 @@ test('retrying one upload returns its original publication, scoped to its owner'
 test('concurrent index writes retain more than 100 records and do not lose rename/delete updates', async t => {
   const f = await fixture(t);
   await Promise.all(Array.from({ length: 120 }, (_, i) => f.store.remember({ id: `link-${i}`,
-    title: `${i}`, userId: 'alice', linkUrl: 'https://example.org', url: 'https://example.org' })));
+    title: `${i}`, userId: 'alice', linkUrl: `https://example.org/${i}`, url: `https://example.org/${i}` })));
   assert.equal((await f.store.readIndex()).length, 120);
   assert.equal((await f.store.list('alice')).length, 120);
   await Promise.all([f.store.rename('link-0', 'updated', 'alice'), f.store.remove('link-1', 'alice'),

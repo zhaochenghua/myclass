@@ -583,6 +583,12 @@ app.post(`${PATH_PREFIX}/api/courseware`, requireAuth, upload.single('file'), as
 });
 
 // 链接课件上传（不包含文件，仅标题+URL）
+app.get(`${PATH_PREFIX}/api/courseware/link/exists`, requireAuth, async (req, res, next) => {
+  try {
+    if (typeof req.query.url !== 'string' || req.query.url.length > 8192) return res.status(400).json({ error: '无效链接' });
+    res.set('Cache-Control', 'no-store').json({ exists: await coursewareStore.hasLink(req.user.id, req.query.url) });
+  } catch (error) { next(error); }
+});
 app.post(`${PATH_PREFIX}/api/courseware/link`, requireAuth, express.json(), async (req, res, next) => {
   try {
     const { title, url } = req.body;

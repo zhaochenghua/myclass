@@ -11,6 +11,11 @@ function storageError(status, message) {
   return Object.assign(new Error(message), { status, publicMessage: message });
 }
 
+function normalizeLink(url) {
+  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : ''; }
+  catch { return ''; }
+}
+
 // One store per server process. All index mutations (including file publication
 // and removal) share this queue; readers see either the old or the new index.
 function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0, officeProfile = () => '' }) {
@@ -263,9 +268,20 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
         if (existing.linkUrl !== item.linkUrl) throw storageError(409, '上传编号已用于其他链接');
         return existing;
       }
+      // Serialize URL deduplication with publication, including simultaneous phones.
+      const link = normalizeLink(item.linkUrl);
+      const savedLink = link && items.find(entry => entry.userId === item.userId && normalizeLink(entry.linkUrl) === link);
+      if (savedLink) return savedLink;
       await saveIndex([item, ...items.filter(existing => existing.id !== item.id)]);
       return item;
     });
+  }
+
+  async function hasLink(userId, url) {
+    const link = normalizeLink(url);
+    if (!link) throw storageError(400, '仅支持有效的 http/https 链接');
+    // Do not use list(): it may be capped by COURSEWARE_LIST_LIMIT.
+    return (await readIndex()).some(item => item.userId === userId && normalizeLink(item.linkUrl) === link);
   }
 
   function remove(id, userId) {
@@ -324,7 +340,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     });
   }
 
-  return { publish, list, remember, remove, rename, readIndex, savePlayback };
+  return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink };
 }
 
 module.exports = { createCoursewareStore };

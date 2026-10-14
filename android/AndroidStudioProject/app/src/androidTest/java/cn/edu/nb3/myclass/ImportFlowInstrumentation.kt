@@ -17,8 +17,14 @@ import java.util.UUID
 
 /** Runs only against server/testSupport.js; no classroom or real account required. */
 class ImportFlowInstrumentation : Instrumentation() {
-    override fun onCreate(arguments: Bundle?) { super.onCreate(arguments); start() }
+    private var clipboardOnly = false
+    override fun onCreate(arguments: Bundle?) {
+        super.onCreate(arguments)
+        clipboardOnly = arguments?.getString("clipboard") == "true"
+        start()
+    }
     override fun onStart() {
+        if (clipboardOnly) { ClipboardFlowCheck.run(this); return }
         val results = Bundle()
         try {
             check(BuildConfig.SERVER_BASE_URL == "http://10.0.2.2:3107/myclass") { "Use isolated emulator server on port 3107" }

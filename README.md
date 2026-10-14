@@ -381,6 +381,12 @@ python3 scripts/generate-ios-icons.py
 
 ## Android 构建
 
+Android 1.9.1 起，App 打开或返回连接页/功能菜单并取得焦点后，会检查剪贴板中的 HTTP/HTTPS 链接；未登录时在登录成功后检查，无需输入教室连接码。当前账号尚未保存的链接会弹出“保存剪贴板链接”，分享文案中的 `【标题】` 或链接前后的名称自动填入显示名称，确认后才加入持久上传队列。单独的 URL 需填写名称；取消不会上传，同一条剪贴板不重复弹窗。可重新复制，或进入“用户管理 → 剪贴板链接”手动重试。网络检查失败不会擅自上传，上传中断后可从课件管理重试。
+
+服务器通过 `/api/courseware/link/exists` 按登录账号查重，不受课件列表条数限制；保存时串行检查相同链接，避免同时点击或多设备重复入库，保留原有名称。不同账号可以保存各自的同一链接；不抓取网页内容或解析短链接跳转，因此不同 URL 仍视为不同链接。
+
+剪贴板模拟器回归使用隔离服务 `node server/testSupport.js`，以 `-PMYCLASS_SERVER_URL=http://10.0.2.2:3107/myclass` 增量构建 App 和 AndroidTest，再运行 `adb shell am instrument -w -e clipboard true cn.edu.nb3.myclass.test/cn.edu.nb3.myclass.ImportFlowInstrumentation`。覆盖无需课堂连接、自动命名、空名称校验、实际上传、重复链接、取消和普通文本场景。
+
 使用 Android Studio 打开：
 
 ```text

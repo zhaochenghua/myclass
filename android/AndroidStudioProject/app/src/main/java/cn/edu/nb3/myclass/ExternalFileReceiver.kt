@@ -26,6 +26,13 @@ object ExternalFileReceiver {
     fun file(context: Context, item: Pending) = File(context.filesDir, "imports/${item.id}/payload")
 
     @Synchronized fun pendingCount() = queue.count { it.ready }
+    @Synchronized fun containsLink(url: String, username: String) = queue.any { it.url == url && it.owner == username }
+    @Synchronized fun enqueueLink(context: Context, url: String, name: String, username: String) {
+        restoreQueue(context)
+        if (containsLink(url, username)) return
+        queue.add(Pending(UUID.randomUUID().toString(), name, url = url, owner = username))
+        persist(context)
+    }
     @Synchronized fun restoreQueue(context: Context) {
         if (restored) return
         val saved = prefs(context).getString("imports", null)

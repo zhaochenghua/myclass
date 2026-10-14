@@ -339,11 +339,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }.start()
     }
     private var coursewareSubScreen: CoursewareSubScreen = CoursewareSubScreen.None
-    private var pendingLinkSuggestedName: String? = null
-    // 与 ExternalFileReceiver.extractUrl 保持一致的提取规则（http(s):// 到空白字符为止）
-    private val urlPattern = Pattern.compile("https?://[^\\s]+")
-    // 分享文案标题，形如【浙江选考通用技术全考点精讲-哔哩哔哩】
-    private val bracketTitlePattern = Pattern.compile("【([^】]+)】")
+    private var clipboardCheckRunning = false
+    private var clipboardManualRequested = false
+    private var clipboardDialog: AlertDialog? = null
+    private val clipboardPromptPrefs: SharedPreferences
+        get() = getSharedPreferences("myclass_clipboard", Context.MODE_PRIVATE)
     private var initialIntentProcessed = false
     private val coursewareHttpClient = OkHttpClient.Builder()
         .addInterceptor { chain ->
@@ -477,6 +477,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onResume() {
         super.onResume()
         appInForeground = true
+        window.decorView.post { checkClipboardLink() }
         ImportUploadService.observe(this)
         triggerPendingUploadIfReady()
         // 从「允许安装未知应用」设置页返回：已授权就复用已下载的安装包继续安装，不重新下载
@@ -584,6 +585,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onDestroy() {
         ImportUploadService.detach(this)
+        clipboardDialog?.dismiss()
         campusCheckGeneration += 1
         classPickerDialog?.dismiss()
         unregisterNetworkCallback()
@@ -670,6 +672,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun clearAuth() {
+        clipboardDialog?.dismiss()
         authGeneration += 1
         authToken = null
         authUsername = null
@@ -1031,6 +1034,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun showConnectScreen() {
         currentScreen = Screen.Connect
+        window.decorView.post { checkClipboardLink() }
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
         val inputLayout = TextInputLayout(this).apply {
@@ -1116,7 +1120,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         if (ExternalFileReceiver.pendingCount() > 0) {
-            updateStatus("${ExternalFileReceiver.pendingCount()} 个课件等待上传，连接教室后自动上传")
+            updateStatus("${ExternalFileReceiver.pendingCount()} 个课件等待上传，登录后自动上传，无需连接教室")
         }
 
         if (isLandscape) {
@@ -1178,10 +1182,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun showUserManagementDialog() {
         AlertDialog.Builder(this)
             .setTitle("用户管理")
-            .setItems(arrayOf("课件管理", "切换用户")) { _, which ->
+            .setItems(arrayOf("课件管理", "剪贴板链接", "切换用户")) { _, which ->
                 when (which) {
                     0 -> showCoursewareManagement()
-                    1 -> confirmSwitchUser()
+                    1 -> {
+                        clipboardManualRequested = true
+                        window.decorView.post { checkClipboardLink() }
+                    }
+                    2 -> confirmSwitchUser()
                 }
             }
             .setNegativeButton("取消", null)
@@ -1397,46 +1405,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             .show()
     }
 
-    private fun showLinkNameDialog() {
-        // 剪贴板导入时可从分享文案中解析出标题，预填以减少输入
-        val suggested = pendingLinkSuggestedName
-        pendingLinkSuggestedName = null
-        val input = android.widget.EditText(this).apply {
-            hint = "请输入课件名称"
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine(true)
-            filters = arrayOf(InputFilter.LengthFilter(50))
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            if (!suggested.isNullOrBlank()) {
-                setText(suggested)
-                setSelection(suggested.length)
-            }
-        }
-        AlertDialog.Builder(this)
-            .setTitle("导入链接课件")
-            .setMessage("请输入该链接课件的名称")
-            .setView(input)
-            .setNegativeButton("取消") { _, _ ->
-                ExternalFileReceiver.cancelDraftLink(this)
-                toast("已取消链接导入")
-            }
-            .setPositiveButton("确定") { _, _ ->
-                val name = input.text.toString().trim()
-                if (name.isEmpty()) {
-                    toast("名称不能为空")
-                    showLinkNameDialog()
-                } else {
-                    ExternalFileReceiver.setLatestLinkName(name, this)
-                    toast("链接课件已加入队列")
-                    triggerPendingUploadIfReady()
-                }
-            }
-            .setOnCancelListener {
-                ExternalFileReceiver.cancelDraftLink(this)
-                toast("已取消链接导入")
-            }
-            .show()
-    }
 
     private fun deleteManagementCourseware(item: StoredCoursewareItem) {
         Thread {
@@ -3125,49 +3093,108 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    /**
-     * 读取剪贴板并导入为链接课件。
-     * 剪贴板内容常带分享文案（如“【标题-哔哩哔哩】 https://b23.tv/xxx”），
-     * 因此这里不要求整段文本以 http 开头，而是把原文作为分享文本交给既有导入流程，
-     * 由 ExternalFileReceiver.extractUrl 统一提取其中的 URL。
-     */
-    private fun handleClipboardLink() {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        val text = clipboard?.primaryClip
-            ?.takeIf { it.itemCount > 0 }
-            ?.getItemAt(0)
-            ?.text
-            ?.toString()
-            ?.trim()
-            .orEmpty()
-        if (text.isBlank()) {
-            toast("剪贴板为空")
-            return
-        }
-        // 仅用于校验是否真的存在可导入的链接，实际解析交给既有流程保持一致
-        val matcher = urlPattern.matcher(text)
-        if (!matcher.find()) {
-            toast("剪贴板中没有可用的链接")
-            return
-        }
-        pendingLinkSuggestedName = extractShareTitle(text)
-        handleShareIntent(
-            Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, text)
-            }
-        )
+    private data class ClipboardCandidate(val link: ClipboardLink, val key: String)
+
+    private fun readClipboardCandidate(username: String): ClipboardCandidate? {
+        // Android 10+ permits clipboard reads only while this window has focus.
+        if (!hasWindowFocus()) return null
+        return runCatching {
+            val clip = (getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)?.primaryClip ?: return null
+            val text = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).text?.toString() }.joinToString("\n").trim()
+            val link = ClipboardLink.parse(text) ?: return null
+            val fingerprint = "$username\n" + clip.description.timestamp + "\n" + text
+            val key = java.security.MessageDigest.getInstance("SHA-256").digest(fingerprint.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+            ClipboardCandidate(link, key)
+        }.getOrNull()
     }
 
-    /** 从分享文案中提取标题，如“【浙江选考通用技术全考点精讲-哔哩哔哩】” */
-    private fun extractShareTitle(text: String): String? {
-        val matcher = bracketTitlePattern.matcher(text)
-        if (!matcher.find()) return null
-        return matcher.group(1)
-            ?.trim()
-            ?.removeSuffix("-哔哩哔哩")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) window.decorView.post { checkClipboardLink() }
+    }
+
+    private fun handleClipboardLink() = checkClipboardLink(manual = true)
+
+    private fun checkClipboardLink(manual: Boolean = clipboardManualRequested) {
+        if (!appInForeground || isFinishing || isDestroyed || !hasWindowFocus() || networkGateShowing ||
+            currentScreen == Screen.Auth || clipboardCheckRunning || clipboardDialog != null) return
+        if (!manual && currentScreen !in listOf(Screen.Connect, Screen.Menu)) return
+        val token = authToken ?: return
+        val username = authUsername ?: return
+        clipboardManualRequested = false
+        val candidate = readClipboardCandidate(username)
+        if (candidate == null) { if (manual) toast("剪贴板中没有可用的链接"); return }
+        if (!manual && clipboardPromptPrefs.getString("handled", null) == candidate.key) return
+        if (ExternalFileReceiver.containsLink(candidate.link.url, username)) {
+            clipboardPromptPrefs.edit().putString("handled", candidate.key).apply()
+            if (manual) toast("链接已在待上传队列中")
+            return
+        }
+        val generation = authGeneration
+        clipboardCheckRunning = true
+        Thread {
+            val result = runCatching { CoursewareApi.linkExists(candidate.link.url, token, authHttpClient) }
+            runOnUiThread {
+                clipboardCheckRunning = false
+                if (isDestroyed || isFinishing || !appInForeground || !hasWindowFocus() ||
+                    generation != authGeneration || token != authToken || currentScreen == Screen.Auth ||
+                    (!manual && currentScreen !in listOf(Screen.Connect, Screen.Menu))) return@runOnUiThread
+                if (readClipboardCandidate(username)?.key != candidate.key) { checkClipboardLink(manual); return@runOnUiThread }
+                result.onSuccess { exists ->
+                    if (exists || ExternalFileReceiver.containsLink(candidate.link.url, username)) {
+                        clipboardPromptPrefs.edit().putString("handled", candidate.key).apply()
+                        if (manual) toast("该链接已保存，无需重复上传")
+                    } else showClipboardUploadDialog(candidate, token, username, generation)
+                }.onFailure { error ->
+                    if (error is CoursewareApi.AuthenticationRequired) onAuthenticationExpired(error.token)
+                    else if (manual) toast(error.message ?: "链接检查失败，请稍后重试")
+                    // Do not treat network failures as 'not saved' or consume the clipboard.
+                }
+            }
+        }.start()
+    }
+
+    private fun showClipboardUploadDialog(candidate: ClipboardCandidate, token: String, username: String, generation: Int) {
+        val input = EditText(this).apply {
+            hint = "请输入链接显示名称"
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+            filters = arrayOf(InputFilter.LengthFilter(50))
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+            setText(candidate.link.title)
+            setSelection(text.length)
+            contentDescription = "链接显示名称"
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("保存剪贴板链接")
+            .setMessage("是否上传到当前账号的服务器列表？无需连接教室。\n\n" + candidate.link.url)
+            .setView(input)
+            .setNegativeButton("暂不上传") { _, _ ->
+                clipboardPromptPrefs.edit().putString("handled", candidate.key).apply()
+            }
+            .setPositiveButton("上传到服务器", null)
+            .create()
+        clipboardDialog = dialog
+        dialog.setOnCancelListener { clipboardPromptPrefs.edit().putString("handled", candidate.key).apply() }
+        dialog.setOnDismissListener { if (clipboardDialog === dialog) clipboardDialog = null }
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (generation != authGeneration || token != authToken || username != authUsername) {
+                    dialog.dismiss(); toast("账号已切换，请重新导入"); return@setOnClickListener
+                }
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) { input.error = "名称不能为空"; input.requestFocus(); return@setOnClickListener }
+                runCatching { ExternalFileReceiver.enqueueLink(this, candidate.link.url, name, username) }
+                    .onSuccess {
+                        clipboardPromptPrefs.edit().putString("handled", candidate.key).apply()
+                        dialog.dismiss()
+                        triggerPendingUploadIfReady()
+                        toast("链接已加入上传队列，可在用户管理的课件管理中查看")
+                    }.onFailure { input.error = "保存失败，请重试" }
+            }
+        }
+        dialog.show()
     }
 
     private fun loadServerCoursewareList() {

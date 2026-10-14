@@ -70,6 +70,16 @@ object CoursewareApi {
         JSONObject().put("title", name).put("url", url).toString()
             .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()), callClient, uploadId)
 
+    fun linkExists(url: String, token: String, callClient: OkHttpClient): Boolean {
+        val request = Request.Builder().url(serverBaseUrl.trimEnd('/') + "/api/courseware/link/exists?url=" + Uri.encode(url))
+            .header("Authorization", "Bearer $token").get().build()
+        callClient.newCall(request).execute().use { response ->
+            if (response.code == 401) throw AuthenticationRequired(token)
+            if (!response.isSuccessful) throw IOException("链接检查失败：HTTP ${response.code}")
+            return JSONObject(response.body?.string().orEmpty()).getBoolean("exists")
+        }
+    }
+
     private fun execute(path: String, token: String, body: RequestBody, callClient: OkHttpClient, uploadId: String): JSONObject {
         val request = Request.Builder().url(serverBaseUrl.trimEnd('/') + path)
             .header("Authorization", "Bearer $token").apply { if (uploadId.isNotBlank()) header("X-Upload-Id", uploadId) }
