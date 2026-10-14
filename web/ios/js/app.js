@@ -1,3 +1,5 @@
+import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261015-video';
+let embeddedVideoControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount, firstState } from './coursewarePages.mjs';
 // iPhone 网页版教师端主流程。
@@ -434,6 +436,7 @@ function ensureSignaling() {
       onViewerCoursewareClose: handleViewerCoursewareClose,
       onViewerAnnotation: handleViewerAnnotation,
       onAnnotationsSnapshot: restoreFileAnnotations,
+      onEmbeddedVideo: message => embeddedVideoControls?.receive(message),
       onSignalError: (message) => toast(message, { warn: true }),
       onDisconnected: () => {
         if (state.joined) $('connectHint').textContent = '连接已断开，正在重新连接...';
@@ -3138,6 +3141,11 @@ function pinDocumentSoon() {
 }
 
 function bindStaticEvents() {
+  embeddedVideoControls = createEmbeddedVideos({
+    container: document.querySelector('.cw-footer .classroom-actions'), remote: true,
+    getContext: () => state.screen === 'CoursewarePlay' && state.courseware && !state.coursewareSuspended ? { url: state.courseware.url, page: state.courseware.page } : null,
+    send: payload => state.signaling?.send(payload) ?? false
+  });
   setupClipboardLink({
     getSession: () => ({ token: state.token, apiBase: state.apiBase }),
     onSaved: () => { if (state.screen === 'CoursewareList') return loadServerCourseware({ forManage: coursewareManageMode }); }

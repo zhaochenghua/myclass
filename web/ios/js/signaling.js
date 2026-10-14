@@ -230,6 +230,9 @@ export class SignalingClient {
         case 'student.roll.result':
           this.handlers.onStudentRoll?.(message);
           break;
+        case 'viewer.embedded-video':
+          this.handlers.onEmbeddedVideo?.(message);
+          break;
         case 'annotations.snapshot':
           this.handlers.onAnnotationsSnapshot?.(message);
           break;

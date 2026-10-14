@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { AnnotationStore } = require('./annotationStore');
+const { extractPptxVideos } = require('./pptxVideos');
 
 const OFFICE = new Set(['.ppt', '.pptx', '.doc', '.docx']);
 const VIDEO = new Set(['.mp4', '.mov', '.avi', '.webm', '.mkv', '.3gp']);
@@ -28,6 +29,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
   let writes = Promise.resolve();
   let initialization;
   const preparations = new Map();
+  const embeddedJobs = new Map();
 
   // Only identical objects wait for each other. Conversion must never occupy
   // the global metadata transaction queue (and block unrelated tiny uploads).
@@ -178,6 +180,13 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
             if (OFFICE.has(ext)) {
               const conversion = await convertOfficeToPdf(stagedOriginal, ext, path.join(staging, 'preview.pdf'), crypto.randomUUID());
               if (conversion) await fs.promises.writeFile(path.join(staging, 'conversion.json'), JSON.stringify(conversion));
+              if (ext === '.pptx') {
+                try { await extractPptxVideos(stagedOriginal, path.join(staging, 'embedded')); }
+                catch (error) {
+                  await fs.promises.rm(path.join(staging, 'embedded'), { recursive: true, force: true });
+                  console.warn('PPTX video extraction deferred:', error.message);
+                }
+              }
             }
             await fs.promises.mkdir(path.dirname(bundle), { recursive: true });
             await fs.promises.rename(staging, bundle);
@@ -297,6 +306,9 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
       // If interrupted afterwards, leftover files stay unlisted, never shared.
       await saveIndex(remaining);
       await annotations.remove(id);
+      // Wait for an in-progress lazy extraction before removing the last copy.
+      await embeddedJobs.get(item.storageKey || item.id)?.catch(() => {});
+      await fs.promises.rm(path.join(root, '.embedded', id), { recursive: true, force: true });
       if (!item.linkUrl) {
         for (const ext of EXTENSIONS) await fs.promises.rm(path.join(root, `${id}${ext}`), { force: true });
         if (item.storageKey && !preparations.has(item.storageKey) && !remaining.some(entry => entry.storageKey === item.storageKey)) {
@@ -357,7 +369,34 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     });
   }
 
-  return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink, fileNotes };
+  async function embeddedVideos(item) {
+    if (!item?.originalUrl?.endsWith('.pptx')) return { videos: [] };
+    checkId(item.id);
+    const directory = item.storageKey ? path.join(objectDirectory(item.storageKey), 'embedded') : path.join(root, '.embedded', item.id);
+    const key = item.storageKey || item.id;
+    let task = embeddedJobs.get(key);
+    if (!task) {
+      task = (async () => {
+        try { return JSON.parse(await fs.promises.readFile(path.join(directory, 'videos.json'), 'utf8')); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        await fs.promises.mkdir(path.dirname(directory), { recursive: true });
+        const staging = await fs.promises.mkdtemp(path.join(path.dirname(directory), '.videos-'));
+        try {
+          const videos = await extractPptxVideos(path.join(root, `${item.id}.pptx`), staging);
+          await fs.promises.rename(staging, directory);
+          return videos;
+        } finally { await fs.promises.rm(staging, { recursive: true, force: true }); }
+      })();
+      embeddedJobs.set(key, task);
+    }
+    try {
+      const videos = await task;
+      return { directory, videos: videos.map((video, index) => ({ ...video, index,
+        url: `${prefix}/public/courseware/${item.id}.video/${index}` })) };
+    } finally { if (embeddedJobs.get(key) === task) embeddedJobs.delete(key); }
+  }
+
+  return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink, fileNotes, embeddedVideos };
 }
 
 module.exports = { createCoursewareStore };

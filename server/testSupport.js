@@ -11,7 +11,7 @@ async function startTestServer({ port = 0, withWeb = false, env = {} } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'myclass-classroom-test-'));
   const serverRoot = path.join(directory, 'server');
   await fs.mkdir(path.join(serverRoot, 'data'), { recursive: true });
-  for (const name of ['server.js', 'classStore.js', 'coursewareStore.js', 'expandAnimations.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js', 'annotationStore.js', 'usageStore.js']) {
+  for (const name of ['server.js', 'classStore.js', 'coursewareStore.js', 'expandAnimations.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js', 'annotationStore.js', 'pptxVideos.js', 'usageStore.js']) {
     await fs.copyFile(path.join(__dirname, name), path.join(serverRoot, name));
   }
   await fs.cp(path.join(__dirname, 'vendor'), path.join(serverRoot, 'vendor'), { recursive: true });

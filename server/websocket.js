@@ -23,6 +23,7 @@ function logWs(message) {
 }
 
 const TEACHER_ONLY_MESSAGE_TYPES = new Set([
+  'courseware.embedded-video',
   'courseware.annotation',
   'courseware.close',
   'courseware.image.viewport',
@@ -40,6 +41,7 @@ const TEACHER_ONLY_MESSAGE_TYPES = new Set([
 
 // 仅允许大屏端（viewer）发送，用于把大屏本地画笔回传给教师手机端
 const VIEWER_ONLY_MESSAGE_TYPES = new Set([
+  'viewer.embedded-video',
   'viewer.annotation',
   'student.roll.result',
   'student.selection.state',
@@ -142,6 +144,8 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'webrtc.answer':
     case 'webrtc.ice-candidate':
     case 'courseware.close':
+    case 'courseware.embedded-video':
+    case 'viewer.embedded-video':
     case 'courseware.annotation':
     case 'courseware.image.viewport':
     case 'courseware.navigate':
@@ -310,6 +314,16 @@ async function handleForward(socket, message, roomManager, options) {
         status: 'error', message: '大屏暂时未连接，请稍后重试' });
     }
     return;
+  }
+
+  if (['courseware.embedded-video', 'viewer.embedded-video'].includes(message.type)) {
+    const room = roomManager.rooms.get(binding.code);
+    if (!room?.presentation.open || typeof message.url !== 'string' ||
+        !['open', 'close', 'play', 'pause', 'back', 'forward'].includes(message.action) ||
+        (message.action !== 'close' && (!Number.isInteger(message.index) || message.index < 0 || message.index > 199))) return;
+    try { if (new URL(message.url, 'http://local').pathname !== new URL(room.presentation.open.url, 'http://local').pathname) return; }
+    catch { return; }
+    message = { type: message.type, action: message.action, url: room.presentation.open.url, index: message.index };
   }
 
   // 先同步转发消息，确保课件立即打开

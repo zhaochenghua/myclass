@@ -1,5 +1,10 @@
 // Shared with the iPhone/iPad app; it must live inside the iOS Service Worker scope.
 const coursewarePages = import('./ios/js/coursewarePages.mjs');
+const embeddedVideos = import('./ios/js/embeddedVideos.mjs?v=20261015-video').then(({ createEmbeddedVideos }) => createEmbeddedVideos({
+  container: document.getElementById('annotationToolbar'),
+  getContext: () => state.presentationMode === 'courseware' && state.courseware ? { url: state.courseware.url, page: state.courseware.page } : null,
+  send: payload => sendMessage(payload)
+})).catch(() => ({ receive() {} }));
 let studentRoller = null;
 // A document reload starts a new visit; a socket reconnect does not.
 let viewerJoinedThisPage = false;
@@ -1143,6 +1148,9 @@ async function handleSignalMessage(message) {
   if (Number.isFinite(message.presentationRevision)) state.presentationRevision = message.presentationRevision;
   switch (message.type) {
     case 'server.pong':
+      break;
+    case 'courseware.embedded-video':
+      (await embeddedVideos).receive(message);
       break;
     case 'annotations.saved':
       break;

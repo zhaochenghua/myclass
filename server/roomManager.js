@@ -183,7 +183,7 @@ class RoomManager {
       }
       const sent = this.forwardNow(senderSocket, payload, opening ? notes : null);
       if (opening && notes) {
-        const snapshot = { type: 'annotations.snapshot', url: payload.url, ...notes };
+        const snapshot = { type: 'annotations.snapshot', url: payload.url, presentationRevision: room.presentationRevision, ...notes };
         sendJson(room.viewerSocket, snapshot);
         sendJson(room.teacherSocket, snapshot);
       }

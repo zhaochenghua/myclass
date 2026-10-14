@@ -692,7 +692,27 @@ app.get(`${PATH_PREFIX}/public/courseware/:file.metadata`, async (req, res, next
     const item = (await readCoursewareIndex()).find(item => item.url === url);
     if (!item) return res.sendStatus(404);
     res.setHeader('Cache-Control', 'no-cache');
-    res.json({ conversion: item.conversion || null });
+    // PDF page mapping must stay fast even when an old PPTX needs extraction.
+    if (req.query.embedded === '1' && item.originalUrl?.endsWith('.pptx')) {
+      try {
+        const { videos } = await coursewareStore.embeddedVideos(item);
+        res.json({ conversion: item.conversion || null, videos: videos.map(({ file, ...video }) => video) });
+      } catch (error) {
+        console.warn('Embedded video metadata:', error.message);
+        res.json({ conversion: item.conversion || null, videos: [], videoWarning: '内嵌视频提取失败，课件仍可正常翻页' });
+      }
+    } else res.json({ conversion: item.conversion || null });
+  } catch (error) { next(error); }
+});
+app.get(`${PATH_PREFIX}/public/courseware/:file.video/:index`, async (req, res, next) => {
+  try {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(req.params.file) || !/^\d{1,3}$/.test(req.params.index)) return res.sendStatus(404);
+    const item = (await readCoursewareIndex()).find(item => item.id === req.params.file);
+    if (!item) return res.sendStatus(404);
+    const { directory, videos } = await coursewareStore.embeddedVideos(item);
+    const video = videos[Number(req.params.index)];
+    if (!video || !(await readCoursewareIndex()).some(entry => entry.id === item.id)) return res.sendStatus(404);
+    res.sendFile(path.join(directory, video.file), { dotfiles: 'allow', acceptRanges: true });
   } catch (error) { next(error); }
 });
 app.use(`${PATH_PREFIX}/public/courseware`, (req, res, next) => {
