@@ -1,5 +1,12 @@
 // Shared with the iPhone/iPad app; it must live inside the iOS Service Worker scope.
 const coursewarePages = import('./ios/js/coursewarePages.mjs');
+const coursewareLinkControls = import('./ios/js/coursewareLinks.mjs?v=20261015-links').then(({ createCoursewareLinks }) => createCoursewareLinks({
+  container: document.getElementById('coursewareLinkOverlay'),
+  getSurface: () => document.getElementById('coursewareCanvas'),
+  getDocument: () => state.courseware?.pdfDocument,
+  onExternal: url => window.open(url, '_blank', 'noopener,noreferrer'),
+  onInternal: page => showCoursewarePage(page)
+})).catch(() => ({ clear() {}, render() {}, update() {}, setInteractive() {} }));
 const embeddedVideos = import('./ios/js/embeddedVideos.mjs?v=20261015-video').then(({ createEmbeddedVideos }) => createEmbeddedVideos({
   container: document.getElementById('annotationToolbar'),
   getContext: () => state.presentationMode === 'courseware' && state.courseware ? { url: state.courseware.url, page: state.courseware.page } : null,
@@ -1523,6 +1530,7 @@ function cleanupPeerConnection() {
 
 function openCourseware(message) {
   displayedFileUrl = message.url;
+  coursewareLinkControls.then(links => links.clear());
   const url = typeof message.url === 'string' ? message.url : '';
   if (!url) {
     return;
@@ -1668,6 +1676,7 @@ function restoreClassroomPresentation(snapshot) {
 }
 
 function showCoursewareViewForZip(courseware) {
+  coursewareLinkControls.then(links => links.clear());
   state.presentationMode = 'courseware';
   state.downloadOriginalUrl = courseware.url;
   showDownloadButtonIfAvailable();
@@ -1692,6 +1701,7 @@ function showCoursewareViewForZip(courseware) {
 // ---- 图片投屏 ----
 
 function showCoursewareViewForImage(info) {
+  coursewareLinkControls.then(links => links.clear());
   state.presentationMode = 'courseware';
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
@@ -2517,6 +2527,7 @@ function applyCoursewareImageViewTransform() {
     canvas.style.transformOrigin = 'center center';
     canvas.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${view.scale})`;
     drawAnnotations();
+    coursewareLinkControls.then(links => links.update());
     reportViewerCoursewareViewport();
     return;
   }
@@ -3115,6 +3126,7 @@ async function renderCoursewarePage() {
       updatePageNavButtons();
       sendCoursewareState();
       updateVideoPresentation();
+      coursewareLinkControls.then(links => links.render(courseware.page));
     }
   } catch (error) {
     if (error?.name !== 'RenderingCancelledException' && state.courseware === courseware) {
@@ -3262,6 +3274,7 @@ function clearCoursewareCanvas() {
   canvas.removeAttribute('style');
   canvas.width = 1;
   canvas.height = 1;
+  coursewareLinkControls.then(links => links.clear());
 }
 
 function normalizePageNumber(value) {
@@ -4085,6 +4098,7 @@ function showJoinView() {
 }
 
 function showVideoView() {
+  coursewareLinkControls.then(links => links.clear());
   resetLockedVideoPan();
   state.presentationMode = 'video';
   setAnnotationTool('pen');

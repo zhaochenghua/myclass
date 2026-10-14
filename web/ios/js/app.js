@@ -31,9 +31,11 @@ import { mediaKind, prepareImageFile, ensureMediaUploaded } from './mediaFiles.m
 import { AnnotationBoard } from './annotation.js?v=20261014-file-notes';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261012-ios3';
 import { ListPreviews, playbackProgress } from './listPreviews.mjs?v=20261012-ios3';
+import { createCoursewareLinks } from './coursewareLinks.mjs?v=20261015-links';
 
 let mediaListPreviews = null;
 let coursewareListPreviews = null;
+let coursewareLinkControls = null;
 function showView(name) {
   if (name !== 'MediaQueue') { mediaListPreviews?.destroy(); mediaListPreviews = null; }
   if (name !== 'CoursewareList') { coursewareListPreviews?.destroy(); coursewareListPreviews = null; }
@@ -1846,6 +1848,7 @@ function syncAnnotationCanvas(bar) {
   if (!board || !canvas) return;
   canvas.hidden = !(board.penMode || board.count > 0);
   canvas.classList.toggle('is-pen', board.penMode);
+  if (bar === CW_BAR) coursewareLinkControls?.setInteractive(!board.penMode);
 }
 
 function refreshAnnotationBar(bar) {
@@ -2099,6 +2102,7 @@ async function renderCoursewarePage(page, { atBottom = false } = {}) {
     // 显式锁定显示比例：canvas 按页面比例铺满舞台宽度（FitWidth）
     applyCoursewareSurfaceRatio(canvas, canvas.width, canvas.height);
     applyCoursewarePageAnnotations(target);
+    coursewareLinkControls?.render(target);
     state.cwBoard?.setEnabled(true);
     // 换页后复位视口并同步大屏（同安卓 showPage → setImage → resetViewport）
     resetCoursewareViewport({ atBottom });
@@ -2147,6 +2151,7 @@ function releaseCoursewarePreview() {
   $('cwAnnotationBar').hidden = true;
   $('cwStageHint').hidden = false;
   $('cwStageHint').textContent = '正在打开课件...';
+  coursewareLinkControls?.clear();
 }
 
 function clearCourseware() {
@@ -2301,6 +2306,7 @@ function applyCoursewareView({ notify = true, force = false } = {}) {
     `translate(${view.translateX}px, ${view.translateY}px) scale(${view.scale})`;
   // 显示矩形变化后按新矩形重画笔迹（笔迹坐标以内容显示矩形为基准）
   state.cwBoard?.invalidate();
+  coursewareLinkControls?.update();
   updateCoursewareStatus();
   if (notify) notifyCoursewareViewport(force);
 }
@@ -3145,6 +3151,13 @@ function bindStaticEvents() {
     container: document.querySelector('.cw-footer .classroom-actions'), remote: true,
     getContext: () => state.screen === 'CoursewarePlay' && state.courseware && !state.coursewareSuspended ? { url: state.courseware.url, page: state.courseware.page } : null,
     send: payload => state.signaling?.send(payload) ?? false
+  });
+  coursewareLinkControls = createCoursewareLinks({
+    container: $('cwLinkOverlay'),
+    getSurface: coursewareSurface,
+    getDocument: () => state.cwPdf.doc,
+    onExternal: url => window.open(url, '_blank', 'noopener,noreferrer'),
+    onInternal: page => jumpToCoursewarePage(page)
   });
   setupClipboardLink({
     getSession: () => ({ token: state.token, apiBase: state.apiBase }),

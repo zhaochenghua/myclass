@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20261014-clipboard" />
+    <link rel="stylesheet" href="./style.css?v=20261015-courseware-links" />
   </head>
   <body>
     <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
@@ -291,6 +291,7 @@
 
         <div class="cw-stage" id="cwStage">
           <canvas id="cwPageCanvas" hidden></canvas>
+          <div class="courseware-link-overlay" id="cwLinkOverlay" hidden aria-label="课件链接"></div>
           <img class="cw-page-image" id="cwPageImage" alt="" hidden />
           <canvas class="annotation-canvas" id="cwAnnotationCanvas" hidden></canvas>
           <p class="cw-stage-hint" id="cwStageHint">正在打开课件...</p>
@@ -406,6 +407,6 @@
 
     <div class="toast" id="toast" hidden></div>
 
-    <script type="module" src="./js/app.js?v=20261015-embedded-video"></script>
+    <script type="module" src="./js/app.js?v=20261015-courseware-links"></script>
   </body>
 </html>

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>上课投屏平台</title>
-    <link rel="stylesheet" href="./style.css?v=20261014-blackboard-roll">
+    <link rel="stylesheet" href="./style.css?v=20261015-courseware-links">
   </head>
   <body>
     <main class="stage" aria-live="polite">
@@ -116,6 +116,7 @@
       <section class="video-view" id="videoView" hidden>
         <video id="remoteVideo" autoplay playsinline muted></video>
         <canvas class="courseware-canvas" id="coursewareCanvas" hidden></canvas>
+        <div class="courseware-link-overlay" id="coursewareLinkOverlay" hidden aria-label="课件链接"></div>
         <!-- 图片课件内容层：与 PDF 页同层级显示，标注画布叠放其上 -->
         <div class="image-player-overlay" id="imagePlayerOverlay" hidden>
           <img id="coursewareImage" alt="">
@@ -336,6 +337,6 @@
     <script defer src="./studentRoster.js?v=20260919g"></script>
     <script defer src="./touchCalibrationMath.js?v=20261014-calibration"></script>
     <script defer src="./touchCalibration.js?v=20261014-home-only"></script>
-    <script defer src="./app.js?v=20261015-embedded-video"></script>
+    <script defer src="./app.js?v=20261015-courseware-links"></script>
   </body>
 </html>

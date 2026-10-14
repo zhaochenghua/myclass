@@ -700,6 +700,25 @@ input::placeholder {
   transform-origin: center center;
 }
 
+.courseware-link-overlay {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.courseware-link-hit {
+  position: absolute;
+  display: block;
+  border-radius: 2px;
+  outline: none;
+  pointer-events: auto;
+}
+
+.courseware-link-hit:focus-visible {
+  outline: 2px solid #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
 /* 上面的 display:block 优先级高于 [hidden] 的 UA 样式，必须显式覆盖 */
 #cwPageCanvas[hidden],
 .cw-page-image[hidden] {
