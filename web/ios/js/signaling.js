@@ -69,6 +69,8 @@ export class SignalingClient {
   }
 
   send(payload) {
+    if (payload.type === 'courseware.open') this.annotationUrl = payload.url;
+    if (payload.type === 'courseware.annotation' && this.annotationUrl) payload = { ...payload, url: this.annotationUrl };
     if (!this.isOpen()) return false;
     try {
       this.socket.send(JSON.stringify(payload));
@@ -228,6 +230,11 @@ export class SignalingClient {
         case 'student.roll.result':
           this.handlers.onStudentRoll?.(message);
           break;
+        case 'annotations.snapshot':
+          this.handlers.onAnnotationsSnapshot?.(message);
+          break;
+        case 'annotations.saved':
+          break;
         case 'viewer.online':
         case 'viewer.reconnecting':
           this.handlers.onViewerConnection?.(message.type === 'viewer.online');
@@ -265,6 +272,7 @@ export class SignalingClient {
           this.handlers.onCoursewareVideoState?.(message);
           break;
         case 'viewer.courseware.open':
+          this.annotationUrl = message.url;
           this.handlers.onViewerCoursewareOpen?.(message);
           break;
         case 'viewer.courseware.close':

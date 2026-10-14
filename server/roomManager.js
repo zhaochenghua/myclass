@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { PresentationState } = require('./presentationState');
+const { normalizeAnnotation } = require('./annotationStore');
 
 const SOCKET_OPEN = 1;
 const DEFAULT_ROOM_TTL_MS = 2 * 60 * 60 * 1000;
@@ -25,6 +26,7 @@ class RoomManager {
     this.roomTtlMs = options.roomTtlMs || DEFAULT_ROOM_TTL_MS;
     this.viewerGraceMs = options.viewerGraceMs || DEFAULT_VIEWER_GRACE_MS;
     this.savePlayback = options.savePlayback;
+    this.fileNotes = options.fileNotes;
     this.recordUsage = options.recordUsage;
     this.rooms = new Map();
     this.socketIndex = new Map();
@@ -153,7 +155,55 @@ class RoomManager {
     return { ok: true, room };
   }
 
-  forward(senderSocket, payload) {
+  forward(senderSocket, payload, directUser = null) {
+    if (!this.fileNotes) return this.forwardNow(senderSocket, payload);
+    const binding = this.socketIndex.get(senderSocket);
+    const room = binding && this.rooms.get(binding.code);
+    if (!room) return Promise.resolve(false);
+    const pending = (room.operations || Promise.resolve()).then(async () => {
+      if (this.socketIndex.get(senderSocket) !== binding) return false;
+      const opening = ['courseware.open', 'viewer.courseware.open'].includes(payload.type);
+      const annotating = ['courseware.annotation', 'viewer.annotation'].includes(payload.type);
+      let notes = null;
+      if (opening) {
+        const userId = binding.role === 'teacher' ? room.teacherInfo?.id : directUser?.id;
+        notes = await this.fileNotes(userId, payload.url);
+        room.notesUserId = notes ? userId : null;
+        // Prefix active stroke IDs by connection to avoid reusing v1/t1 after
+        // browser reloads and to allow two classrooms to annotate one file.
+      } else if (annotating && room.notesUserId && room.presentation.open) {
+        if (payload.url && new URL(payload.url, 'http://local').pathname !== new URL(room.presentation.open.url, 'http://local').pathname) return false;
+        const normalized = normalizeAnnotation(payload, room.presentation.page);
+        senderSocket.annotationSession ||= crypto.randomUUID();
+        const persisted = { ...normalized };
+        if (persisted.strokeId) persisted.strokeId = senderSocket.annotationSession + ':' + persisted.strokeId;
+        notes = await this.fileNotes(room.notesUserId, room.presentation.open.url, persisted, binding.role);
+        payload = { ...normalized, type: payload.type };
+        if (!notes) throw new Error('文件已删除或无权保存笔记');
+      }
+      const sent = this.forwardNow(senderSocket, payload, opening ? notes : null);
+      if (opening && notes) {
+        const snapshot = { type: 'annotations.snapshot', url: payload.url, ...notes };
+        sendJson(room.viewerSocket, snapshot);
+        sendJson(room.teacherSocket, snapshot);
+      }
+      if (annotating && notes) {
+        // The journal is authoritative even when two classrooms share a file.
+        // Do not replace a live canvas here: the sender may already be drawing
+        // its next stroke. Reopening restores the complete saved document.
+        sendJson(senderSocket, { type: 'annotations.saved', url: room.presentation.open.url });
+      }
+      return sent;
+    }).catch(error => {
+      console.error('File annotation operation failed:', error.message);
+      sendJson(senderSocket, { type: 'error', message: '笔记保存或恢复失败，请勿关闭页面：' + error.message });
+      return false;
+    });
+    room.operations = pending;
+    return pending;
+  }
+
+  forwardNow(senderSocket, payload, savedNotes = null) {
     const binding = this.socketIndex.get(senderSocket);
     if (!binding) {
       return false;
@@ -175,6 +225,12 @@ class RoomManager {
     }
     const samePresentation = payload.type === 'courseware.open' && room.presentation.open?.url === payload.url;
     room.presentation.apply(payload, binding.role);
+    if (savedNotes) {
+      room.presentation.maxPoints = Infinity;
+      room.presentation.strokes = [...savedNotes.strokes, ...savedNotes.active];
+      room.presentation.active.clear();
+      room.presentation.recount();
+    }
     // Persist only the viewer's rendered page, never an unconfirmed navigation
     // request. Old Android and iOS clients already produce these acknowledgements.
     if (payload.type === 'courseware.state' && binding.role === 'viewer' &&

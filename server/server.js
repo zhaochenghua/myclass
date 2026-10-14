@@ -725,6 +725,7 @@ app.use(
 const roomManager = new RoomManager({
   recordUsage,
   savePlayback: (...args) => coursewareStore.savePlayback(...args),
+  fileNotes: (...args) => coursewareStore.fileNotes(...args),
   roomTtlMs: ROOM_TTL_MS,
   viewerGraceMs: VIEWER_GRACE_MS
 });

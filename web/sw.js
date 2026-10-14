@@ -14,7 +14,7 @@
 
 // 每次发版请同时提升 CACHE_NAME 与下方资源上的 ?v= 版本号（与 ios/index.html 保持一致），
 // 否则旧设备会继续命中旧缓存；页面内的"清除缓存并更新"是用户的兜底手段。
-const CACHE_NAME = 'myclass-ios-v20-clipboard-link';
+const CACHE_NAME = 'myclass-ios-v21-file-notes';
 // 注意：带 ?v= 的条目必须与源码里的引用完全一致（ios/index.html 的 link/script、
 // ios/js/*.js 里的 import）。漏一个带版本号的模块，设备首次离线打开时该 import 会失败，
 // 整个应用起不来、页面只剩初始的“连接投屏服务”屏（且不会有任何网络请求）。
@@ -27,14 +27,14 @@ const SHELL_FILES = [
   './ios/manifest.webmanifest',
   './ios/js/app.js',
   './ios/js/clipboardLink.mjs?v=20261014-clipboard',
-  './ios/js/app.js?v=20261014-clipboard',
+  './ios/js/app.js?v=20261014-file-notes',
   './ios/js/mediaFiles.mjs?v=20261012-ios3',
   './ios/js/listPreviews.mjs?v=20261012-ios3',
   './ios/js/courseware.js?v=20261012-ios3',
   './ios/js/pipeline.js?v=20260920a',
   './ios/js/mediaGeometry.js?v=20260920a',
   './ios/js/classroom.js?v=20260919f',
-  './ios/js/signaling.js?v=20260919f',
+  './ios/js/signaling.js?v=20261014-file-notes',
   './ios/js/util.js?v=20260919f',
   './ios/js/util.js',
   './ios/js/signaling.js',
@@ -42,6 +42,7 @@ const SHELL_FILES = [
   './ios/js/pipeline.js',
   './ios/js/courseware.js',
   './ios/js/annotation.js',
+  './ios/js/annotation.js?v=20261014-file-notes',
   './ios/js/pdfview.js',
   './ios/js/pdfview.js?v=20261012-ios3',
   './ios/js/coursewarePages.mjs',

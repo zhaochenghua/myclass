@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { AnnotationStore } = require('./annotationStore');
 
 const OFFICE = new Set(['.ppt', '.pptx', '.doc', '.docx']);
 const VIDEO = new Set(['.mp4', '.mov', '.avi', '.webm', '.mkv', '.3gp']);
@@ -23,6 +24,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
   const indexPath = path.join(root, 'index.json');
   const objectsRoot = path.join(root, '.objects');
   fs.mkdirSync(objectsRoot, { recursive: true });
+  const annotations = new AnnotationStore(path.join(root, '.annotations'));
   let writes = Promise.resolve();
   let initialization;
   const preparations = new Map();
@@ -294,6 +296,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
       // Commit metadata first: a failed index write leaves all files intact.
       // If interrupted afterwards, leftover files stay unlisted, never shared.
       await saveIndex(remaining);
+      await annotations.remove(id);
       if (!item.linkUrl) {
         for (const ext of EXTENSIONS) await fs.promises.rm(path.join(root, `${id}${ext}`), { force: true });
         if (item.storageKey && !preparations.has(item.storageKey) && !remaining.some(entry => entry.storageKey === item.storageKey)) {
@@ -340,7 +343,21 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     });
   }
 
-  return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink };
+  // File IDs, not titles or content hashes, own notes. Copies belonging to
+  // different teachers therefore never inherit each other's handwriting.
+  function fileNotes(userId, url, message, role) {
+    return mutate(async () => {
+      let pathname;
+      try { pathname = new URL(url, 'http://local').pathname; } catch { return null; }
+      const item = (await readIndex()).find(entry => entry.url === pathname);
+      if (!userId || !item || item.linkUrl || !/\.(pdf|jpe?g|png|gif|webp|bmp)$/i.test(pathname) ||
+          (item.userId && !['admin', 'legacy', userId].includes(item.userId))) return null;
+      const notes = message ? await annotations.apply(item.id, message, role) : await annotations.load(item.id);
+      return message ? true : JSON.parse(JSON.stringify({ strokes: notes.strokes, active: [...notes.active.values()] }));
+    });
+  }
+
+  return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink, fileNotes };
 }
 
 module.exports = { createCoursewareStore };

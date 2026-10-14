@@ -236,6 +236,8 @@ export class AnnotationBoard {
       colorHex: isEraser ? ERASER_COLOR : String(payload.colorHex || payload.color || DEFAULT_COLOR),
       width: Number.isFinite(width) && width > 0 ? width : PEN_WIDTH,
       isEraser,
+      mode: payload.mode || 'solid',
+      lineMode: payload.lineMode === true,
       points: [first]
     });
     this.invalidate();
@@ -249,7 +251,10 @@ export class AnnotationBoard {
     const raw = Array.isArray(payload.points) ? payload.points : [];
     for (const item of raw) {
       const point = normalizeRemotePoint(item);
-      if (point) stroke.points.push(point);
+      if (point) {
+        if (stroke.lineMode) stroke.points = [stroke.points[0], point];
+        else stroke.points.push(point);
+      }
     }
     this.invalidate();
   }
@@ -366,6 +371,11 @@ export class AnnotationBoard {
       ctx.fillStyle = stroke.colorHex;
     }
     ctx.lineWidth = stroke.width;
+    if (!stroke.isEraser) {
+      if (stroke.mode === 'dashed') ctx.setLineDash([stroke.width * 2.2, stroke.width * 1.6]);
+      else if (stroke.mode === 'dashdot') ctx.setLineDash([stroke.width * 2.2, stroke.width * 1.2, 0.1, stroke.width * 1.2]);
+      else if (stroke.mode === 'highlighter') { ctx.lineWidth = stroke.width * 5; ctx.globalAlpha = 0.45; }
+    }
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 

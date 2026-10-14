@@ -79,7 +79,9 @@ function setupWebSocket(server, options) {
     });
 
     socket.on('message', (rawMessage) => {
-      handleMessage(socket, rawMessage, roomManager, options);
+      socket.incoming = (socket.incoming || Promise.resolve())
+        .then(() => handleMessage(socket, rawMessage, roomManager, options))
+        .catch(error => { logWs('message failed: ' + error.message); sendJson(socket, { type: 'error', message: '操作失败，请重试' }); });
     });
 
     socket.on('close', (closeCode, reason) => {
@@ -135,8 +137,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
       handleViewerJoin(socket, message, roomManager, options);
       break;
     case 'teacher.join':
-      handleTeacherJoin(socket, message, roomManager, options);
-      break;
+      return handleTeacherJoin(socket, message, roomManager, options);
     case 'webrtc.offer':
     case 'webrtc.answer':
     case 'webrtc.ice-candidate':
@@ -160,8 +161,7 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'student.selection.set':
     case 'student.selection.get':
     case 'student.selection.state':
-      handleForward(socket, message, roomManager, options);
-      break;
+      return handleForward(socket, message, roomManager, options);
     default:
       sendJson(socket, {
         type: 'error',
@@ -235,7 +235,7 @@ async function handleTeacherJoin(socket, message, roomManager, options) {
   });
 }
 
-function handleForward(socket, message, roomManager, options) {
+async function handleForward(socket, message, roomManager, options) {
   const binding = roomManager.getBinding(socket);
   if (!binding) {
     sendJson(socket, { type: 'error', message: '尚未加入课堂' });
@@ -273,7 +273,7 @@ function handleForward(socket, message, roomManager, options) {
       payload.confirmed = message.confirmed === true;
       payload.error = String(message.error || '').slice(0, 160);
     }
-    if (!roomManager.forward(socket, payload) && binding.role === 'teacher') {
+    if (!(await roomManager.forward(socket, payload)) && binding.role === 'teacher') {
       sendJson(socket, { type: 'student.selection.state', requestId: message.requestId, classId: '', mode: 'name', count: 50,
         confirmed: false, error: '大屏暂时未连接，请恢复连接后重试' });
     }
@@ -305,7 +305,7 @@ function handleForward(socket, message, roomManager, options) {
       payload.status = message.status;
       payload.message = String(message.message || '').slice(0, 160);
     }
-    if (!roomManager.forward(socket, payload) && binding.role === 'teacher') {
+    if (!(await roomManager.forward(socket, payload)) && binding.role === 'teacher') {
       sendJson(socket, { type: 'student.roll.result', requestId: message.requestId,
         status: 'error', message: '大屏暂时未连接，请稍后重试' });
     }
@@ -313,7 +313,13 @@ function handleForward(socket, message, roomManager, options) {
   }
 
   // 先同步转发消息，确保课件立即打开
-  roomManager.forward(socket, message);
+  let directUser = null;
+  if (message.type === 'viewer.courseware.open') {
+    directUser = await options.verifyTeacherToken?.(message.token);
+    const { token, ...safeMessage } = message;
+    message = safeMessage;
+  }
+  await roomManager.forward(socket, message, directUser);
 
   // 异步查找原始文件下载地址，通过 courseware.original 消息发送
   if (message.type === 'courseware.open' && typeof message.url === 'string') {

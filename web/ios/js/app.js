@@ -19,14 +19,14 @@ import {
   isStandalone,
   isIos
 } from './util.js?v=20260919f';
-import { SignalingClient, resolveWebSocketUrl } from './signaling.js?v=20260919f';
+import { SignalingClient, resolveWebSocketUrl } from './signaling.js?v=20261014-file-notes';
 import { createClassroom } from './classroom.js?v=20260919f';
 import { LivePublisher } from './publisher.js';
 import { MediaPipeline } from './pipeline.js?v=20260920a';
 import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
 import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261012-ios3';
 import { mediaKind, prepareImageFile, ensureMediaUploaded } from './mediaFiles.mjs?v=20261012-ios3';
-import { AnnotationBoard } from './annotation.js';
+import { AnnotationBoard } from './annotation.js?v=20261014-file-notes';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261012-ios3';
 import { ListPreviews, playbackProgress } from './listPreviews.mjs?v=20261012-ios3';
 
@@ -433,6 +433,7 @@ function ensureSignaling() {
       onViewerCoursewareOpen: handleViewerCoursewareOpen,
       onViewerCoursewareClose: handleViewerCoursewareClose,
       onViewerAnnotation: handleViewerAnnotation,
+      onAnnotationsSnapshot: restoreFileAnnotations,
       onSignalError: (message) => toast(message, { warn: true }),
       onDisconnected: () => {
         if (state.joined) $('connectHint').textContent = '连接已断开，正在重新连接...';
@@ -1887,6 +1888,29 @@ function sendAnnotation(payload, page) {
       break;
     default:
       break;
+  }
+}
+
+/** Server restores saved notes after opening a file; never emits clear/ink. */
+function restoreFileAnnotations(message) {
+  const matches = url => {
+    try { return url && new URL(url, location.href).href === new URL(message.url, location.href).href; } catch { return false; }
+  };
+  const strokes = [...(message.strokes || []), ...(message.active || [])].map(s => ({
+    ...s, id: s.key || s.strokeId, colorHex: s.color || '#ff4d6d', width: Number(s.width) || 4,
+    points: s.points || [], page: Number(s.page) || 1
+  }));
+  if (state.screen === 'MediaCast' && matches(state.media.queue[state.media.index]?.url)) {
+    state.mediaBoard?.replaceStrokes(strokes);
+  } else if (matches(state.courseware?.url) && !state.coursewareSuspended) {
+    state.cwStrokes.store.clear();
+    for (const stroke of strokes) {
+      const pageStrokes = state.cwStrokes.store.get(stroke.page) || [];
+      pageStrokes.push(stroke); state.cwStrokes.store.set(stroke.page, pageStrokes);
+    }
+    const page = state.courseware.page || 1;
+    state.cwStrokes.page = page;
+    state.cwBoard?.replaceStrokes(state.cwStrokes.store.get(page) || []);
   }
 }
 

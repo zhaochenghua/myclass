@@ -1144,6 +1144,11 @@ async function handleSignalMessage(message) {
   switch (message.type) {
     case 'server.pong':
       break;
+    case 'annotations.saved':
+      break;
+    case 'annotations.snapshot':
+      restoreFileAnnotations(message);
+      break;
     case 'room.snapshot':
       restoreClassroomPresentation(message.presentation);
       setConnectionNotice(message.presentation?.truncated ? '笔迹过多，较早的笔迹未能恢复' : '');
@@ -1219,6 +1224,7 @@ async function handleSignalMessage(message) {
       handleTeacherOrientation(message);
       break;
     case 'courseware.open':
+      state.coursewareFromViewer = false;
       if (state.blackboard.active) toggleBlackboard(false);
       openCourseware(message);
       break;
@@ -1231,6 +1237,7 @@ async function handleSignalMessage(message) {
       showCoursewarePage(message.page);
       break;
     case 'courseware.close':
+      state.coursewareFromViewer = false;
       closeCourseware('课件已结束');
       break;
     case 'courseware.video.control':
@@ -1246,6 +1253,7 @@ async function handleSignalMessage(message) {
       handleCoursewareOriginal(message);
       break;
     case 'teacher.stop':
+      state.coursewareFromViewer = false;
       // teacher.stop 仅表示停止推流/课件播放，手机端仍在线，不清除登录态
       state.teacherConnected = false;
       cleanupPeerConnection();
@@ -1259,6 +1267,7 @@ async function handleSignalMessage(message) {
       setWaitingStatus('连接码已过期，正在创建新课堂...');
       break;
     case 'error':
+      if (String(message.message).includes('笔记')) alert(message.message);
       setWaitingStatus(message.message || '服务端返回错误');
       break;
     default:
@@ -1505,6 +1514,7 @@ function cleanupPeerConnection() {
 }
 
 function openCourseware(message) {
+  displayedFileUrl = message.url;
   const url = typeof message.url === 'string' ? message.url : '';
   if (!url) {
     return;
@@ -1599,6 +1609,21 @@ function openCourseware(message) {
   }
 }
 
+let displayedFileUrl = null;
+function sameFileUrl(a, b) {
+  if (!a || !b) return false;
+  try { return new URL(a, location.href).href === new URL(b, location.href).href; } catch { return false; }
+}
+function restoreFileAnnotations(snapshot) {
+  if (!sameFileUrl(displayedFileUrl, snapshot.url)) return;
+  state.annotations.strokes = [...(snapshot.strokes || []), ...(snapshot.active || [])].map(s => ({
+    ...s, points: normalizeAnnotationPoints(s.points), color: s.isEraser ? '#000' : (s.color || '#ff4d6d'),
+    width: Number(s.width) || 4, page: Number(s.page) || 1
+  }));
+  state.annotations.activeStrokes.clear();
+  scheduleAnnotationRedraw();
+  updateAnnotationButtons();
+}
 function restoreClassroomPresentation(snapshot) {
   if (!snapshot?.open) {
     if (state.presentationMode === 'courseware') {
@@ -1607,10 +1632,11 @@ function restoreClassroomPresentation(snapshot) {
     }
     return;
   }
+  const sameImage = sameFileUrl(displayedFileUrl, snapshot.open.url) && !elements.imagePlayerOverlay.hidden;
   // A repeated snapshot replaces the state; it must never append duplicate strokes.
   if (state.courseware?.url === snapshot.open.url && state.courseware.pdfDocument) {
     showCoursewarePage(snapshot.open.page);
-  } else {
+  } else if (!(sameFileUrl(displayedFileUrl, snapshot.open.url) && !elements.imagePlayerOverlay.hidden)) {
     openCourseware(snapshot.open);
   }
   const strokeFromSnapshot = s => ({
@@ -1628,7 +1654,7 @@ function restoreClassroomPresentation(snapshot) {
       state.annotations.strokes.push(strokeFromSnapshot(s));
     }
   }
-  if (snapshot.viewport) handleCoursewareImageViewport(snapshot.viewport);
+  if (snapshot.viewport && !sameImage) handleCoursewareImageViewport(snapshot.viewport);
   scheduleAnnotationRedraw();
   updateAnnotationButtons();
 }
@@ -2152,7 +2178,7 @@ function flushTeacherActiveStrokes() {
 
 /** 当前课件页码；非课件场景返回 0，表示不区分页 */
 function currentCoursewarePage() {
-  return state.courseware ? state.courseware.page : 0;
+  return state.courseware ? state.courseware.page : (!elements.imagePlayerOverlay.hidden ? 1 : 0);
 }
 
 /** 当前页的笔迹（page 为 0 的旧笔迹按当前页处理，兼容旧端） */
@@ -2280,7 +2306,7 @@ function viewerAnnotationEnabled() {
 }
 
 function sendViewerAnnotation(payload) {
-  sendMessage(Object.assign({ type: 'viewer.annotation' }, payload));
+  sendMessage(Object.assign({ type: 'viewer.annotation', url: displayedFileUrl }, payload));
 }
 
 function syncViewerAnnotationBegin(pointerId) {
@@ -2298,6 +2324,7 @@ function syncViewerAnnotationBegin(pointerId) {
     width: stroke.width,
     isEraser: !!stroke.isEraser,
     mode: stroke.mode || 'solid',
+    lineMode: !!stroke.lineMode,
     page: currentCoursewarePage(),
     points: [stroke.points[0]]
   });
@@ -2919,6 +2946,7 @@ function showDirectTeachUI() {
 }
 
 function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {
+  displayedFileUrl = null;
   state.pendingTeacherViewport = null;
   // 1. 先立即切回主页（必须最先执行，确保画面立刻切换）
   try { document.body.classList.remove('is-streaming'); } catch {}
@@ -4233,6 +4261,7 @@ function openDirectCourseware(cw) {
   // 通知手机端同步打开课件翻页页面
   sendMessage({
     type: 'viewer.courseware.open',
+    token: state.teacherToken,
     url: cw.url,
     title: cw.title,
     page: 1,

@@ -1,6 +1,6 @@
 // One bounded snapshot per classroom, updated even while the viewer is offline.
 class PresentationState {
-  constructor() { this.reset(); }
+  constructor({ maxPoints = 500000 } = {}) { this.maxPoints = maxPoints; this.reset(); }
   reset() {
     this.open = null;
     this.page = 1;
@@ -53,7 +53,13 @@ class PresentationState {
       }
       case 'points': {
         const stroke = this.active.get(id);
-        if (stroke) { for (const point of points) stroke.points.push(point); this.points += points.length; }
+        if (stroke) {
+          if (stroke.lineMode && points.length) {
+            this.points -= stroke.points.length;
+            stroke.points = [stroke.points[0], points.at(-1)];
+            this.points += stroke.points.length;
+          } else { for (const point of points) stroke.points.push(point); this.points += points.length; }
+        }
         break;
       }
       case 'end': {
@@ -78,11 +84,11 @@ class PresentationState {
       }
     }
     // Keep memory bounded; evict whole oldest strokes rather than corrupting JSON.
-    while (this.points > 500000 && this.strokes.length) {
+    while (this.points > this.maxPoints && this.strokes.length) {
       this.points -= this.strokes.shift().points.length;
       this.truncated = true;
     }
-    if (this.points > 500000) {
+    if (this.points > this.maxPoints) {
       this.active.clear();
       this.truncated = true;
       this.recount();
