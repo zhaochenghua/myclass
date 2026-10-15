@@ -4,6 +4,7 @@ const {
   Menu,
   Tray,
   desktopCapturer,
+  globalShortcut,
   ipcMain,
   nativeImage,
   screen,
@@ -13,6 +14,7 @@ const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { WebSocket } = require('ws');
+const { createDesktopTools } = require('./desktop-tools');
 
 const DEFAULT_SERVER_URL = 'http://10.30.13.1/myclass';
 const APP_ICON_PATH = path.join(__dirname, 'assets', 'icon.ico');
@@ -32,7 +34,7 @@ let localAudioMutedByApp = false;
 let localAudioPreviousMute = null;
 let audioStateFilePath = null;
 let restoringAudioForQuit = false;
-let cursorHighlightWindow = null;
+let desktopTools = null;
 let cursorHighlightTimer = null;
 let knownNonPresentationSourceId = null;
 let lastAutoSwitchFromId = null;
@@ -955,108 +957,34 @@ function installDisplayMediaHandler() {
   });
 }
 
-// --- Cursor highlight: a transparent, always-on-top, click-through overlay that
-// draws a colored dot at the cursor. The overlay window is created ONCE and
-// covers the whole virtual screen; the dot is drawn INSIDE it (CSS transform)
-// at the cursor position reported over IPC. We deliberately never move the window:
-// on Windows with fractional DPI scaling (125%/150%) or mixed-DPI monitors,
-// repeatedly calling setPosition() makes Chromium round the DIP->physical pixel
-// conversion (electron#10862), and while getDisplayMedia is capturing, DWM can
-// present the moving transparent window at stale positions - the mark then slowly
-// drifts toward the bottom-right and away from the real cursor. A static overlay
-// cannot drift: the dot always sits exactly on the latest cursor coordinate.
-// Because the overlay lives on the shared screen, getDisplayMedia captures it,
-// so students still see the cursor emphasized on the big display.
-// 只保留中心强调点（外圈按课堂反馈去掉），点直径即覆盖层元素尺寸。
-const CURSOR_DOT_SIZE = 14;
-const CURSOR_POLL_INTERVAL_MS = 16;
-const CURSOR_OVERLAY_PRELOAD = path.join(__dirname, 'overlay-preload.js');
-
-function getVirtualScreenBounds() {
-  const displays = screen.getAllDisplays();
-  if (displays.length === 0) {
-    return { x: 0, y: 0, width: 1, height: 1 };
-  }
-  const left = Math.min(...displays.map((display) => display.bounds.x));
-  const top = Math.min(...displays.map((display) => display.bounds.y));
-  const right = Math.max(...displays.map((display) => display.bounds.x + display.bounds.width));
-  const bottom = Math.max(...displays.map((display) => display.bounds.y + display.bounds.height));
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
+// Native cursor halo follows WH_MOUSE_LL events; only window capture needs IPC.
 function destroyCursorHighlightWindow() {
-  if (cursorHighlightTimer) {
-    clearInterval(cursorHighlightTimer);
-    cursorHighlightTimer = null;
-  }
-  screen.removeListener('display-metrics-changed', onCursorDisplayChanged);
-  screen.removeListener('display-added', onCursorDisplayChanged);
-  screen.removeListener('display-removed', onCursorDisplayChanged);
-  if (cursorHighlightWindow && !cursorHighlightWindow.isDestroyed()) {
-    cursorHighlightWindow.destroy();
-  }
-  cursorHighlightWindow = null;
+  if (cursorHighlightTimer) clearInterval(cursorHighlightTimer);
+  cursorHighlightTimer = null;
+  desktopTools?.setCursor(false).catch(error => console.warn('[Cursor]', error.message));
 }
 
-function sendCursorPosition() {
-  if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
-    return;
-  }
-  // getCursorScreenPoint() uses DIP coordinates, same space as the overlay bounds.
-  // The overlay origin (top-left of the virtual screen, possibly negative on
-  // multi-monitor setups) is sent with every update so the renderer can map the
-  // absolute cursor point onto its own page coordinates.
-  const cursor = screen.getCursorScreenPoint();
-  const bounds = getVirtualScreenBounds();
-  cursorHighlightWindow.webContents.send('cursor-update', {
-    x: cursor.x,
-    y: cursor.y,
-    ox: bounds.x,
-    oy: bounds.y
-  });
-}
-
-function onCursorDisplayChanged() {
-  if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
-    return;
-  }
-  // Re-cover the (possibly changed) virtual screen; the renderer keeps following
-  // the latest origin it receives with every cursor update.
-  cursorHighlightWindow.setBounds(getVirtualScreenBounds());
-  sendCursorPosition();
-}
-
-function parseDisplayIdFromSourceId(sourceId) {
-  const match = /^screen:(\d+):/.exec(String(sourceId || ''));
-  return match ? match[1] : null;
-}
-
-// Returns the capture source's on-screen region in DIP, the same coordinate
-// space as screen.getCursorScreenPoint(). Screen sources map to the selected
-// display's bounds; window sources map to the window's DIP bounds (physical
-// rect from a DPI-aware Win32 query divided by dpi/96, exact on single-monitor
-// and uniform-DPI setups, best-effort on mixed-DPI multi-monitor).
+// Only window capture needs a region for compositing; screen capture includes
+// the native halo. Convert physical HWND bounds using Electron's monitor map.
 async function getCaptureRegionDIP() {
   if (selectedSourceType === 'window') {
+    const openingSource = selectedSourceId;
     const hwnd = parseWindowHandle(selectedSourceId);
     if (!hwnd) {
       selectedWindowRectCache = null;
       return null;
     }
     const now = Date.now();
-    if (!selectedWindowRectCache || (now - lastWindowRectQueryAt > 1000 && !windowRectQueryInFlight)) {
+    if (!windowRectQueryInFlight && (!selectedWindowRectCache || now - lastWindowRectQueryAt > 1000)) {
       windowRectQueryInFlight = true;
       lastWindowRectQueryAt = now;
       try {
         const rect = await runWindowRectQuery(hwnd);
+        if (selectedSourceId !== openingSource) return null;
         if (rect && rect.ok && rect.width > 0 && rect.height > 0) {
-          const scale = (rect.dpi && rect.dpi > 0 ? rect.dpi : 96) / 96;
-          selectedWindowRectCache = {
-            x: rect.x / scale,
-            y: rect.y / scale,
-            width: rect.width / scale,
-            height: rect.height / scale
-          };
+          selectedWindowRectCache = screen.screenToDipRect(null, {
+            x: rect.x, y: rect.y, width: rect.width, height: rect.height
+          });
         }
       } catch {
         // Keep the previous cache; the next tick retries after the throttle.
@@ -1066,24 +994,7 @@ async function getCaptureRegionDIP() {
     }
     return selectedWindowRectCache;
   }
-  const displays = screen.getAllDisplays();
-  if (displays.length === 0) {
-    return null;
-  }
-  const displayId = parseDisplayIdFromSourceId(selectedSourceId);
-  const cursor = screen.getCursorScreenPoint();
-  const display = displays.find((item) => String(item.id) === displayId)
-    // Fallback: the display the cursor is on (the screen source is usually the
-    // one being used), then the primary display.
-    || displays.find((item) => cursor.x >= item.bounds.x && cursor.x < item.bounds.x + item.bounds.width
-      && cursor.y >= item.bounds.y && cursor.y < item.bounds.y + item.bounds.height)
-    || displays[0];
-  return {
-    x: display.bounds.x,
-    y: display.bounds.y,
-    width: display.bounds.width,
-    height: display.bounds.height
-  };
+  return null;
 }
 
 // Pushes the cursor point plus the capture region to the main window so the
@@ -1095,9 +1006,10 @@ function sendCursorScene() {
   }
   getCaptureRegionDIP()
     .then((region) => {
-      if (!region || !mainWindow || mainWindow.isDestroyed()) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
+      if (!region) { mainWindow.webContents.send('cursor-scene', { inside: false }); return; }
       const cursor = screen.getCursorScreenPoint();
       const inside = cursor.x >= region.x && cursor.x <= region.x + region.width
         && cursor.y >= region.y && cursor.y <= region.y + region.height;
@@ -1110,92 +1022,31 @@ function sendCursorScene() {
     .catch(() => {});
 }
 
-function createCursorOverlayHtml() {
-  return (
-    '<!doctype html><html><head><meta charset="utf-8"><style>' +
-    'html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}' +
-    '#ring{position:absolute;left:0;top:0;width:' + CURSOR_DOT_SIZE + 'px;height:' + CURSOR_DOT_SIZE + 'px;' +
-    'transform:translate(-50%,-50%);will-change:transform;opacity:0;pointer-events:none}' +
-    /* 中心强调点（光标热点位置）；细白描边保证浅色和深色画面都能看清。 */
-    '.dot{width:100%;height:100%;border-radius:50%;background:rgba(255,59,48,.95);' +
-    'border:2px solid rgba(255,255,255,.92);box-sizing:border-box;' +
-    'box-shadow:0 0 6px rgba(255,59,48,.6)}' +
-    '</style></head><body><div id="ring"><div class="dot"></div></div>' +
-    '<script>' +
-    'var ring = document.getElementById("ring");' +
-    'var latest = null;' +
-    'window.cursorOverlay.onUpdate(function (point) { latest = point; });' +
-    'function tick() {' +
-    '  if (latest) {' +
-    '    ring.style.opacity = "1";' +
-    '    ring.style.transform = "translate(" + (latest.x - latest.ox) + "px," + (latest.y - latest.oy) + "px) translate(-50%,-50%)";' +
-    '  }' +
-    '  requestAnimationFrame(tick);' +
-    '}' +
-    'requestAnimationFrame(tick);' +
-    '</script></body></html>'
-  );
+async function setCursorHighlight(enabled) {
+  if (!enabled) { destroyCursorHighlightWindow(); return; }
+  await desktopTools.setCursor(true);
+  if (!cursorHighlightTimer) cursorHighlightTimer = setInterval(() => {
+    if (selectedSourceType === 'window') sendCursorScene();
+  }, 8);
 }
 
-function setCursorHighlight(enabled) {
-  if (enabled) {
-    if (!cursorHighlightWindow || cursorHighlightWindow.isDestroyed()) {
-      cursorHighlightWindow = new BrowserWindow({
-        ...getVirtualScreenBounds(),
-        show: false,
-        frame: false,
-        transparent: true,
-        resizable: false,
-        movable: false,
-        minimizable: false,
-        maximizable: false,
-        fullscreenable: false,
-        alwaysOnTop: true,
-        skipTaskbar: true,
-        hasShadow: false,
-        roundedCorners: false,
-        enableLargerThanScreen: true,
-        focusable: false,
-        webPreferences: {
-          preload: CURSOR_OVERLAY_PRELOAD,
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-          offscreen: false,
-          backgroundThrottling: false
-        }
-      });
-      cursorHighlightWindow.setIgnoreMouseEvents(true, { forward: true });
-      cursorHighlightWindow.setAlwaysOnTop(true, 'screen-saver');
-      cursorHighlightWindow.setVisibleOnAllWorkspaces(true);
-      cursorHighlightWindow.loadURL(
-        'data:text/html;charset=utf-8,' + encodeURIComponent(createCursorOverlayHtml())
-      );
-      cursorHighlightWindow.once('ready-to-show', () => {
-        if (cursorHighlightWindow && !cursorHighlightWindow.isDestroyed()) {
-          sendCursorPosition();
-          cursorHighlightWindow.show();
-        }
-      });
-      cursorHighlightWindow.on('closed', () => {
-        cursorHighlightWindow = null;
-      });
-      screen.on('display-metrics-changed', onCursorDisplayChanged);
-      screen.on('display-added', onCursorDisplayChanged);
-      screen.on('display-removed', onCursorDisplayChanged);
-    } else {
-      sendCursorPosition();
-      cursorHighlightWindow.show();
-    }
-    if (!cursorHighlightTimer) {
-      cursorHighlightTimer = setInterval(() => {
-        sendCursorPosition();
-        sendCursorScene();
-      }, CURSOR_POLL_INTERVAL_MS);
-    }
+async function screenForAnnotations() {
+  let display;
+  if (selectedSourceType === 'window') {
+    const hwnd = parseWindowHandle(selectedSourceId);
+    const rect = hwnd ? await runWindowRectQuery(hwnd) : null;
+    if (!rect?.ok) throw new Error('找不到投屏窗口所在的显示器，请先选择整个显示器');
+    display = screen.getDisplayMatching(screen.screenToDipRect(null, { x: rect.x, y: rect.y, width: rect.width, height: rect.height }));
   } else {
-    destroyCursorHighlightWindow();
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } });
+    const selected = sources.find(source => source.id === selectedSourceId);
+    display = screen.getAllDisplays().find(item => String(item.id) === selected?.display_id)
+      || screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   }
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } });
+  const source = sources.find(item => item.display_id === String(display.id));
+  if (!source) throw new Error('无法采集标注所在的显示器');
+  return { id: source.id, type: 'screen', name: source.name };
 }
 
 function createTrayIcon() {
@@ -1220,6 +1071,8 @@ function createTray() {
   tray.setToolTip('MyClass 投屏');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '切换投屏窗口', click: openSourceSwitcher },
+    { label: '屏幕标注 (Ctrl+Alt+G)', click: () => sendRenderer('toggle-screen-ink') },
+    { label: '结束屏幕标注', click: () => desktopTools.setInk(false).catch(error => sendRenderer('desktop-tool-error', error.message)) },
     { label: '强调鼠标位置', click: () => sendRenderer('toggle-cursor-highlight') },
     { type: 'separator' },
     {
@@ -1269,6 +1122,8 @@ function registerIpc() {
   ipcMain.handle('server-config', (_event, baseUrl) => fetchServerConfig(baseUrl));
   ipcMain.handle('list-sources', () => listCaptureSources());
   ipcMain.handle('select-source', (_event, source) => {
+    selectedWindowRectCache = null;
+    lastWindowRectQueryAt = 0;
     selectedSourceId = String(source?.id || '') || null;
     selectedSourceType = source?.type === 'window' ? 'window' : 'screen';
       knownNonPresentationSourceId = null;
@@ -1281,10 +1136,14 @@ function registerIpc() {
   ipcMain.on('signaling-send', (_event, payload) => sendSignalingMessage(payload));
   ipcMain.on('signaling-disconnect', () => closeSignaling());
   ipcMain.handle('app-version', () => app.getVersion());
-  ipcMain.handle('cursor-highlight', (_event, enabled) => {
-    setCursorHighlight(Boolean(enabled));
+  ipcMain.handle('cursor-highlight', async (_event, enabled) => {
+    await setCursorHighlight(Boolean(enabled));
     return { enabled: Boolean(enabled) };
   });
+  ipcMain.handle('ink-screen-source', screenForAnnotations);
+  ipcMain.handle('screen-ink', (_event, enabled) => desktopTools.setInk(Boolean(enabled)));
+  ipcMain.handle('screen-ink-pointer', () => desktopTools.toggleInkPointer());
+  ipcMain.on('screen-ink-stop', () => desktopTools.stopInk());
   ipcMain.on('window-hide', () => mainWindow?.hide());
   // 投屏时窗口会隐藏到托盘，用托盘提示文字让老师知道连接是否被自动恢复过。
   ipcMain.on('tray-status', (_event, text) => {
@@ -1305,7 +1164,14 @@ if (hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     await restoreInterruptedAudioState();
     installDisplayMediaHandler();
+    desktopTools = createDesktopTools({ app,
+      onInkState: active => sendRenderer('screen-ink-state', { active }),
+      onError: error => sendRenderer('desktop-tool-error', error.message)
+    });
     registerIpc();
+    if (!globalShortcut.register('CommandOrControl+Alt+G', () => sendRenderer('toggle-screen-ink'))) {
+      console.warn('[gInk] Ctrl+Alt+G is already in use; toolbar and tray actions remain available');
+    }
     createWindow();
     createTray();
     app.on('activate', showMainWindow);
@@ -1324,6 +1190,8 @@ app.on('before-quit', (event) => {
   isQuitting = true;
   closeSignaling({ notify: false });
   destroyCursorHighlightWindow();
+  globalShortcut.unregisterAll();
+  desktopTools?.dispose();
 });
 
 app.on('window-all-closed', (event) => {

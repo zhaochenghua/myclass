@@ -59,6 +59,7 @@ body {
 
 button, input, select { font: inherit; }
 button { cursor: pointer; }
+.ink-setup-button { width: 100%; margin-top: 8px; }
 ::selection { background: var(--blue-tint); color: var(--blue-deep); }
 
 /* ---------- 布局 ---------- */

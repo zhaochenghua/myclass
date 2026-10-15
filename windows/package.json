@@ -1,19 +1,21 @@
 {
   "name": "myclass-windows",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "MyClass Windows screen sharing client",
   "main": "main.js",
   "private": true,
   "scripts": {
-    "start": "electron .",
-    "dev": "electron .",
-    "check": "node --check main.js && node --check preload.js && node --check overlay-preload.js && node --check renderer/renderer.js",
-    "dist": "electron-builder --win nsis"
+    "prepare-tools": "node scripts/prepare-tools.cjs",
+    "start": "npm run prepare-tools && electron .",
+    "dev": "npm run start",
+    "check": "node --check main.js && node --check desktop-tools.js && node --check preload.js && node --check renderer/renderer.js",
+    "dist": "npm run prepare-tools && electron-builder --win nsis"
   },
   "dependencies": {
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "extract-zip": "^2.0.1",
     "electron": "^36.0.0",
     "electron-builder": "^26.0.0"
   },
@@ -26,12 +28,13 @@
     },
     "files": [
       "main.js",
+      "desktop-tools.js",
       "preload.js",
-      "overlay-preload.js",
       "renderer/**/*",
       "assets/**/*",
       "package.json"
     ],
+    "extraResources": [{ "from": "tools", "to": "desktop-tools", "filter": ["**/*", "!**/*.pdb"] }],
     "electronDist": "node_modules/electron/dist",
     "win": {
       "icon": "assets/icon.ico",

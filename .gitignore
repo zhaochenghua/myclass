@@ -30,6 +30,7 @@ web/vendor/
 
 windows/node_modules/
 windows/dist/
+windows/tools/
 windows/package-lock.json
 
 # 编辑器 / 工具配置

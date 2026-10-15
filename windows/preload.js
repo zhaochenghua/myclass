@@ -12,6 +12,25 @@ contextBridge.exposeInMainWorld('myclass', {
   disconnectSignaling: () => ipcRenderer.send('signaling-disconnect'),
   getAppVersion: () => ipcRenderer.invoke('app-version'),
   setCursorHighlight: (enabled) => ipcRenderer.invoke('cursor-highlight', enabled),
+  getInkScreenSource: () => ipcRenderer.invoke('ink-screen-source'),
+  setScreenInk: (enabled) => ipcRenderer.invoke('screen-ink', enabled),
+  toggleInkPointer: () => ipcRenderer.invoke('screen-ink-pointer'),
+  stopScreenInk: () => ipcRenderer.send('screen-ink-stop'),
+  onToggleScreenInk: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('toggle-screen-ink', listener);
+    return () => ipcRenderer.removeListener('toggle-screen-ink', listener);
+  },
+  onScreenInkState: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on('screen-ink-state', listener);
+    return () => ipcRenderer.removeListener('screen-ink-state', listener);
+  },
+  onDesktopToolError: (callback) => {
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on('desktop-tool-error', listener);
+    return () => ipcRenderer.removeListener('desktop-tool-error', listener);
+  },
   setTrayStatus: (text) => ipcRenderer.send('tray-status', text),
   hideWindow: () => ipcRenderer.send('window-hide'),
   quit: () => ipcRenderer.send('app-quit'),

@@ -11,6 +11,8 @@ const elements = {
   micAmplify: document.getElementById('micAmplify'),
   cursorHighlight: document.getElementById('cursorHighlight'),
   cursorHighlightButton: document.getElementById('cursorHighlightButton'),
+  setupInkButton: document.getElementById('setupInkButton'),
+  screenInkButton: document.getElementById('screenInkButton'),
   startButton: document.getElementById('startButton'),
   stopButton: document.getElementById('stopButton'),
   localAudioButton: document.getElementById('localAudioButton'),
@@ -63,6 +65,8 @@ const state = {
   switchingSource: false,
   sourceSwitchGeneration: 0,
   stopping: false,
+  inkActive: false,
+  inkBusy: false,
   // 连接自愈相关（见「连接自愈」一节）
   everConnected: false,
   recovering: false,
@@ -113,6 +117,44 @@ function setTrayStatus(text) {
 function updateCursorHighlightUi() {
   elements.cursorHighlight.checked = state.cursorHighlight;
   elements.cursorHighlightButton.textContent = state.cursorHighlight ? '关闭鼠标强调' : '开启鼠标强调';
+}
+
+function updateInkUi() {
+  for (const button of [elements.setupInkButton, elements.screenInkButton]) {
+    button.textContent = state.inkActive ? '结束标注' : '屏幕标注 · Ctrl+Alt+G';
+    button.disabled = state.inkBusy;
+  }
+}
+
+async function startScreenInk(fromShortcut = false) {
+  if (state.inkBusy || state.stopping) return;
+  state.inkBusy = true;
+  updateInkUi();
+  try {
+    if (state.inkActive) {
+      if (fromShortcut) await api.toggleInkPointer();
+      else await api.setScreenInk(false);
+      return;
+    }
+    if (state.switchingSource) throw new Error('正在切换投屏来源，请稍后开启标注');
+    if (state.mediaStream && state.captureSourceType === 'window') {
+      if (!window.confirm('屏幕标注需要投整个显示器。将切换到当前窗口所在显示器，桌面上的其他内容也会显示在大屏上。是否继续？')) return;
+      const source = await api.getInkScreenSource();
+      await switchProjectionSourceTo(source);
+      if (!state.mediaStream || state.captureSourceId !== source.id || state.captureSourceType !== 'screen') {
+        throw new Error('未能切换到显示器，标注尚未开启');
+      }
+    }
+    await api.setScreenInk(true);
+    // Closing the always-on-top panel gives the drawing surface focus.
+    api.hideWindow();
+    setStatus('屏幕标注已开启：Ctrl+Alt+G 切换鼠标操作，Esc 退出');
+  } catch (error) {
+    setStatus(`开启屏幕标注失败：${error.message}`, true);
+  } finally {
+    state.inkBusy = false;
+    updateInkUi();
+  }
 }
 
 async function setCursorHighlight(enabled) {
@@ -358,22 +400,22 @@ async function requestScreenStream() {
 let cursorScene = null;
 let compositor = null;
 
-// 与 main.js 的 CURSOR_DOT_SIZE 保持一致（屏幕 DIP 像素）
-const CURSOR_DOT_DIP = 14;
+// Match the native helper's 28 DIP diameter.
+const CURSOR_DOT_DIP = 28;
 
 function drawCursorDot(ctx, cx, cy, scale) {
-  // 只画中心强调点（外圈已按课堂反馈去掉）：红点 + 细白描边 + 轻微光晕。
-  const radius = Math.max(3, (CURSOR_DOT_DIP / 2) * scale);
+  // Match the native halo: translucent centre, clean outline, no glow or easing.
+  const radius = (CURSOR_DOT_DIP / 2 - 2) * scale;
   ctx.save();
-  ctx.shadowColor = 'rgba(255,59,48,.6)';
-  ctx.shadowBlur = Math.max(3, 6 * scale);
-  ctx.fillStyle = 'rgba(255,59,48,.95)';
+  ctx.fillStyle = 'rgba(255,90,80,.11)';
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.lineWidth = Math.max(1, 2 * scale);
-  ctx.strokeStyle = 'rgba(255,255,255,.92)';
+  ctx.lineWidth = 3 * scale;
+  ctx.strokeStyle = 'rgba(255,255,255,.7)';
+  ctx.stroke();
+  ctx.lineWidth = 1.5 * scale;
+  ctx.strokeStyle = 'rgba(239,83,80,.82)';
   ctx.stroke();
   ctx.restore();
 }
@@ -390,10 +432,12 @@ function createCompositor(rawStream) {
     lastDrawAt: 0,
     stopped: false,
     ready: null,
+    render: null,
     stop: null
   };
   let resolveReady = null;
   let rejectReady = null;
+  let previousCursorRect = null;
   handle.ready = new Promise((resolve, reject) => {
     resolveReady = resolve;
     rejectReady = reject;
@@ -404,22 +448,30 @@ function createCompositor(rawStream) {
     }
   }, 3000);
 
-  function render() {
-    if (handle.stopped) {
-      return;
-    }
-    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && canvas.width > 0) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      if (cursorScene && cursorScene.inside) {
+  function paintCursor() {
+      previousCursorRect = null;
+      if (state.cursorHighlight && cursorScene?.inside && performance.now() - cursorScene.receivedAt < 250) {
         const region = cursorScene.region;
         if (region && region.width > 0 && region.height > 0) {
           const nx = (cursorScene.cursor.x - region.x) / region.width;
           const ny = (cursorScene.cursor.y - region.y) / region.height;
           if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
-            drawCursorDot(ctx, nx * canvas.width, ny * canvas.height, canvas.width / region.width);
+            const scale = canvas.width / region.width;
+            const cx = nx * canvas.width, cy = ny * canvas.height;
+            const margin = CURSOR_DOT_DIP * scale / 2 + 3;
+            const x = Math.max(0, Math.floor(cx - margin)), y = Math.max(0, Math.floor(cy - margin));
+            previousCursorRect = { x, y, width: Math.min(canvas.width - x, Math.ceil(cx + margin) - x), height: Math.min(canvas.height - y, Math.ceil(cy + margin) - y) };
+            drawCursorDot(ctx, cx, cy, scale);
           }
         }
       }
+  }
+
+  function render() {
+    if (handle.stopped) return;
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && canvas.width > 0) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      paintCursor();
       handle.lastDrawAt = performance.now();
     }
   }
@@ -428,9 +480,20 @@ function createCompositor(rawStream) {
     if (handle.stopped) {
       return;
     }
-    render();
+    if (performance.now() - handle.lastDrawAt >= 30) render();
     handle.rafId = requestAnimationFrame(loop);
   }
+
+  // Input can arrive at 125 Hz. Restore only the previous marker's small patch
+  // instead of copying a multi-megapixel frame for every mouse sample.
+  handle.render = () => {
+    if (handle.stopped || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !canvas.width) return;
+    if (previousCursorRect) {
+      const r = previousCursorRect;
+      if (r.width > 0 && r.height > 0) ctx.drawImage(video, r.x, r.y, r.width, r.height, r.x, r.y, r.width, r.height);
+    }
+    paintCursor();
+  };
 
   video.muted = true;
   video.playsInline = true;
@@ -459,10 +522,10 @@ function createCompositor(rawStream) {
       if (handle.stopped) {
         return;
       }
-      if (performance.now() - handle.lastDrawAt > 150) {
+      if (performance.now() - handle.lastDrawAt > 30) {
         render();
       }
-    }, 50);
+    }, 33);
     clearTimeout(failTimer);
     resolveReady();
   });
@@ -1109,6 +1172,16 @@ async function startProjection() {
   updateCursorHighlightUi();
   try {
     await api.selectSource({ id: state.captureSourceId, type: state.captureSourceType });
+    if (state.inkActive && state.captureSourceType === 'window') {
+      if (!window.confirm('屏幕标注已开启，需要投整个显示器才能同步笔迹。是否切换到当前窗口所在显示器？')) {
+        await api.setScreenInk(false);
+      } else {
+        const source = await api.getInkScreenSource();
+        await api.selectSource(source);
+        state.captureSourceId = source.id;
+        state.captureSourceType = 'screen';
+      }
+    }
     if (state.micAmplify) {
       await startMicCapture();
     } else {
@@ -1156,6 +1229,7 @@ async function switchProjectionSource() {
     closeSourceSwitcher();
     return;
   }
+  if (state.inkActive && nextSourceType === 'window') await api.setScreenInk(false);
 
   const previousStream = state.mediaStream;
   const previousRawStream = state.rawStream;
@@ -1248,7 +1322,7 @@ async function switchProjectionSourceTo(nextSource) {
   closeSourceSwitcher();
   elements.confirmSourceSwitchButton.disabled = true;
   setLiveStatus('正在切换窗口');
-  setStatus('检测到演示文稿放映窗口，正在自动切换...');
+  setStatus(nextSourceType === 'screen' ? '正在切换到显示器，以同步屏幕标注...' : '检测到演示文稿放映窗口，正在自动切换...');
 
   try {
     await api.selectSource({ id: nextSourceId, type: nextSourceType });
@@ -1304,6 +1378,7 @@ async function switchProjectionSourceTo(nextSource) {
 
 
 async function stopProjection(disconnect = true, message = '') {
+  api.stopScreenInk();
   state.stopping = true;
   state.sourceSwitchGeneration += 1;
   state.switchingSource = false;
@@ -1405,6 +1480,11 @@ elements.cursorHighlight.addEventListener('change', () => {
   }
 });
 elements.cursorHighlightButton.addEventListener('click', () => setCursorHighlight(!state.cursorHighlight));
+elements.setupInkButton.addEventListener('click', () => startScreenInk());
+elements.screenInkButton.addEventListener('click', () => startScreenInk());
+api.onToggleScreenInk(() => startScreenInk(true));
+api.onScreenInkState(({ active }) => { state.inkActive = active; updateInkUi(); });
+api.onDesktopToolError(message => setStatus(`桌面工具：${message}`, true));
 elements.localAudioButton.addEventListener('click', async () => {
   const enabled = !state.localAudioMuted;
   try {
@@ -1452,7 +1532,9 @@ api.onToggleCursorHighlight(() => {
   }
 });
 api.onCursorScene((scene) => {
-  cursorScene = scene;
+  cursorScene = { ...scene, receivedAt: performance.now() };
+  // Draw on arrival rather than waiting for an additional animation frame.
+  compositor?.render?.();
 });
 
 api.getAppVersion()

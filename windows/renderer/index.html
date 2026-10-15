@@ -49,6 +49,7 @@
           </label>
         </div>
         <button class="primary-button" id="startButton" type="button">开始投屏</button>
+        <button class="secondary-button ink-setup-button" id="setupInkButton" type="button">屏幕标注 · Ctrl+Alt+G</button>
       </section>
 
       <section class="card live-card" id="liveCard" hidden>
@@ -66,6 +67,7 @@
           <div><dt>声音</dt><dd id="audioStatus">准备中</dd></div>
         </dl>
         <div class="live-actions">
+          <button class="secondary-button" id="screenInkButton" type="button">屏幕标注</button>
           <button class="secondary-button" id="localAudioButton" type="button">关闭电脑声音</button>
           <button class="secondary-button" id="cursorHighlightButton" type="button">关闭鼠标强调</button>
           <button class="danger-button" id="stopButton" type="button">停止投屏</button>
@@ -139,7 +141,10 @@
             <h3>启用扩音</h3>
             <p>勾选后投屏时自动使用本机麦克风，麦克风声音会和系统声音一起发送到大屏。</p>
             <h3>鼠标强调</h3>
-            <p>勾选后大屏上显示红色光标点，方便学生跟随老师操作。</p>
+            <p>淡红色空心标记直接跟随鼠标，不遮挡指针下的文字。可随时从托盘开启或关闭。</p>
+            <h3>屏幕标注（gInk）</h3>
+            <p>点击“屏幕标注”或按 Ctrl+Alt+G 开始圈画，可使用画笔、荧光笔、橡皮、撤销和清屏。再次按快捷键切换鼠标操作，按 Esc 退出标注。工具栏可拖动。</p>
+            <p>标注整个显示器时，笔迹会一起投到大屏。若正在投单个窗口，开启前会提示切换到该窗口所在显示器；结束标注后继续投整个显示器，可从托盘切换回来。</p>
             <h3>托盘运行</h3>
             <p>关闭窗口会继续在系统托盘运行。点击或右键托盘图标可切换投屏窗口、停止投屏或退出程序。</p>
           </div>
