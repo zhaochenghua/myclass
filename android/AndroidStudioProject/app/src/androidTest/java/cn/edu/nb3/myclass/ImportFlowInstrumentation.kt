@@ -19,15 +19,18 @@ import java.util.UUID
 class ImportFlowInstrumentation : Instrumentation() {
     private var clipboardOnly = false
     private var previewOnly = false
+    private var notesVideosRoom: String? = null
     private var previewHoldMs = 0L
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         clipboardOnly = arguments?.getString("clipboard") == "true"
         previewOnly = arguments?.getString("preview") == "true"
+        notesVideosRoom = arguments?.getString("notesVideosRoom")
         previewHoldMs = arguments?.getString("previewHoldMs")?.toLongOrNull()?.coerceIn(0, 30000) ?: 0L
         start()
     }
     override fun onStart() {
+        notesVideosRoom?.let { NotesVideosCheck.run(this, it); return }
         if (clipboardOnly) { ClipboardFlowCheck.run(this); return }
         if (previewOnly) { PdfPreviewCheck.run(this, previewHoldMs); return }
         val results = Bundle()

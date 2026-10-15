@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -196,7 +197,7 @@ class ZoomableImageView(context: Context) : View(context) {
     fun setImage(next: Bitmap?, atBottom: Boolean = false) {
         reportedViewerRect = null
         bitmap = next
-        // 换图后旧笔迹失去意义（大屏端打开新图片时也会清空标注），仅本地清理
+        // The owner restores the new file/page's saved notes immediately afterward.
         resetAnnotations()
         resetViewport(atBottom)
         // 换图瞬间控件可能尚未完成布局，fit 为 0 会跳过上报；
@@ -353,7 +354,9 @@ class ZoomableImageView(context: Context) : View(context) {
             id = "v:${payload.strokeId}",
             colorHex = if (payload.isEraser) ERASER_COLOR else payload.colorHex,
             width = if (payload.width > 0f) payload.width else AnnotationPalette.PEN_WIDTH,
-            isEraser = payload.isEraser
+            isEraser = payload.isEraser,
+            mode = payload.mode,
+            lineMode = payload.lineMode
         ).also { it.points.add(first) }
         annotationDirty = true
         invalidate()
@@ -362,6 +365,11 @@ class ZoomableImageView(context: Context) : View(context) {
     private fun remotePoints(payload: RemoteAnnotationPayload) {
         val stroke = remoteStrokes[payload.strokeId] ?: return
         if (stroke.points.isEmpty()) return
+        if (stroke.lineMode && payload.points.isNotEmpty()) {
+            val first = stroke.points.first()
+            stroke.points.clear(); stroke.points.add(first); stroke.points.add(payload.points.last())
+            annotationDirty = true; invalidate(); return
+        }
         var last = stroke.points.last()
         val threshold = AnnotationPalette.MIN_POINT_DISTANCE
         for (point in payload.points) {
@@ -1012,8 +1020,15 @@ class ZoomableImageView(context: Context) : View(context) {
         val targetPaint = if (stroke.isEraser) eraserPaint else strokePaint
         if (!stroke.isEraser) {
             targetPaint.color = runCatching { Color.parseColor(stroke.colorHex) }.getOrDefault(Color.RED)
+            targetPaint.alpha = if (stroke.mode == "highlighter") 115 else 255
+            val unit = stroke.width * density
+            targetPaint.pathEffect = when (stroke.mode) {
+                "dashed" -> DashPathEffect(floatArrayOf(unit * 2.2f, unit * 1.6f), 0f)
+                "dashdot" -> DashPathEffect(floatArrayOf(unit * 2.2f, unit * 1.2f, 0.1f, unit * 1.2f), 0f)
+                else -> null
+            }
         }
-        targetPaint.strokeWidth = stroke.width * density
+        targetPaint.strokeWidth = stroke.width * density * if (!stroke.isEraser && stroke.mode == "highlighter") 5f else 1f
 
         val lastIndex = points.size - 1
         if (lastIndex == 0) {

@@ -16,7 +16,9 @@ data class AnnotationStroke(
     /** 画笔 4f / 板擦 40f，与大屏端 stroke.width 同单位 */
     val width: Float,
     val isEraser: Boolean,
-    val points: MutableList<AnnotationPoint> = mutableListOf()
+    val points: MutableList<AnnotationPoint> = mutableListOf(),
+    val mode: String = "solid",
+    val lineMode: Boolean = false
 )
 
 object AnnotationPalette {
@@ -47,5 +49,7 @@ data class RemoteAnnotationPayload(
     val mode: String = "solid",
     val points: List<AnnotationPoint> = emptyList(),
     /** 所属页码（1 基）；0 表示不区分页（图片投屏等单页场景） */
-    val page: Int = 0
+    val page: Int = 0,
+    val lineMode: Boolean = false,
+    val url: String = ""
 )

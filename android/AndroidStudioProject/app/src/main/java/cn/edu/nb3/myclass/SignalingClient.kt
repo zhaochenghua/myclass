@@ -67,6 +67,8 @@ class SignalingClient(
         fun onSignalError(message: String)
         /** 大屏端画笔回传的标注动作（板擦、撤销、清空与大屏本地笔画） */
         fun onViewerAnnotation(payload: RemoteAnnotationPayload)
+        fun onAnnotationsSnapshot(message: JSONObject)
+        fun onEmbeddedVideo(message: JSONObject)
     }
 
     private val client = OkHttpClient.Builder()
@@ -75,6 +77,7 @@ class SignalingClient(
 
     private var webSocket: WebSocket? = null
     @Volatile private var closedByUser = false
+    private var annotationUrl = ""
 
     fun connect() {
         val request = Request.Builder()
@@ -327,12 +330,14 @@ class SignalingClient(
                     volumePercent = message.optInt("volume", 100).coerceIn(0, 100)
                 )
             }
-            "viewer.courseware.open" -> callback.onViewerCoursewareOpen(
+            "annotations.snapshot" -> callback.onAnnotationsSnapshot(message)
+            "viewer.embedded-video" -> callback.onEmbeddedVideo(message)
+            "viewer.courseware.open" -> { annotationUrl = message.optString("url"); callback.onViewerCoursewareOpen(
                 url = message.optString("url"),
                 title = message.optString("title"),
                 page = message.optInt("page", 1).coerceAtLeast(1),
                 screen = message.optInt("screen", 1).coerceAtLeast(1)
-            )
+            ) }
             "viewer.courseware.close" -> callback.onViewerCoursewareClose()
             "viewer.courseware.viewport" -> callback.onViewerCoursewareViewport(message)
             "viewer.annotation" -> callback.onViewerAnnotation(parseViewerAnnotation(message))
@@ -360,8 +365,15 @@ class SignalingClient(
         }
     }
 
-    private fun sendJson(payload: JSONObject): Boolean =
-        webSocket?.send(payload.toString()) == true
+    fun sendEmbeddedVideo(action: String, url: String, index: Int?): Boolean = sendJson(
+        JSONObject().put("type", "courseware.embedded-video").put("action", action).put("url", url)
+            .apply { index?.let { put("index", it) } })
+
+    private fun sendJson(payload: JSONObject): Boolean {
+        if (payload.optString("type") == "courseware.open") annotationUrl = payload.optString("url")
+        if (payload.optString("type") == "courseware.annotation" && annotationUrl.isNotBlank()) payload.put("url", annotationUrl)
+        return webSocket?.send(payload.toString()) == true
+    }
 
     private fun readableNetworkError(message: String): String {
         val lowerMessage = message.lowercase()
@@ -420,7 +432,9 @@ class SignalingClient(
             isEraser = message.optBoolean("isEraser", false),
             mode = message.optString("mode", "solid"),
             points = points,
-            page = message.optInt("page", 0)
+            page = message.optInt("page", 0),
+            lineMode = message.optBoolean("lineMode"),
+            url = message.optString("url")
         )
     }
 

@@ -245,6 +245,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private val coursewarePdfBitmaps = LinkedHashMap<Int, Bitmap>()
     /** 按页保存的笔迹：翻页不丢，"撤销 / 清空"只作用于当前页 */
     private val coursewarePdfStrokes = LinkedHashMap<Int, List<AnnotationStroke>>()
+    private var annotationsFile = ""
+    private var renderedAnnotationsFile = ""
+    private var renderedAnnotationsPage = 0
+    private var restoringAnnotations = false
+    private val embeddedVideos by lazy {
+        EmbeddedVideoController(this, coursewareHttpClient,
+            getContext = { coursewareUrl.takeIf { mediaKindOf(it) == CastMediaKind.Pdf }?.let {
+                EmbeddedVideoController.Context(it, coursewarePage, displayedCoursewarePage()) } },
+            absoluteUrl = ::absoluteCoursewareUrl,
+            send = { action, url, index -> signalingClient?.sendEmbeddedVideo(action, url, index) == true },
+            onPages = { url, pages -> coursewareMappings[url] = pages })
+    }
     /** 当前已打开课件的缓存键，用于识别切换课件并清理上一份课件的笔迹与位图 */
     private var coursewarePdfOpenedKey = ""
     /** 最近一次收到大屏视频状态的时间，用于判断大屏端是否仍在播放 */
@@ -586,6 +598,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     override fun onDestroy() {
+        embeddedVideos.destroy()
         ImportUploadService.detach(this)
         clipboardDialog?.dismiss()
         campusCheckGeneration += 1
@@ -3890,10 +3903,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showCoursewareScreen(title: String, isUploading: Boolean) {
+        if (!isUploading) {
+            ensureFileAnnotations()
+            embeddedVideos.refresh()
+        }
         if (!isUploading && coursewarePdfFailedUrl != coursewareUrl) coursewarePdfFailed = false
         if (!isUploading && coursewarePdfOpenedKey.isNotEmpty() && coursewarePdfOpenedKey != coursewareCacheKey()) {
             releaseCoursewarePdf()
-            coursewarePdfStrokes.clear()
             coursewarePdfOpenedKey = ""
         }
         // 图片/视频/PDF 课件改用专用界面：
@@ -3995,6 +4011,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
             rightPanel.addView(pageRow)
+            if (!isUploading && mediaKindOf(coursewareUrl) == CastMediaKind.Pdf) rightPanel.addView(embeddedVideoButton())
             retryPreview?.let { rightPanel.addView(it) }
             rightPanel.addView(buildCoursewareJumpRow(isUploading))
             if (!isUploading) rightPanel.addView(studentRollButton())
@@ -4034,6 +4051,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(titleText("播放课件", 28f))
             root.addView(statusText)
             root.addView(pageRow)
+            if (!isUploading && mediaKindOf(coursewareUrl) == CastMediaKind.Pdf) root.addView(embeddedVideoButton())
             retryPreview?.let { root.addView(it) }
             root.addView(buildCoursewareJumpRow(isUploading))
             if (!isUploading) root.addView(studentRollButton())
@@ -4523,11 +4541,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomable.onStrokeEnd = { strokeId ->
             signalingClient?.sendAnnotationEnd(strokeId)
         }
-        zoomable.onAnnotationCountChanged = { refreshAnnotationBar?.invoke() }
+        zoomable.onAnnotationCountChanged = { saveVisibleFileAnnotations(); refreshAnnotationBar?.invoke() }
 
         val cached = castImageBitmap
         if (cached != null) {
-            zoomable.setImage(cached)
+            setAnnotatedImage(zoomable, cached, 1)
             hintText.visibility = View.GONE
         } else {
             loadImageCastBitmap { bitmap ->
@@ -4539,7 +4557,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
                 if (bitmap != null) {
                     castImageBitmap = bitmap
-                    zoomable.setImage(bitmap)
+                    setAnnotatedImage(zoomable, bitmap, 1)
                     hintText.visibility = View.GONE
                 } else {
                     hintText.text = "图片预览加载失败，大屏仍会正常显示"
@@ -4653,6 +4671,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         modeBar.addView(rollButton)
 
         // 翻页栏：手势与画笔模式下都常驻，翻页同时更新手机预览与大屏
+        val embeddedButton = embeddedVideoButton()
+        if (!sideRailLandscape && !tabletLandscape) modeBar.addView(embeddedButton)
         val pageBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -4896,6 +4916,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         // ---- 翻页与内容加载 ----
 
         fun updatePageBar() {
+            embeddedVideos.refresh()
             val total = coursewarePdf?.pageCount?.takeIf { it > 0 } ?: coursewarePageCount
             pageLabel.text = "第 ${displayedCoursewarePage()} / ${displayedCoursewareCount()} 页"
             pageInput.hint = "页码 1-${displayedCoursewareCount()}"
@@ -4921,13 +4942,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (total <= 0) return
             val page = target.coerceIn(1, total)
             if (page != coursewarePage) {
-                // 翻页前保存当前页笔迹，翻回来时还在
-                val saved = zoomable.currentStrokes()
-                if (saved.isNotEmpty()) {
-                    coursewarePdfStrokes[coursewarePage] = saved
-                } else {
-                    coursewarePdfStrokes.remove(coursewarePage)
-                }
+                saveVisibleFileAnnotations()
                 coursewarePage = page
             }
             coursewarePageCount = total
@@ -4938,8 +4953,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
             val cached = coursewarePdfBitmaps[page]
             if (cached != null) {
-                zoomable.setImage(cached, atBottom)
-                zoomable.replaceStrokes(coursewarePdfStrokes[page].orEmpty())
+                setAnnotatedImage(zoomable, cached, page, atBottom)
                 hintText.visibility = View.GONE
                 return
             }
@@ -4959,8 +4973,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     return@renderPdfPageAsync
                 }
                 rememberPdfBitmap(page, bitmap)
-                zoomable.setImage(bitmap, atBottom)
-                zoomable.replaceStrokes(coursewarePdfStrokes[page].orEmpty())
+                setAnnotatedImage(zoomable, bitmap, page, atBottom)
                 hintText.visibility = View.GONE
             }
         }
@@ -5017,8 +5030,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                         return@runOnUiThread
                     }
                     if (coursewarePdfOpenedKey != cacheKey) {
-                        // 换了课件：旧课件的笔迹与页位图全部失效
-                        coursewarePdfStrokes.clear()
+                        // Page bitmaps belong to this PDF; saved notes may already
+                        // have arrived while the download was still in progress.
                         coursewarePdfBitmaps.values.forEach { runCatching { it.recycle() } }
                         coursewarePdfBitmaps.clear()
                         coursewarePdfOpenedKey = cacheKey
@@ -5083,6 +5096,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 setPadding(0, dp(2), 0, dp(2))
             }
             sidePanel.addView(modeBar)
+            sidePanel.addView(embeddedButton)
             sidePanel.addView(pageBar)
             sidePanel.addView(jumpRow)
             sidePanel.addView(gestureBar)
@@ -5134,6 +5148,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             addToPageRow(modeButton, dp(96), end = 6)
             addToPageRow(rollButton, dp(80), end = 6)
+            addToPageRow(embeddedButton, dp(104), end = 6)
             addToPageRow(prevButton, 0, weight = 1f, end = 6)
             addToPageRow(pageLabel, dp(88))
             addToPageRow(nextButton, 0, weight = 1f, start = 6)
@@ -5214,7 +5229,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         zoomable.onStrokeEnd = { strokeId ->
             signalingClient?.sendAnnotationEnd(strokeId, coursewarePage)
         }
-        zoomable.onAnnotationCountChanged = { refreshAnnotationBar?.invoke() }
+        zoomable.onAnnotationCountChanged = { saveVisibleFileAnnotations(); refreshAnnotationBar?.invoke() }
         coursewarePdfPaging = { delta -> pagingOrStep(delta) }
 
         if ((coursewarePdf?.pageCount ?: 0) > 0) {
@@ -5732,6 +5747,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     /** 结束图片/视频投屏时释放预览资源与界面引用 */
     private fun resetMediaCastState() {
+        embeddedVideos.detach()
         coursewareLocalUri = null
         castImageBitmap = null
         zoomableImageView?.releaseAnnotationLayer()
@@ -5741,6 +5757,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         imageCastPenEraser = false
         releaseCoursewarePdf()
         coursewarePdfStrokes.clear()
+        annotationsFile = ""
+        renderedAnnotationsFile = ""
+        renderedAnnotationsPage = 0
         coursewarePdfOpenedKey = ""
         coursewarePdfFailed = false
         coursewarePdfFailedUrl = ""
@@ -5767,6 +5786,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     /** 仅释放界面引用，保留播放进度，便于从菜单返回后继续遥控 */
     private fun releaseMediaCastViews() {
+        saveVisibleFileAnnotations()
+        embeddedVideos.detach()
         zoomableImageView?.releaseAnnotationLayer()
         zoomableImageView = null
         imageCastPenMode = false
@@ -6592,6 +6613,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         runOnUiThread {
             if (state.url.isNotBlank() && state.url != coursewareUrl) return@runOnUiThread
             state.pages?.let { coursewareMappings[coursewareUrl] = it }
+            embeddedVideos.refresh()
             coursewarePageCount = state.pageCount
             coursewareScreen = state.screen
             coursewareScreenCount = state.screenCount
@@ -6611,6 +6633,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onViewerCoursewareOpen(url: String, title: String, page: Int, screen: Int) {
         runOnUiThread {
             // 大屏端直接打开了课件，手机端同步打开课件翻页页面
+            if (coursewareFilePath(url) != coursewareFilePath(coursewareUrl)) {
+                castImageBitmap = null
+                coursewareLocalUri = null
+            }
             coursewareUrl = url
             coursewareTitle = if (title.isNotBlank()) title else "课件"
             coursewarePage = page
@@ -6691,17 +6717,68 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    /** 大屏端画笔回传的标注动作（板擦 / 撤销 / 清空 / 大屏本地笔画），与本地笔迹共用同一份栈 */
-    override fun onViewerAnnotation(payload: RemoteAnnotationPayload) {
-        // 信令回调在 OkHttp 线程，必须切回主线程再触碰 View
+    private fun embeddedVideoButton(): MaterialButton = compactButton(secondaryButton("本页视频"), 12f).apply {
+        layoutParams = LinearLayout.LayoutParams(dp(104), dp(40))
+        embeddedVideos.attach(this)
+    }
+
+    private fun ensureFileAnnotations() {
+        val file = coursewareFilePath(coursewareUrl)
+        if (annotationsFile == file) return
+        coursewarePdfStrokes.clear()
+        annotationsFile = file
+        renderedAnnotationsFile = ""
+        renderedAnnotationsPage = 0
+    }
+
+    private fun saveVisibleFileAnnotations() {
+        if (restoringAnnotations || renderedAnnotationsPage < 1 || renderedAnnotationsFile != annotationsFile ||
+            annotationsFile != coursewareFilePath(coursewareUrl)) return
+        zoomableImageView?.let { coursewarePdfStrokes[renderedAnnotationsPage] = it.currentStrokes() }
+    }
+
+    private fun setAnnotatedImage(view: ZoomableImageView, bitmap: Bitmap, page: Int, atBottom: Boolean = false) {
+        ensureFileAnnotations()
+        val notes = coursewarePdfStrokes[page].orEmpty()
+        restoringAnnotations = true
+        try {
+            view.setImage(bitmap, atBottom)
+            view.replaceStrokes(notes)
+            renderedAnnotationsFile = annotationsFile
+            renderedAnnotationsPage = page
+        } finally { restoringAnnotations = false }
+    }
+
+    override fun onAnnotationsSnapshot(message: JSONObject) {
         runOnUiThread {
-            val view = zoomableImageView ?: return@runOnUiThread
-            // 课件按页保存笔迹：只把属于当前页的动作应用到预览。
-            // page=0 表示旧版大屏或未分页场景，按当前页处理。
-            if (payload.page > 0 && payload.page != coursewarePage) {
-                return@runOnUiThread
+            if (coursewareUrl.isBlank() || coursewareFilePath(message.optString("url")) != coursewareFilePath(coursewareUrl)) return@runOnUiThread
+            ensureFileAnnotations()
+            coursewarePdfStrokes.clear()
+            coursewarePdfStrokes.putAll(FileAnnotations.snapshot(message))
+            if (renderedAnnotationsFile == annotationsFile && renderedAnnotationsPage > 0) {
+                restoringAnnotations = true
+                try { zoomableImageView?.replaceStrokes(coursewarePdfStrokes[renderedAnnotationsPage].orEmpty()) }
+                finally { restoringAnnotations = false }
             }
-            view.applyRemoteAnnotation(payload)
+        }
+    }
+
+    override fun onEmbeddedVideo(message: JSONObject) {
+        runOnUiThread { embeddedVideos.receive(message) }
+    }
+
+    /** Keep server ink on every page, including while the phone shows the menu. */
+    override fun onViewerAnnotation(payload: RemoteAnnotationPayload) {
+        runOnUiThread {
+            if (payload.url.isNotBlank() && coursewareFilePath(payload.url) != coursewareFilePath(coursewareUrl)) return@runOnUiThread
+            ensureFileAnnotations()
+            val page = payload.page.takeIf { it > 0 } ?: coursewarePage.coerceAtLeast(1)
+            val view = zoomableImageView
+            if (view != null && renderedAnnotationsFile == annotationsFile && renderedAnnotationsPage == page) {
+                view.applyRemoteAnnotation(payload)
+            } else {
+                coursewarePdfStrokes[page] = FileAnnotations.apply(coursewarePdfStrokes[page].orEmpty(), payload)
+            }
         }
     }
 
