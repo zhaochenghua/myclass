@@ -4110,6 +4110,9 @@ function showVideoView() {
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
   elements.videoView.hidden = false;
+  // Video/ZIP playback hides these; every annotatable view must restore both.
+  elements.annotationCanvas.hidden = false;
+  elements.annotationToolbar.hidden = false;
   elements.panToolButton.hidden = !state.framePresentation.frameLocked;
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
@@ -4129,6 +4132,8 @@ function showCoursewareView() {
   document.body.classList.add('is-streaming');
   elements.joinView.hidden = true;
   elements.videoView.hidden = false;
+  elements.annotationCanvas.hidden = false;
+  elements.annotationToolbar.hidden = false;
   elements.panToolButton.hidden = false;
   elements.prevPageButton.hidden = false;
   elements.nextPageButton.hidden = false;
