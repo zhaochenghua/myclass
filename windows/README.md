@@ -75,7 +75,7 @@ node scripts/test-windows-desktop.cjs --smoke
 node scripts/test-windows-desktop.cjs
 ```
 
-第一条验证真实 Electron 按钮/IPC、原生标记启停、gInk 启停/鼠标模式和停止投屏清理；第二条需要已连接且解锁的桌面，验证原生跟随延迟、真实鼠标书写、全局快捷键、Esc 退出和 WebRTC 接收帧中的笔迹。截图与测量结果保存在临时目录 `myclass-windows-desktop-proof`，全程使用隔离服务和用户目录。
+第一条验证真实 Electron 按钮/IPC、原生标记启停、gInk 启停/鼠标模式和停止投屏清理；第二条需要已连接且解锁的桌面，验证原生窗口跟随耗时、真实鼠标书写、撤销/重做/橡皮、全局快捷键、Esc 退出和 WebRTC 接收帧中的笔迹变化。窗口跟随测量不等于屏幕显示延迟，远程桌面回传光标可能引入抖动。截图与测量结果保存在临时目录 `myclass-windows-desktop-proof`，全程使用隔离服务和用户目录。
 
 ## 声音说明
 

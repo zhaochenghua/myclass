@@ -130,6 +130,7 @@ internal sealed class CursorHalo : NativeWindow, IDisposable {
         }
         visible = true;
         Point point; GetCursorPos(out point); Move(point);
+        SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040);
     }
     IntPtr OnMouse(int code, IntPtr message, IntPtr data) {
         // Draw/move locally on the input thread: no timer, IPC, CSS easing or rAF.
@@ -148,7 +149,9 @@ internal sealed class CursorHalo : NativeWindow, IDisposable {
             diameter = Math.Max(28, (int)Math.Round(28 * dx / 96.0));
             Paint(point);
         }
-        SetWindowPos(Handle, new IntPtr(-1), point.X - diameter / 2, point.Y - diameter / 2, diameter, diameter, 0x0010 | 0x0040);
+        // Preserve z-order while moving: repeatedly raising HWND_TOPMOST from a
+        // low-level hook can stall input while other desktop windows respond.
+        SetWindowPos(Handle, IntPtr.Zero, point.X - diameter / 2, point.Y - diameter / 2, diameter, diameter, 0x0004 | 0x0010 | 0x0400);
     }
     void Paint(Point point) {
         using (var bitmap = new Bitmap(diameter, diameter, PixelFormat.Format32bppPArgb)) {

@@ -82,7 +82,9 @@ function createDesktopTools({ app, onInkState, onError }) {
     }
     const configFile = path.join(directory, 'config.ini');
     if (!fs.existsSync(path.join(directory, '.myclass-configured'))) {
-      const config = fs.readFileSync(configFile, 'utf8').replace(/Language_File\s*=.*$/m, 'Language_File = zh-cn');
+      const config = fs.readFileSync(configFile, 'utf8')
+        .replace(/Language_File\s*=.*$/m, 'Language_File = zh-cn')
+        .replace(/^Allow_Dragging_Toolbar\s*=.*$/m, 'Allow_Dragging_Toolbar = True');
       fs.writeFileSync(configFile, config);
       fs.writeFileSync(path.join(directory, '.myclass-configured'), '1');
     }
