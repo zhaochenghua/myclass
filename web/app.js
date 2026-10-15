@@ -675,14 +675,16 @@ function setupStudentRoller() {
   const dock = document.getElementById('studentRollDock');
   const slot = document.getElementById('studentRollToolbarSlot');
   const blackboardSlot = document.getElementById('studentRollBlackboardSlot');
+  const videoSlot = document.getElementById('studentRollVideoSlot');
   const positionControls = () => {
     const blackboardVisible = !elements.blackboardOverlay.hidden;
+    const videoVisible = !elements.videoPlayerOverlay.hidden;
     const toolbarVisible = !elements.videoView.hidden && !elements.annotationToolbar.hidden && elements.blackboardOverlay.hidden;
     const teaching = !elements.videoView.hidden || !elements.blackboardOverlay.hidden || !elements.videoPlayerOverlay.hidden;
-    const parent = blackboardVisible ? blackboardSlot : toolbarVisible ? slot : dock;
+    const parent = blackboardVisible ? blackboardSlot : videoVisible ? videoSlot : toolbarVisible ? slot : dock;
     if (controls.parentElement !== parent) parent.appendChild(controls);
     btn.hidden = result.hidden = !teaching;
-    dock.hidden = blackboardVisible || toolbarVisible || (!teaching && classButton.hidden);
+    dock.hidden = parent !== dock || (!teaching && classButton.hidden);
   };
   const observer = new MutationObserver(positionControls);
   [elements.videoView, elements.annotationToolbar, elements.blackboardOverlay, elements.videoPlayerOverlay].forEach(element => observer.observe(element, { attributes: true, attributeFilter: ['hidden'] }));

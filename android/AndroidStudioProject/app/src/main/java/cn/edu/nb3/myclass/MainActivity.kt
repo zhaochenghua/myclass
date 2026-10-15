@@ -237,6 +237,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var coursewarePdf: CoursewarePdfRenderer.OpenedPdf? = null
     /** 课件渲染失败时降级为遥控页，避免"下载失败 → 重建 → 再失败"形成死循环 */
     private var coursewarePdfFailed = false
+    private var coursewarePdfFailedUrl = ""
+    private var coursewarePdfFailureMessage = ""
     /** 课件播放页的翻页动作，由界面注册，供音量键等外部入口复用 */
     private var coursewarePdfPaging: ((delta: Int) -> Unit)? = null
     /** 已渲染的页位图缓存（页码 → 位图），只保留当前页与相邻页，避免内存堆积 */
@@ -3888,6 +3890,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showCoursewareScreen(title: String, isUploading: Boolean) {
+        if (!isUploading && coursewarePdfFailedUrl != coursewareUrl) coursewarePdfFailed = false
+        if (!isUploading && coursewarePdfOpenedKey.isNotEmpty() && coursewarePdfOpenedKey != coursewareCacheKey()) {
+            releaseCoursewarePdf()
+            coursewarePdfStrokes.clear()
+            coursewarePdfOpenedKey = ""
+        }
         // 图片/视频/PDF 课件改用专用界面：
         // 图片与 PDF 可在手机上缩放平移并同步大屏视口，视频以遥控器方式控制大屏播放
         if (!isUploading && !coursewarePdfFailed) {
@@ -3955,6 +3963,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             configureCoursewareNavigationButton(this, 1)
         })
 
+        val retryPreview = if (!isUploading && coursewarePdfFailed && mediaKindOf(coursewareUrl) == CastMediaKind.Pdf) {
+            secondaryButton("重新加载预览").apply {
+                setOnClickListener {
+                    coursewarePdfFailed = false
+                    releaseMediaCastViews()
+                    showCoursewareScreen(title, isUploading = false)
+                }
+            }
+        } else null
+        if (retryPreview != null) statusText?.append("\n$coursewarePdfFailureMessage")
+
         if (isLandscape) {
             // 横屏：左侧标题+状态+版本，右侧翻页按钮+操作按钮
             val root = landscapeRoot().apply {
@@ -3976,6 +3995,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
             rightPanel.addView(pageRow)
+            retryPreview?.let { rightPanel.addView(it) }
             rightPanel.addView(buildCoursewareJumpRow(isUploading))
             if (!isUploading) rightPanel.addView(studentRollButton())
             if (isUploading) {
@@ -4014,6 +4034,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(titleText("播放课件", 28f))
             root.addView(statusText)
             root.addView(pageRow)
+            retryPreview?.let { root.addView(it) }
             root.addView(buildCoursewareJumpRow(isUploading))
             if (!isUploading) root.addView(studentRollButton())
 
@@ -4888,6 +4909,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         fun degradeToRemoteControl(message: String) {
             coursewarePdfFailed = true
+            coursewarePdfFailedUrl = coursewareUrl
+            coursewarePdfFailureMessage = message
+            releaseMediaCastViews()
             toast(message)
             showCoursewareScreen(title, isUploading = false)
         }
@@ -4925,8 +4949,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 // 渲染完成前老师可能已经翻走或退出，此时直接丢弃结果
                 if (currentScreen != Screen.Courseware ||
                     coursewareSubScreen != CoursewareSubScreen.Playback ||
-                    coursewarePage != page
+                    coursewarePage != page || zoomableImageView !== zoomable
                 ) {
+                    bitmap?.recycle()
                     return@renderPdfPageAsync
                 }
                 if (bitmap == null) {
@@ -4964,27 +4989,31 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             hintText.visibility = View.VISIBLE
             hintText.text = if (renderer.isCached(cacheKey)) "正在打开课件…" else "正在下载课件…"
             Thread {
+                var failure = ""
                 val opened = runCatching {
                     renderer.openBlocking(absolute, cacheKey) { percent ->
                         runOnUiThread {
                             if (currentScreen == Screen.Courseware &&
-                                coursewareSubScreen == CoursewareSubScreen.Playback
+                                coursewareSubScreen == CoursewareSubScreen.Playback && zoomableImageView === zoomable
                             ) {
                                 hintText.text = "正在下载课件… $percent%"
                             }
                         }
                     }
-                }.onFailure { Log.w(logTag, "课件打开失败", it) }.getOrNull()
+                }.onFailure {
+                    failure = it.message.orEmpty().take(160)
+                    Log.w(logTag, "课件打开失败", it)
+                }.getOrNull()
                 runOnUiThread {
                     if (currentScreen != Screen.Courseware ||
-                        coursewareSubScreen != CoursewareSubScreen.Playback || coursewareUrl != openingUrl
+                        coursewareSubScreen != CoursewareSubScreen.Playback || coursewareUrl != openingUrl || zoomableImageView !== zoomable
                     ) {
                         opened?.close()
                         return@runOnUiThread
                     }
                     if (opened == null || opened.pageCount <= 0) {
                         opened?.close()
-                        degradeToRemoteControl("课件打开失败，已切换为遥控模式")
+                        degradeToRemoteControl("手机预览加载失败，可重新加载；大屏播放不受影响。\n$failure")
                         return@runOnUiThread
                     }
                     if (coursewarePdfOpenedKey != cacheKey) {
@@ -5714,6 +5743,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         coursewarePdfStrokes.clear()
         coursewarePdfOpenedKey = ""
         coursewarePdfFailed = false
+        coursewarePdfFailedUrl = ""
+        coursewarePdfFailureMessage = ""
         videoPlaying = false
         videoPosition = 0.0
         videoDuration = 0.0
@@ -6036,6 +6067,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun pauseCoursewareAndReturnMenu() {
         cancelCoursewareFastSeek()
+        coursewarePdfFailed = false
         coursewareSubScreen = CoursewareSubScreen.None
         releaseMediaCastViews()
         savedCoursewareState = CoursewareState(

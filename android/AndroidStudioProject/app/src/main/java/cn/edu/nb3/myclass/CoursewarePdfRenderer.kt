@@ -42,27 +42,38 @@ class CoursewarePdfRenderer(
      * @param cacheKey 缓存文件名（通常取课件 id），同一课件重复打开不会重复下载
      * @param onProgress 下载进度 0~100，总长度未知时不回调
      */
-    fun openBlocking(
+    @Synchronized fun openBlocking(
         url: String,
         cacheKey: String,
         onProgress: ((percent: Int) -> Unit)? = null
     ): OpenedPdf {
         val file = File(cacheDir, "$cacheKey.pdf")
-        if (!isCached(cacheKey)) {
+        // A damaged cache must not permanently disable the phone preview.
+        var opened = if (isCached(cacheKey)) runCatching { OpenedPdf(file) }.getOrElse {
+            file.delete()
+            null
+        } else null
+        if (opened == null) {
             downloadBlocking(url, file, onProgress)
+            opened = try { OpenedPdf(file) } catch (error: Exception) {
+                file.delete()
+                throw error
+            }
         }
-        val opened = OpenedPdf(file)
-        opened.pages = runCatching {
+        val pdf = requireNotNull(opened)
+        pdf.pages = runCatching {
             val endpoint = url.toHttpUrl().newBuilder().apply {
                 encodedPath(url.toHttpUrl().encodedPath + ".metadata")
             }.build()
-            client.newCall(Request.Builder().url(endpoint).build()).execute().use { response ->
+            // Optional labels must not delay preview for the upload timeout (30 minutes).
+            client.newBuilder().callTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
+                .newCall(Request.Builder().url(endpoint).build()).execute().use { response ->
                 if (response.isSuccessful) CoursewarePages.parse(
-                    JSONObject(response.body?.string().orEmpty()).optJSONObject("conversion"), opened.pageCount
+                    JSONObject(response.body?.string().orEmpty()).optJSONObject("conversion"), pdf.pageCount
                 ) else null
             }
         }.getOrNull()
-        return opened
+        return pdf
     }
 
     private fun downloadBlocking(url: String, target: File, onProgress: ((Int) -> Unit)?) {
@@ -122,7 +133,10 @@ class CoursewarePdfRenderer(
 
         private val descriptor: ParcelFileDescriptor =
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-        private var renderer: PdfRenderer? = PdfRenderer(descriptor)
+        private var renderer: PdfRenderer? = try { PdfRenderer(descriptor) } catch (error: Exception) {
+            descriptor.close()
+            throw error
+        }
 
         val pageCount: Int
             get() = renderer?.pageCount ?: 0
@@ -131,7 +145,7 @@ class CoursewarePdfRenderer(
          * 渲染指定页（0 基）为位图。
          * @param maxEdgePx 长边像素上限，兼顾清晰度与内存（2048 约 12~16MB/张）
          */
-        fun renderPage(pageIndex: Int, maxEdgePx: Int = DEFAULT_MAX_EDGE): Bitmap {
+        @Synchronized fun renderPage(pageIndex: Int, maxEdgePx: Int = DEFAULT_MAX_EDGE): Bitmap {
             val target = renderer ?: throw IllegalStateException("课件已关闭")
             if (pageIndex < 0 || pageIndex >= target.pageCount) {
                 throw IndexOutOfBoundsException("页码越界：$pageIndex / ${target.pageCount}")
@@ -149,7 +163,7 @@ class CoursewarePdfRenderer(
             }
         }
 
-        fun close() {
+        @Synchronized fun close() {
             runCatching { renderer?.close() }
             renderer = null
             runCatching { descriptor.close() }

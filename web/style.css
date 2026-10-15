@@ -523,6 +523,7 @@ video {
 }
 
 .annotation-toolbar > * { flex-shrink: 0; }
+.annotation-toolbar[hidden] { display: none; }
 #studentRollToolbarSlot { min-width: 0; max-width: 100%; }
 
 .annotation-modes {
@@ -901,7 +902,8 @@ video {
 .student-roll-controls > * { flex-shrink: 0; }
 .student-roll-controls [hidden] { display: none; }
 #classPickerButton { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.student-roll-dock { position: fixed; z-index: 26; top: 5.8rem; left: 1.2rem; padding: 0.5rem; border-radius: 8px; background: rgba(10, 14, 23, 0.88); max-width: calc(100vw - 2.4rem); }
+.student-roll-dock { position: fixed; z-index: 26; bottom: max(0.5rem, env(safe-area-inset-bottom)); right: 1rem; padding: 0.5rem; border-radius: 8px; background: rgba(10, 14, 23, 0.88); max-width: calc(100vw - 2rem); }
+#studentRollVideoSlot { flex-shrink: 0; }
 .student-roll-dock[hidden] { display: none; }
 .student-roll-notice { position: fixed; bottom: 5rem; left: 50%; transform: translateX(-50%); z-index: 110; background: #101b24; color: white; padding: 0.7rem 1rem; border: 1px solid var(--line); border-radius: 8px; max-width: 80vw; text-align: center; }
 .class-picker-card select { width: 100%; margin: 0.5rem 0 1rem; padding: 0.7rem; font: inherit; color: var(--text); background: #101b24; border: 1px solid var(--line); border-radius: 6px; }

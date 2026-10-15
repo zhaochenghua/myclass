@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>上课投屏平台</title>
-    <link rel="stylesheet" href="./style.css?v=20261015-courseware-links">
+    <link rel="stylesheet" href="./style.css?v=20261015-bottom-roll">
   </head>
   <body>
     <main class="stage" aria-live="polite">
@@ -207,6 +207,7 @@
         <video id="coursewareVideo" playsinline></video>
         <div class="video-player-error" id="videoPlayerError" hidden></div>
         <div class="video-controls" id="videoControls">
+          <span id="studentRollVideoSlot"></span>
           <button class="video-ctrl-btn" id="videoPlayPause" title="播放/暂停">▶</button>
           <span class="video-hint" id="videoHint" hidden></span>
           <div class="video-progress-container" id="videoProgressContainer">
@@ -337,6 +338,6 @@
     <script defer src="./studentRoster.js?v=20260919g"></script>
     <script defer src="./touchCalibrationMath.js?v=20261014-calibration"></script>
     <script defer src="./touchCalibration.js?v=20261014-home-only"></script>
-    <script defer src="./app.js?v=20261015-courseware-links"></script>
+    <script defer src="./app.js?v=20261015-bottom-roll"></script>
   </body>
 </html>

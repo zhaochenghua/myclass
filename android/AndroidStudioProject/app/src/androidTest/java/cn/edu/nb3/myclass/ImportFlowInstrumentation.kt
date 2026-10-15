@@ -18,13 +18,18 @@ import java.util.UUID
 /** Runs only against server/testSupport.js; no classroom or real account required. */
 class ImportFlowInstrumentation : Instrumentation() {
     private var clipboardOnly = false
+    private var previewOnly = false
+    private var previewHoldMs = 0L
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         clipboardOnly = arguments?.getString("clipboard") == "true"
+        previewOnly = arguments?.getString("preview") == "true"
+        previewHoldMs = arguments?.getString("previewHoldMs")?.toLongOrNull()?.coerceIn(0, 30000) ?: 0L
         start()
     }
     override fun onStart() {
         if (clipboardOnly) { ClipboardFlowCheck.run(this); return }
+        if (previewOnly) { PdfPreviewCheck.run(this, previewHoldMs); return }
         val results = Bundle()
         try {
             check(BuildConfig.SERVER_BASE_URL == "http://10.0.2.2:3107/myclass") { "Use isolated emulator server on port 3107" }
