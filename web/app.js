@@ -513,10 +513,12 @@ async function bootstrap() {
     });
     // 直线/曲线切换按钮
     elements.annotationLineToggle.addEventListener('click', () => {
+      if (state.annotations.tool === 'eraser') setAnnotationTool('pen');
       state.annotations.lineMode = !state.annotations.lineMode;
       updateLineToggleButtons();
     });
     elements.blackboardLineToggle.addEventListener('click', () => {
+      if (state.blackboard.tool === 'eraser') setBlackboardTool('pen');
       state.blackboard.lineMode = !state.blackboard.lineMode;
       updateLineToggleButtons();
     });
