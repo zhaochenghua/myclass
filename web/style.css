@@ -760,6 +760,12 @@ video {
   gap: 0.15rem;
 }
 
+/* 线型选择器按内容收紧，避免通用下拉菜单的最小宽度撑出空白。 */
+.toolbar-dropdown-menu.annotation-mode-menu {
+  min-width: 0;
+  flex-direction: row;
+}
+
 .toolbar-dropdown-menu.is-open {
   display: flex;
 }
