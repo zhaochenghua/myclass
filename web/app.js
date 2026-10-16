@@ -3944,7 +3944,10 @@ function updateAnnotationColorButtons() {
     button.classList.toggle('is-active', button.dataset.color === state.annotations.currentColor);
   });
   const extraColor = ['#E87500', '#7B2CBF', '#222222', '#FFFFFF'].includes(state.annotations.currentColor);
-  elements.annotationMoreColorsButton.classList.toggle('is-active', extraColor);
+  elements.annotationMoreColorsButton.classList.toggle(
+    'is-active',
+    state.annotations.currentColor === '#00843D' || extraColor
+  );
   elements.annotationMoreColorsButton.style.setProperty(
     '--annotation-selection-ring',
     extraColor ? state.annotations.currentColor : '#FFFFFF'
