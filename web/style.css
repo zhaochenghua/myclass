@@ -597,29 +597,43 @@ video {
   background: var(--annotation-color);
 }
 
-.annotation-color[data-color="#ffd166"] {
-  --annotation-color: #ffd166;
+.annotation-color[data-color="#D00000"] {
+  --annotation-color: #D00000;
 }
 
-.annotation-color[data-color="#ff4d6d"] {
-  --annotation-color: #ff4d6d;
+.annotation-color[data-color="#0057B8"] {
+  --annotation-color: #0057B8;
 }
 
-.annotation-color[data-color="#38bdf8"] {
-  --annotation-color: #38bdf8;
+.annotation-color[data-color="#00843D"] {
+  --annotation-color: #00843D;
 }
 
-.annotation-color[data-color="#22c55e"] {
-  --annotation-color: #22c55e;
+.annotation-color[data-color="#E87500"] {
+  --annotation-color: #E87500;
 }
 
-.annotation-color[data-color="#ffffff"] {
-  --annotation-color: #ffffff;
+.annotation-color[data-color="#7B2CBF"] {
+  --annotation-color: #7B2CBF;
+}
+
+.annotation-color[data-color="#222222"] {
+  --annotation-color: #222222;
+}
+
+.annotation-color[data-color="#FFFFFF"] {
+  --annotation-color: #FFFFFF;
 }
 
 .annotation-color.is-active {
   border-color: #000;
   outline: 3px solid #fff;
+}
+
+.annotation-mode-menu .toolbar-dropdown-item.is-active {
+  border-color: #fff;
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
 }
 
 .annotation-button {
@@ -725,7 +739,7 @@ video {
   display: flex;
 }
 
-.annotation-more-colors { --annotation-color: #ffd166; }
+.annotation-more-colors { --annotation-color: #00843D; }
 .annotation-more-colors-menu { left: auto; right: 0; transform: none; flex-direction: row; gap: 0.5rem; padding: 0.6rem; min-width: 0; }
 
 /* Keep classroom controls on one line, including at 125%/150% display scaling. */

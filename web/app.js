@@ -49,7 +49,7 @@ const state = {
   annotations: {
     strokes: [],
     activeStrokes: new Map(),  // key: pointerId → stroke，支持多笔同时绘制
-    currentColor: '#ff4d6d',
+    currentColor: '#00843D',
     tool: 'pen',
     mode: 'solid',  // solid | dashed | dashdot | highlighter
     lineMode: false,  // true=直线 false=曲线（与线型正交）
@@ -62,7 +62,7 @@ const state = {
     activeStrokes: new Map(),  // 黑板当前页活跃笔画，支持多点
     tool: 'pen',               // 'pen' | 'eraser' | 'hand' | 'select'
     eraserWidth: 40,           // 板擦半径(px)
-    currentColor: '#ff4d6d',   // 黑板专用颜色（默认红色）
+    currentColor: '#00843D',   // 黑板专用颜色（默认第三个色块：深绿色）
     mode: 'solid',             // solid | dashed | dashdot | highlighter
     lineMode: false,           // true=直线 false=曲线（与线型正交）
     // 圈选系统
@@ -234,6 +234,8 @@ const elements = {
   blackboardSelectButton: document.getElementById('blackboardSelectButton'),
   blackboardDeleteSelButton: document.getElementById('blackboardDeleteSelButton'),
   blackboardColorButtons: Array.from(document.querySelectorAll('#blackboardColors .annotation-color')),
+  blackboardMoreColorsButton: document.getElementById('blackboardMoreColorsButton'),
+  blackboardMoreColorsMenu: document.getElementById('blackboardMoreColorsMenu'),
   blackboardColorsContainer: document.getElementById('blackboardColors'),
   blackboardColorsDropdown: document.getElementById('blackboardColorsDropdown'),
   blackboardModeMenu: document.getElementById('blackboardModeMenu'),
@@ -466,6 +468,12 @@ async function bootstrap() {
     elements.blackboardColorButtons.forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (btn === elements.blackboardMoreColorsButton) {
+          elements.blackboardModeMenu.classList.remove('is-open');
+          setBlackboardColor(btn.dataset.color);
+          setBlackboardMoreColorsOpen(!elements.blackboardMoreColorsMenu.classList.contains('is-open'));
+          return;
+        }
         const menu = elements.blackboardModeMenu;
         if (btn.dataset.color === state.blackboard.currentColor && menu.classList.contains('is-open')) {
           menu.classList.remove('is-open');
@@ -473,6 +481,14 @@ async function bootstrap() {
         }
         setBlackboardColor(btn.dataset.color);
         menu.classList.add('is-open');
+      });
+    });
+    elements.blackboardMoreColorsMenu.querySelectorAll('.annotation-color').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setBlackboardMoreColorsOpen(false);
+        setBlackboardColor(btn.dataset.color);
+        elements.blackboardModeMenu.classList.add('is-open');
       });
     });
     elements.blackboardModeMenu.querySelectorAll('.toolbar-dropdown-item').forEach((item) => {
@@ -486,6 +502,7 @@ async function bootstrap() {
       const dropdown = elements.blackboardColorsDropdown;
       if (dropdown && !dropdown.contains(e.target)) {
         elements.blackboardModeMenu.classList.remove('is-open');
+        setBlackboardMoreColorsOpen(false);
       }
     });
     // 直线/曲线切换按钮
@@ -554,15 +571,15 @@ async function bootstrap() {
     elements.prevPageButton.addEventListener('click', () => navigatePage(-1));
     elements.nextPageButton.addEventListener('click', () => navigatePage(1));
     document.addEventListener('fullscreenchange', updateFullscreenButton);
-    elements.annotationMoreColorsButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      elements.annotationModeMenu.classList.remove('is-open');
-      const open = !elements.annotationMoreColorsMenu.classList.contains('is-open');
-      setMoreColorsOpen(open);
-    });
     elements.annotationColorButtons.forEach((button) => {
       button.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (button === elements.annotationMoreColorsButton) {
+          elements.annotationModeMenu.classList.remove('is-open');
+          setAnnotationColor(button.dataset.color);
+          setMoreColorsOpen(!elements.annotationMoreColorsMenu.classList.contains('is-open'));
+          return;
+        }
         setMoreColorsOpen(false);
         const menu = elements.annotationModeMenu;
         if (button.dataset.color === state.annotations.currentColor && menu.classList.contains('is-open')) {
@@ -595,6 +612,9 @@ async function bootstrap() {
     });
     updateAnnotationButtons();
     updateAnnotationColorButtons();
+    updateAnnotationModeButtons();
+    updateBlackboardColorButtons();
+    updateBlackboardModeButtons();
     updateAnnotationToolButtons();
     setupStudentRoller();
     startClock();
@@ -3830,6 +3850,16 @@ function setAnnotationColor(color) {
 
 function setAnnotationMode(mode) {
   state.annotations.mode = mode;
+  updateAnnotationModeButtons();
+}
+
+function updateAnnotationModeButtons() {
+  if (!elements.annotationModeMenu) return;
+  elements.annotationModeMenu.querySelectorAll('.toolbar-dropdown-item[data-mode]').forEach((button) => {
+    const active = button.dataset.mode === state.annotations.mode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
 }
 
 function updateLineToggleButtons() {
@@ -3890,14 +3920,19 @@ function setMoreColorsOpen(open) {
   elements.annotationMoreColorsButton.setAttribute('aria-expanded', String(open));
 }
 
+function setBlackboardMoreColorsOpen(open) {
+  elements.blackboardMoreColorsMenu.classList.toggle('is-open', open);
+  elements.blackboardMoreColorsButton.setAttribute('aria-expanded', String(open));
+}
+
 function updateAnnotationColorButtons() {
   elements.annotationColorButtons.forEach((button) => {
     button.classList.toggle('is-active', button.dataset.color === state.annotations.currentColor);
   });
-  const extraColor = ['#ffd166', '#38bdf8', '#ffffff'].includes(state.annotations.currentColor);
+  const extraColor = ['#E87500', '#7B2CBF', '#222222', '#FFFFFF'].includes(state.annotations.currentColor);
   elements.annotationMoreColorsButton.classList.toggle('is-active', extraColor);
   const selected = elements.annotationColorButtons.find(button => button.dataset.color === state.annotations.currentColor);
-  elements.annotationMoreColorsButton.title = `黄色、蓝色、白色（当前：${selected?.getAttribute('aria-label') || '红色'}）`;
+  elements.annotationMoreColorsButton.title = `深绿色、橙色、紫色、深灰色、白色（当前：${selected?.getAttribute('aria-label') || '深绿色'}）`;
 }
 
 function pointerEventToSourcePoint(event) {
@@ -4915,6 +4950,16 @@ function endBlackboardPinch() {
 
 function setBlackboardMode(mode) {
   state.blackboard.mode = mode;
+  updateBlackboardModeButtons();
+}
+
+function updateBlackboardModeButtons() {
+  if (!elements.blackboardModeMenu) return;
+  elements.blackboardModeMenu.querySelectorAll('.toolbar-dropdown-item[data-mode]').forEach((button) => {
+    const active = button.dataset.mode === state.blackboard.mode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
 }
 
 function setBlackboardColor(color) {

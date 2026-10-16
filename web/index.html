@@ -124,20 +124,21 @@
         <canvas class="annotation-canvas" id="annotationCanvas"></canvas>
         <div class="annotation-eraser-cursor" id="annotationEraserCursor"></div>
         <div class="annotation-toolbar" id="annotationToolbar" aria-label="画笔工具">
-          <button class="annotation-mode" id="panToolButton" type="button" title="手型" aria-label="手型" hidden>
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+          <button class="annotation-mode" id="panToolButton" type="button" title="指针（拖动画面）" aria-label="指针" hidden>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 12.586 19 19"/><path d="M3.688 3.037a.497.497 0 0 0-.651.651l6.5 15.999a.501.501 0 0 0 .947-.062l1.569-6.083a2 2 0 0 1 1.448-1.479l6.124-1.579a.5.5 0 0 0 .063-.947z"/></svg>
           </button>
           <button class="annotation-button annotation-eraser-btn" id="annotationEraserButton" type="button">板擦</button>
           <div class="annotation-colors-dropdown" id="annotationColorsDropdown">
             <div class="annotation-colors" id="annotationColors" aria-label="画笔颜色">
-              <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
-              <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
-              <button class="annotation-color annotation-more-colors" id="annotationMoreColorsButton" type="button" aria-label="黄色及更多颜色" aria-expanded="false" aria-controls="annotationMoreColorsMenu" title="黄色、蓝色、白色"></button>
+              <button class="annotation-color" type="button" data-color="#D00000" aria-label="深红色"></button>
+              <button class="annotation-color" type="button" data-color="#0057B8" aria-label="深蓝色"></button>
+              <button class="annotation-color annotation-more-colors is-active" id="annotationMoreColorsButton" type="button" data-color="#00843D" aria-label="深绿色及更多颜色" aria-expanded="false" aria-controls="annotationMoreColorsMenu" title="深绿色、橙色、紫色、深灰色、白色"></button>
             </div>
             <div class="toolbar-dropdown-menu annotation-more-colors-menu" id="annotationMoreColorsMenu" aria-label="更多画笔颜色">
-              <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
-              <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
-              <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
+              <button class="annotation-color" type="button" data-color="#E87500" aria-label="橙色"></button>
+              <button class="annotation-color" type="button" data-color="#7B2CBF" aria-label="紫色"></button>
+              <button class="annotation-color" type="button" data-color="#222222" aria-label="深灰色"></button>
+              <button class="annotation-color" type="button" data-color="#FFFFFF" aria-label="白色"></button>
             </div>
             <div class="toolbar-dropdown-menu annotation-mode-menu" id="annotationModeMenu">
               <button class="toolbar-dropdown-item" type="button" data-mode="solid" title="实线" aria-label="实线">
@@ -261,19 +262,23 @@
           <button class="annotation-button" id="blackboardUndoButton" type="button">撤销</button>
           <button class="annotation-button" id="blackboardClearButton" type="button">清屏</button>
           <button class="annotation-button blackboard-eraser-btn" id="blackboardEraserButton" type="button">板擦</button>
-          <button class="annotation-button blackboard-hand-btn" id="blackboardHandButton" type="button" title="手型" aria-label="手型">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+          <button class="annotation-button blackboard-hand-btn" id="blackboardHandButton" type="button" title="指针（拖动画面）" aria-label="指针">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 12.586 19 19"/><path d="M3.688 3.037a.497.497 0 0 0-.651.651l6.5 15.999a.501.501 0 0 0 .947-.062l1.569-6.083a2 2 0 0 1 1.448-1.479l6.124-1.579a.5.5 0 0 0 .063-.947z"/></svg>
           </button>
           <button class="annotation-button blackboard-select-btn" id="blackboardSelectButton" type="button">圈选</button>
           <button class="annotation-button blackboard-delete-sel-btn" id="blackboardDeleteSelButton" type="button" style="display:none">删除</button>
           <div class="toolbar-divider"></div>
           <div class="annotation-colors-dropdown" id="blackboardColorsDropdown">
             <div class="annotation-colors" id="blackboardColors" aria-label="黑板颜色">
-              <button class="annotation-color" type="button" data-color="#ffd166" aria-label="黄色"></button>
-              <button class="annotation-color is-active" type="button" data-color="#ff4d6d" aria-label="红色"></button>
-              <button class="annotation-color" type="button" data-color="#38bdf8" aria-label="蓝色"></button>
-              <button class="annotation-color" type="button" data-color="#22c55e" aria-label="绿色"></button>
-              <button class="annotation-color" type="button" data-color="#ffffff" aria-label="白色"></button>
+              <button class="annotation-color" type="button" data-color="#D00000" aria-label="深红色"></button>
+              <button class="annotation-color" type="button" data-color="#0057B8" aria-label="深蓝色"></button>
+              <button class="annotation-color annotation-more-colors is-active" id="blackboardMoreColorsButton" type="button" data-color="#00843D" aria-label="深绿色及更多颜色" aria-expanded="false" aria-controls="blackboardMoreColorsMenu" title="深绿色、橙色、紫色、深灰色、白色"></button>
+            </div>
+            <div class="toolbar-dropdown-menu annotation-more-colors-menu" id="blackboardMoreColorsMenu" aria-label="更多黑板颜色">
+              <button class="annotation-color" type="button" data-color="#E87500" aria-label="橙色"></button>
+              <button class="annotation-color" type="button" data-color="#7B2CBF" aria-label="紫色"></button>
+              <button class="annotation-color" type="button" data-color="#222222" aria-label="深灰色"></button>
+              <button class="annotation-color" type="button" data-color="#FFFFFF" aria-label="白色"></button>
             </div>
             <div class="toolbar-dropdown-menu annotation-mode-menu" id="blackboardModeMenu">
               <button class="toolbar-dropdown-item" type="button" data-mode="solid" title="实线" aria-label="实线">
