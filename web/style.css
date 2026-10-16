@@ -590,7 +590,7 @@ video {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 3.25rem;
+  width: 2.75rem;
   height: 2.2rem;
   min-height: 0;
   padding: 0;
@@ -603,6 +603,8 @@ video {
 
 .annotation-mode-menu .toolbar-dropdown-item svg {
   display: block;
+  width: 2.5rem;
+  height: auto;
   filter: drop-shadow(0 0 0.8px rgba(255, 255, 255, 0.65));
 }
 
