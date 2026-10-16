@@ -1903,7 +1903,7 @@ function restoreFileAnnotations(message) {
     try { return url && new URL(url, location.href).href === new URL(message.url, location.href).href; } catch { return false; }
   };
   const strokes = [...(message.strokes || []), ...(message.active || [])].map(s => ({
-    ...s, id: s.key || s.strokeId, colorHex: s.color || '#ff4d6d', width: Number(s.width) || 4,
+    ...s, id: s.key || s.strokeId, colorHex: s.color || '#D00000', width: Number(s.width) || 4,
     points: s.points || [], page: Number(s.page) || 1
   }));
   if (state.screen === 'MediaCast' && matches(state.media.queue[state.media.index]?.url)) {

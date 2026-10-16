@@ -10,8 +10,8 @@
 // 渲染策略：已完成笔迹画在离屏 base 画布上，可见画布每帧只叠加"进行中的笔画"，
 // 避免每次手指移动都全量重绘（对齐 Android 的离屏层 + 增量追加思路）。
 
-export const ANNOTATION_COLORS = ['#ffd166', '#ff4d6d', '#38bdf8', '#22c55e', '#ffffff'];
-export const DEFAULT_COLOR = '#ff4d6d';
+export const ANNOTATION_COLORS = ['#E87500', '#D00000', '#0057B8', '#00843D', '#FFFFFF'];
+export const DEFAULT_COLOR = '#D00000';
 export const PEN_WIDTH = 4;
 export const ERASER_WIDTH = 40;
 

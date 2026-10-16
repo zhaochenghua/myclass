@@ -798,24 +798,24 @@ input::placeholder {
   transition: transform 0.1s ease;
 }
 
-.annotation-color[data-color="#ffd166"] {
-  --annotation-color: #ffd166;
+.annotation-color[data-color="#E87500"] {
+  --annotation-color: #E87500;
 }
 
-.annotation-color[data-color="#ff4d6d"] {
-  --annotation-color: #ff4d6d;
+.annotation-color[data-color="#D00000"] {
+  --annotation-color: #D00000;
 }
 
-.annotation-color[data-color="#38bdf8"] {
-  --annotation-color: #38bdf8;
+.annotation-color[data-color="#0057B8"] {
+  --annotation-color: #0057B8;
 }
 
-.annotation-color[data-color="#22c55e"] {
-  --annotation-color: #22c55e;
+.annotation-color[data-color="#00843D"] {
+  --annotation-color: #00843D;
 }
 
-.annotation-color[data-color="#ffffff"] {
-  --annotation-color: #ffffff;
+.annotation-color[data-color="#FFFFFF"] {
+  --annotation-color: #FFFFFF;
 }
 
 .annotation-color.is-active {
