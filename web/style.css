@@ -771,11 +771,7 @@ video {
 }
 
 .annotation-mode-menu .toolbar-dropdown-item svg {
-  filter: none;
-}
-
-.annotation-mode-menu .toolbar-dropdown-item svg line {
-  stroke: #fff !important;
+  filter: drop-shadow(0 0 0.8px rgba(255, 255, 255, 0.72));
 }
 
 .toolbar-dropdown-menu.is-open {
