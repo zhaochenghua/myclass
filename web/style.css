@@ -652,7 +652,7 @@ video {
 
 .annotation-more-colors.is-active {
   border-color: #000;
-  outline: 3px solid #fff;
+  outline: 3px solid var(--annotation-selection-ring, #fff);
   outline-offset: 1px;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85);
 }

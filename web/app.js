@@ -3945,6 +3945,10 @@ function updateAnnotationColorButtons() {
   });
   const extraColor = ['#E87500', '#7B2CBF', '#222222', '#FFFFFF'].includes(state.annotations.currentColor);
   elements.annotationMoreColorsButton.classList.toggle('is-active', extraColor);
+  elements.annotationMoreColorsButton.style.setProperty(
+    '--annotation-selection-ring',
+    extraColor ? state.annotations.currentColor : '#FFFFFF'
+  );
   const selected = elements.annotationColorButtons.find(button => button.dataset.color === state.annotations.currentColor);
   elements.annotationMoreColorsButton.title = `点击选择深绿色线型，再次点击展开其他颜色（当前：${selected?.getAttribute('aria-label') || '深绿色'}）`;
 }
@@ -4989,6 +4993,15 @@ function updateBlackboardColorButtons() {
   elements.blackboardColorButtons.forEach((btn) => {
     btn.classList.toggle('is-active', btn.dataset.color === state.blackboard.currentColor);
   });
+  const extraColor = ['#E87500', '#7B2CBF', '#222222', '#FFFFFF'].includes(state.blackboard.currentColor);
+  elements.blackboardMoreColorsButton.classList.toggle(
+    'is-active',
+    state.blackboard.currentColor === '#00843D' || extraColor
+  );
+  elements.blackboardMoreColorsButton.style.setProperty(
+    '--annotation-selection-ring',
+    extraColor ? state.blackboard.currentColor : '#FFFFFF'
+  );
 }
 
 function toggleBlackboardEraser() {
