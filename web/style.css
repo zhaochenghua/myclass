@@ -575,6 +575,9 @@ video {
 .annotation-mode-menu {
   left: 50%;
   transform: translateX(-50%);
+  background: #777;
+  border-color: #aaa;
+  backdrop-filter: none;
 }
 
 .annotation-mode-menu .toolbar-dropdown-item {
@@ -586,9 +589,6 @@ video {
 
 .annotation-mode-menu .toolbar-dropdown-item svg {
   display: block;
-  padding: 2px 0;
-  border-radius: 2px;
-  background: #777;
 }
 
 .annotation-color {
@@ -635,7 +635,7 @@ video {
 
 .annotation-mode-menu .toolbar-dropdown-item.is-active {
   border-color: #fff;
-  background: rgba(255, 255, 255, 0.24);
+  background: #999;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
 }
 
