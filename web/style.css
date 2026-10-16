@@ -650,6 +650,13 @@ video {
   outline: 3px solid #fff;
 }
 
+.annotation-more-colors.is-active {
+  border-color: #000;
+  outline: 3px solid #fff;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85);
+}
+
 .annotation-mode-menu .toolbar-dropdown-item.is-active {
   border-color: #8e8e93;
   background: #d1d1d6;
