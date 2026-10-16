@@ -469,9 +469,15 @@ async function bootstrap() {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (btn === elements.blackboardMoreColorsButton) {
-          elements.blackboardModeMenu.classList.remove('is-open');
+          const modeOpen = elements.blackboardModeMenu.classList.contains('is-open');
           setBlackboardColor(btn.dataset.color);
-          setBlackboardMoreColorsOpen(!elements.blackboardMoreColorsMenu.classList.contains('is-open'));
+          if (modeOpen) {
+            elements.blackboardModeMenu.classList.remove('is-open');
+            setBlackboardMoreColorsOpen(true);
+          } else {
+            setBlackboardMoreColorsOpen(false);
+            elements.blackboardModeMenu.classList.add('is-open');
+          }
           return;
         }
         const menu = elements.blackboardModeMenu;
@@ -575,9 +581,15 @@ async function bootstrap() {
       button.addEventListener('click', (e) => {
         e.stopPropagation();
         if (button === elements.annotationMoreColorsButton) {
-          elements.annotationModeMenu.classList.remove('is-open');
+          const modeOpen = elements.annotationModeMenu.classList.contains('is-open');
           setAnnotationColor(button.dataset.color);
-          setMoreColorsOpen(!elements.annotationMoreColorsMenu.classList.contains('is-open'));
+          if (modeOpen) {
+            elements.annotationModeMenu.classList.remove('is-open');
+            setMoreColorsOpen(true);
+          } else {
+            setMoreColorsOpen(false);
+            elements.annotationModeMenu.classList.add('is-open');
+          }
           return;
         }
         setMoreColorsOpen(false);
@@ -3932,7 +3944,7 @@ function updateAnnotationColorButtons() {
   const extraColor = ['#E87500', '#7B2CBF', '#222222', '#FFFFFF'].includes(state.annotations.currentColor);
   elements.annotationMoreColorsButton.classList.toggle('is-active', extraColor);
   const selected = elements.annotationColorButtons.find(button => button.dataset.color === state.annotations.currentColor);
-  elements.annotationMoreColorsButton.title = `深绿色、橙色、紫色、深灰色、白色（当前：${selected?.getAttribute('aria-label') || '深绿色'}）`;
+  elements.annotationMoreColorsButton.title = `点击选择深绿色线型，再次点击展开其他颜色（当前：${selected?.getAttribute('aria-label') || '深绿色'}）`;
 }
 
 function pointerEventToSourcePoint(event) {
