@@ -764,6 +764,18 @@ video {
 .toolbar-dropdown-menu.annotation-mode-menu {
   min-width: 0;
   flex-direction: row;
+  border-color: rgba(0, 0, 0, 0.18);
+  background: rgba(242, 242, 247, 0.97);
+  box-shadow: 0 0.7rem 1.8rem rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(20px) saturate(140%);
+}
+
+.annotation-mode-menu .toolbar-dropdown-item svg {
+  filter: none;
+}
+
+.annotation-mode-menu .toolbar-dropdown-item svg line {
+  stroke: #1c1c1e !important;
 }
 
 .toolbar-dropdown-menu.is-open {
