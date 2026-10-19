@@ -18,7 +18,7 @@ test('browser reports actual page intersection for 16:9, 4:3, zoom and pan', () 
     let run; let result;
     const context = vm.createContext({ setTimeout: callback => { run = callback; return 1; },
       isCoursewarePdfVisible: () => true, clamp: (n,a,b) => Math.max(a,Math.min(b,n)),
-      WebSocket: { OPEN: 1 }, state: { socket: { readyState: 1 }, teacherConnected: false, courseware: { url: '/test.pdf', page: 3 }, presentationRevision: 2 },
+      WebSocket: { OPEN: 1 }, state: { socket: { readyState: 1 }, teacherConnected: false, courseware: { url: '/test.pdf', page: 3, displayedPage: 3 }, presentationRevision: 2 },
       elements: { videoView: { hidden: false, getBoundingClientRect: () => viewport }, coursewareCanvas: { getBoundingClientRect: () => content } },
       sendMessage: payload => { result = payload; } });
     vm.runInContext(code + '\nreportViewerCoursewareViewport(); reportViewerCoursewareViewport();', context);
@@ -35,7 +35,7 @@ test('viewport reporting recovers after stopped playback, disconnected socket an
   const reports = [];
   let viewport = rect(0,0,0,0);
   const state = { teacherConnected: false, socket: { readyState: 0 },
-    courseware: { url: '/book.pdf', page: 2 }, presentationRevision: 4 };
+    courseware: { url: '/book.pdf', page: 2, displayedPage: 2 }, presentationRevision: 4 };
   const context = vm.createContext({ WebSocket: { OPEN: 1 }, state,
     setTimeout: callback => { run = callback; return 1; },
     isCoursewarePdfVisible: () => true, clamp: (n,a,b) => Math.max(a,Math.min(b,n)),
@@ -57,4 +57,10 @@ test('viewport reporting recovers after stopped playback, disconnected socket an
   tick();
   assert.equal(reports.length,2);
   assert.equal(reports[1].page,2);
+  state.courseware.page = 3;
+  tick();
+  assert.equal(reports.length,2, 'old pixels must not be reported as the new page');
+  state.courseware.displayedPage = 3;
+  tick();
+  assert.equal(reports[2].page,3);
 });

@@ -1634,7 +1634,14 @@ function openCourseware(message) {
     pdfDocument: null,
     loadingTask: null,
     renderTask: null,
-    renderGeneration: 0
+    renderGeneration: 0,
+    displayedPage: 0,
+    renderCache: new Map(),
+    renderCacheBytes: 0,
+    renderCacheKey: '',
+    prefetchTask: null,
+    prefetchGeneration: 0,
+    prefetching: false
   };
   // 从消息中读取原始文件下载地址（服务端已注入）
   // ZIP 文件：直接用 url 作为下载链接
@@ -2142,6 +2149,7 @@ function requestSound() {
 function handleCoursewareImageViewport(message) {
   if (Number(message.page) > 0 && state.courseware && Number(message.page) !== state.courseware.page) return;
   state.pendingTeacherViewport = message;
+  if (state.courseware?.pdfDocument && state.courseware.displayedPage !== state.courseware.page) return;
   // 图片与 PDF 课件都接受手机端视口：统一写入 state.imageView 后按内容层渲染
   if (currentContentKind() === 'none') return;
   const view = state.imageView;
@@ -2588,6 +2596,7 @@ function reportViewerCoursewareViewport() {
     // it describes playback, not whether the signaling connection can send.
     if (!isCoursewarePdfVisible() || elements.videoView.hidden ||
         state.socket?.readyState !== WebSocket.OPEN) return;
+    if (state.courseware.displayedPage !== state.courseware.page) return;
     const viewport = elements.videoView.getBoundingClientRect();
     const content = elements.coursewareCanvas.getBoundingClientRect();
     if (viewport.width <= 0 || viewport.height <= 0 || content.width <= 0 || content.height <= 0) return;
@@ -3091,6 +3100,103 @@ async function loadCoursewareDocument(courseware) {
 const COURSEWARE_RENDER_OVERSAMPLE = 1.5;
 /** 课件页渲染的最长边上限，避免超大页面占用过多显存 */
 const COURSEWARE_MAX_RENDER_EDGE = 4096;
+const COURSEWARE_RENDER_CACHE_BYTES = 64 * 1024 * 1024;
+const COURSEWARE_RENDER_CACHE_PAGES = 3;
+
+function releaseCoursewareBuffer(buffer) {
+  buffer.canvas.width = buffer.canvas.height = 1;
+}
+
+function removeCoursewareCachedPage(courseware, pageNumber) {
+  const buffer = courseware.renderCache.get(pageNumber);
+  if (!buffer) return;
+  courseware.renderCache.delete(pageNumber);
+  courseware.renderCacheBytes -= buffer.bytes;
+  releaseCoursewareBuffer(buffer);
+}
+
+function clearCoursewareRenderCache(courseware) {
+  for (const pageNumber of courseware.renderCache.keys()) removeCoursewareCachedPage(courseware, pageNumber);
+}
+
+function cancelCoursewarePrefetch(courseware) {
+  courseware.prefetchGeneration++;
+  courseware.prefetchTask?.cancel();
+  courseware.prefetchTask = null;
+  courseware.prefetching = false;
+}
+
+async function createCoursewarePageBuffer(courseware, pageNumber, layout, valid, onTask, background = false) {
+  const page = await courseware.pdfDocument.getPage(pageNumber);
+  if (!valid()) return null;
+  const baseViewport = page.getViewport({ scale: 1 });
+  const fitScale = layout.width / baseViewport.width;
+  const cssViewport = page.getViewport({ scale: fitScale });
+  let renderScale = fitScale * layout.outputScale * COURSEWARE_RENDER_OVERSAMPLE;
+  const longestEdge = Math.max(baseViewport.width, baseViewport.height) * renderScale;
+  if (longestEdge > COURSEWARE_MAX_RENDER_EDGE) renderScale *= COURSEWARE_MAX_RENDER_EDGE / longestEdge;
+  const renderViewport = page.getViewport({ scale: renderScale });
+  const width = Math.max(1, Math.round(renderViewport.width));
+  const height = Math.max(1, Math.round(renderViewport.height));
+  const bytes = width * height * 4;
+  // At high DPI the displayed page's cached copy may crowd out the next page.
+  // Its pixels already live on screen, so release that copy before prefetching.
+  if (background && courseware.renderCacheBytes + bytes > COURSEWARE_RENDER_CACHE_BYTES) {
+    removeCoursewareCachedPage(courseware, courseware.displayedPage);
+  }
+  while (!background && (courseware.renderCacheBytes + bytes > COURSEWARE_RENDER_CACHE_BYTES ||
+      courseware.renderCache.size >= COURSEWARE_RENDER_CACHE_PAGES)) {
+    const oldest = courseware.renderCache.keys().next().value;
+    if (oldest === undefined) break;
+    removeCoursewareCachedPage(courseware, oldest);
+  }
+  if (background && (courseware.renderCacheBytes + bytes > COURSEWARE_RENDER_CACHE_BYTES ||
+      courseware.renderCache.size >= COURSEWARE_RENDER_CACHE_PAGES)) return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  const buffer = { canvas, bytes, cssWidth: Math.round(cssViewport.width), cssHeight: Math.round(cssViewport.height) };
+  let complete = false;
+  try {
+    const context = canvas.getContext('2d', { alpha: false });
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, width, height);
+    const task = page.render({ canvasContext: context, viewport: renderViewport });
+    onTask(task);
+    await task.promise;
+    if (!valid()) return null;
+    complete = true;
+    return buffer;
+  } finally {
+    if (!complete) releaseCoursewareBuffer(buffer);
+  }
+}
+
+function cacheCoursewareBuffer(courseware, pageNumber, buffer) {
+  courseware.renderCache.set(pageNumber, buffer);
+  courseware.renderCacheBytes += buffer.bytes;
+}
+
+async function prefetchCoursewarePages(courseware, pageNumber, layout) {
+  const generation = ++courseware.prefetchGeneration;
+  const valid = () => state.courseware === courseware && generation === courseware.prefetchGeneration;
+  courseware.prefetching = true;
+  try {
+    // Prepare forward animation first; render neighbours serially to bound work.
+    for (const neighbour of [pageNumber + 1, pageNumber - 1]) {
+      if (!valid()) return;
+      if (neighbour < 1 || neighbour > courseware.pageCount || courseware.renderCache.has(neighbour)) continue;
+      const buffer = await createCoursewarePageBuffer(courseware, neighbour, layout, valid,
+        task => { courseware.prefetchTask = task; }, true);
+      if (buffer && !valid()) { releaseCoursewareBuffer(buffer); return; }
+      if (buffer) cacheCoursewareBuffer(courseware, neighbour, buffer);
+    }
+  } catch {
+    // Prefetch is optional. A failed neighbour is retried by normal navigation.
+  } finally {
+    if (valid()) { courseware.prefetchTask = null; courseware.prefetching = false; }
+  }
+}
 
 async function renderCoursewarePage() {
   const courseware = state.courseware;
@@ -3104,36 +3210,46 @@ async function renderCoursewarePage() {
   }
 
   courseware.page = clamp(courseware.page, 1, courseware.pageCount);
+  const pageNumber = courseware.page;
   const generation = ++courseware.renderGeneration;
+  const valid = () => state.courseware === courseware && generation === courseware.renderGeneration;
   let renderTask = null;
   cancelCoursewareRender(courseware);
+  cancelCoursewarePrefetch(courseware);
+  const containerRect = elements.videoView.getBoundingClientRect();
+  const layout = { width: containerRect.width, height: containerRect.height, outputScale: Math.min(window.devicePixelRatio || 1, 2) };
+  if (layout.width <= 0 || layout.height <= 0) return;
+  const cacheKey = `${layout.width}:${layout.height}:${layout.outputScale}`;
+  if (courseware.renderCacheKey !== cacheKey) {
+    clearCoursewareRenderCache(courseware);
+    courseware.renderCacheKey = cacheKey;
+  }
+  for (const cachedPage of courseware.renderCache.keys()) {
+    if (Math.abs(cachedPage - pageNumber) > 1) removeCoursewareCachedPage(courseware, cachedPage);
+  }
 
   try {
-    const page = await courseware.pdfDocument.getPage(courseware.page);
-    if (state.courseware !== courseware || generation !== courseware.renderGeneration) {
-      return;
+    let buffer = courseware.renderCache.get(pageNumber);
+    if (!buffer) {
+      buffer = await createCoursewarePageBuffer(courseware, pageNumber, layout, valid, task => {
+        renderTask = courseware.renderTask = task;
+      });
+      if (!buffer) return;
+      if (!valid()) { releaseCoursewareBuffer(buffer); return; }
+      cacheCoursewareBuffer(courseware, pageNumber, buffer);
     }
+    if (!valid()) return;
 
+    // No await between replacing pixels, placement and ink: browsers present
+    // only the fully rendered page, with its matching annotations and viewport.
     const canvas = elements.coursewareCanvas;
-    const containerRect = elements.videoView.getBoundingClientRect();
-    const baseViewport = page.getViewport({ scale: 1 });
-    // 宽度充满：课件默认铺满容器宽度，两侧不留黑边；
-    // 页面高于屏幕时上下拖动查看（与手机端 FitWidth 的口径一致）。
-    const fitScale = containerRect.width / baseViewport.width;
-    const cssViewport = page.getViewport({ scale: fitScale });
-    const outputScale = Math.min(window.devicePixelRatio || 1, 2);
-    let renderScale = fitScale * outputScale * COURSEWARE_RENDER_OVERSAMPLE;
-    const longestEdge = Math.max(baseViewport.width, baseViewport.height) * renderScale;
-    if (longestEdge > COURSEWARE_MAX_RENDER_EDGE) {
-      renderScale *= COURSEWARE_MAX_RENDER_EDGE / longestEdge;
-    }
-    const renderViewport = page.getViewport({ scale: renderScale });
-
-    canvas.width = Math.max(1, Math.round(renderViewport.width));
-    canvas.height = Math.max(1, Math.round(renderViewport.height));
+    if (canvas.width !== buffer.canvas.width) canvas.width = buffer.canvas.width;
+    if (canvas.height !== buffer.canvas.height) canvas.height = buffer.canvas.height;
+    canvas.getContext('2d', { alpha: false }).drawImage(buffer.canvas, 0, 0);
+    courseware.displayedPage = pageNumber;
     courseware.fitMode = 'width-fill';
-    courseware.cssWidth = Math.round(cssViewport.width);
-    courseware.cssHeight = Math.round(cssViewport.height);
+    courseware.cssWidth = buffer.cssWidth;
+    courseware.cssHeight = buffer.cssHeight;
     // 分屏字段保留（状态上报与旧端兼容），但不再参与定位：
     // 整页适应后页面不会超出容器，需要看细节时缩放平移即可。
     courseware.maxOffsetX = 0;
@@ -3147,25 +3263,15 @@ async function renderCoursewarePage() {
     updateCoursewareCanvasPlacement();
     resetCoursewareViewport();
 
-    const context = canvas.getContext('2d', { alpha: false });
-    context.fillStyle = '#fff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    renderTask = page.render({
-      canvasContext: context,
-      viewport: renderViewport
-    });
-    courseware.renderTask = renderTask;
-    await renderTask.promise;
-    if (state.courseware === courseware && generation === courseware.renderGeneration) {
-      if (state.pendingTeacherViewport) handleCoursewareImageViewport(state.pendingTeacherViewport);
-      updateCoursewareStatus();
-      updatePageNavButtons();
-      sendCoursewareState();
-      updateVideoPresentation();
-      coursewareLinkControls.then(links => links.render(courseware.page));
-    }
+    if (state.pendingTeacherViewport) handleCoursewareImageViewport(state.pendingTeacherViewport);
+    updateCoursewareStatus();
+    updatePageNavButtons();
+    sendCoursewareState();
+    updateVideoPresentation();
+    coursewareLinkControls.then(links => { if (valid()) links.render(pageNumber); });
+    void prefetchCoursewarePages(courseware, pageNumber, layout);
   } catch (error) {
-    if (error?.name !== 'RenderingCancelledException' && state.courseware === courseware) {
+    if (error?.name !== 'RenderingCancelledException' && valid()) {
       elements.videoStatus.textContent = '课件页面渲染失败';
     }
   } finally {
@@ -3293,6 +3399,11 @@ function cancelCoursewareRender(courseware) {
 
 function destroyCoursewareDocument(courseware) {
   cancelCoursewareRender(courseware);
+  if (courseware) {
+    courseware.renderGeneration++;
+    cancelCoursewarePrefetch(courseware);
+    clearCoursewareRenderCache(courseware);
+  }
   if (courseware?.loadingTask) {
     courseware.loadingTask.destroy();
     courseware.loadingTask = null;
@@ -3429,6 +3540,7 @@ function resizeAnnotationCanvas() {
 }
 
 function beginAnnotationStroke(event) {
+  if (state.courseware?.pdfDocument && state.courseware.displayedPage !== state.courseware.page) return;
   if (beginLockedVideoPan(event)) return;
   // 投屏图片 + 手型工具：走图片自身的平移/捏合，与 PDF 课件的 coursewarePan 分开
   if (beginImageGesture(event)) return;
@@ -3989,7 +4101,7 @@ function drawAnnotations() {
 
   const crop = currentFrameCrop();
   // 课件按页保存笔迹：只绘制属于当前页的标注，翻页后自动切换
-  const page = currentCoursewarePage();
+  const page = state.courseware?.displayedPage || currentCoursewarePage();
   for (const stroke of state.annotations.strokes) {
     if (stroke.page && stroke.page !== page) continue;
     drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop);

@@ -141,6 +141,8 @@ COURSEWARE_LIST_LIMIT=0
 
 PPT/PPTX 新上传时默认通过 ExpandAnimations 将“出现/消失”动画按点击展开成多个静态 PDF 页，网页及手机沿用原有翻页控制。无需 Windows 或 Microsoft Office。设置 `PPT_ANIMATION_MODE=static` 可恢复普通静态转换；旧课件需要重新上传才会展开。支持范围、Linux 实测对比、部署和回滚方式见 [PPT 动画展开说明](docs/ppt-animation-expansion.md)。
 
+大屏翻页在后台画布绘制完整后一次替换显示，等待期间保留上一屏及其笔迹，避免动画拆页切换时闪白。后台优先预渲染下一屏，再准备上一屏；像素缓存最多三张、合计不超过 64 MiB，换课件或显示尺寸变化时失效。无需重新上传课件。浏览器回归：`node scripts/test-courseware-rendering.cjs`（需 Playwright，默认使用 Edge）。
+
 HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认允许 `10.30.13.1`、`localhost`、`127.0.0.1`、`ai.nbsdszx.cn` 和 `sz.imst.xyz`。可通过 `https://sz.imst.xyz/myclass/` 访问域名反向代理入口；若设置了 `ALLOWED_HOSTS`，该变量会覆盖默认名单，需同时包含上述域名。
 
 ### 任教班级与随机抽学生
