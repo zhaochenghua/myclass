@@ -14,6 +14,10 @@
   const startButton = byId('touchCalibrationStart');
   const resetButton = byId('touchCalibrationReset');
   const canvas = byId('touchCalibrationPreview');
+  const correctedEvents = new WeakSet();
+  const toolbarPointers = new Map();
+  const completedPointers = new Set();
+  const toolbarSelector = '#annotationToolbar, .blackboard-toolbar';
   let context = { token: null, classId: '', name: '' };
   let generation = 0, profile = null, revision = 0, loading = false, saving = false, loadError = false;
   let candidate = null, samples = [], phase = 'idle', capture = null, previous = null, measured = null;
@@ -32,6 +36,7 @@
   }
   function clearPreview() { canvas.width = innerWidth; canvas.height = innerHeight; previous = null; }
   function idle(text = '建议先进入全屏。请用上课时的触控笔或手指校准，完成后试写并保存。') {
+    toolbarPointers.clear();
     phase = 'idle'; candidate = null; capture = null; samples = [];
     target.hidden = true; saveButton.hidden = true; startButton.hidden = false;
     resetButton.hidden = false; message.textContent = text; clearPreview(); renderStatus();
@@ -75,6 +80,7 @@
     return { x: p.x * innerWidth, y: p.y * innerHeight };
   }
   function eventFor(event) {
+    if (correctedEvents.has(event)) return event;
     const p = correctedPoint(event);
     // Proxy native methods back to their original Event receiver.
     return new Proxy(event, { get(object, key) {
@@ -83,6 +89,66 @@
       const value = Reflect.get(object, key, object);
       return typeof value === 'function' ? value.bind(object) : value;
     } });
+  }
+  function inToolbar(element) { return !!element?.closest(toolbarSelector); }
+  const controlFor = element => element?.closest('button, a, input, select, [role="button"]');
+  function routeToolbarEvent(event) {
+    if (correctedEvents.has(event) || !event.isTrusted) return;
+    // Activation is delivered on pointerup even when the raw hit is disabled.
+    // Swallow its native follow-up click, including after a view/fullscreen change.
+    if (event.type === 'click') {
+      if (event.detail !== 0 && completedPointers.has(event.pointerId)) {
+        completedPointers.delete(event.pointerId);
+        event.preventDefault(); event.stopImmediatePropagation();
+      }
+      return;
+    }
+    if (!overlay.hidden || !matches(profile)) return;
+    const p = correctedPoint(event);
+    const hit = document.elementFromPoint(p.x, p.y);
+    let gesture = toolbarPointers.get(event.pointerId);
+    if (event.type === 'pointerdown') {
+      toolbarPointers.delete(event.pointerId);
+      completedPointers.delete(event.pointerId);
+      if (!inToolbar(hit) && !inToolbar(event.target)) return;
+      gesture = { target: hit, control: controlFor(hit) };
+      toolbarPointers.set(event.pointerId, gesture);
+    } else if (!gesture) return;
+    // Stop the raw hit (which may be a neighbouring button or the ink canvas)
+    // before delivering one corrected event. Keep drags on their initial target.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const finished = event.type === 'pointerup' || event.type === 'pointercancel';
+    if (finished) {
+      toolbarPointers.delete(event.pointerId);
+      completedPointers.add(event.pointerId);
+      setTimeout(() => completedPointers.delete(event.pointerId), 1000);
+    }
+    if (!gesture.target) return;
+    const init = {
+      bubbles: true, cancelable: true, composed: true, view: window, detail: event.detail,
+      clientX: p.x, clientY: p.y,
+      screenX: event.screenX + p.x - event.clientX, screenY: event.screenY + p.y - event.clientY,
+      button: event.button, buttons: event.buttons,
+      ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey, metaKey: event.metaKey,
+      pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: event.isPrimary,
+      width: event.width, height: event.height, pressure: event.pressure,
+      tangentialPressure: event.tangentialPressure, tiltX: event.tiltX, tiltY: event.tiltY, twist: event.twist
+    };
+    const dispatch = (destination, type, detail = event.detail) => {
+      const forwarded = new PointerEvent(type, { ...init, detail });
+      correctedEvents.add(forwarded);
+      destination.dispatchEvent(forwarded);
+    };
+    dispatch(gesture.target, event.type);
+    if (event.type === 'pointerup' && event.button === 0 && event.isPrimary && gesture.control &&
+        gesture.control === controlFor(hit) && !gesture.control.closest(':disabled')) {
+      gesture.control.focus({ preventScroll: true });
+      dispatch(gesture.control, 'click', 1);
+    }
+  }
+  for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'click']) {
+    document.addEventListener(type, routeToolbarEvent, { capture: true, passive: false });
   }
   function showTarget() {
     const p = math.targets[samples.length];
@@ -154,6 +220,7 @@
     if (!loading && !saving && confirm('清除当前班级（未选班级时为本浏览器）的校准，恢复默认坐标？')) void persist(null);
   });
   function resized() {
+    toolbarPointers.clear();
     if (!overlay.hidden && phase !== 'idle') idle('显示尺寸已改变，请重新开始校准。');
     renderStatus();
   }

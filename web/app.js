@@ -49,7 +49,7 @@ const state = {
   annotations: {
     strokes: [],
     activeStrokes: new Map(),  // key: pointerId → stroke，支持多笔同时绘制
-    currentColor: '#00843D',
+    currentColor: '#D00000',
     tool: 'pen',
     mode: 'solid',  // solid | dashed | dashdot | highlighter
     lineMode: false,  // true=直线 false=曲线（与线型正交）
@@ -62,7 +62,7 @@ const state = {
     activeStrokes: new Map(),  // 黑板当前页活跃笔画，支持多点
     tool: 'pen',               // 'pen' | 'eraser' | 'hand' | 'select'
     eraserWidth: 40,           // 板擦半径(px)
-    currentColor: '#00843D',   // 黑板专用颜色（默认第三个色块：深绿色）
+    currentColor: '#D00000',   // 黑板专用颜色（默认深红色）
     mode: 'solid',             // solid | dashed | dashdot | highlighter
     lineMode: false,           // true=直线 false=曲线（与线型正交）
     // 圈选系统

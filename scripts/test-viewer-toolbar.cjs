@@ -57,7 +57,7 @@ function samplePdf() {
       assert.equal(await page.locator('#studentRollControls').evaluate(el => el.parentElement.id), 'studentRollToolbarSlot');
       await page.locator('#annotationEraserButton').click();
       assert.equal(await page.evaluate(() => state.annotations.tool), 'eraser');
-      await page.locator('#annotationColors [data-color="#ff4d6d"]').click();
+      await page.locator('#annotationColors [data-color="#D00000"]').click();
       const before = await page.evaluate(() => state.annotations.strokes.length);
       await page.mouse.move(400, 320); await page.mouse.down();
       await page.mouse.move(600, 420, { steps: 10 }); await page.mouse.up();

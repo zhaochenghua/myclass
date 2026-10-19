@@ -506,6 +506,7 @@ video {
 }
 
 .annotation-toolbar {
+  touch-action: none;
   position: absolute;
   right: 1rem;
   bottom: 0.5rem;
@@ -1766,6 +1767,7 @@ video {
 }
 
 .blackboard-toolbar {
+  touch-action: none;
   width: max-content;
   max-width: calc(100vw - 2.4rem);
   position: absolute;

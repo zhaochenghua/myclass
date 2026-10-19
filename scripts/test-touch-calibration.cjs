@@ -34,15 +34,98 @@ const { startTestServer } = require('../server/testSupport');
     assert.ok(await page.evaluate(() => localStorage.getItem('myclass.touchCalibration.v1')));
     await page.reload();
     await page.waitForFunction(() => typeof TouchCalibration !== 'undefined');
+    // Reopening calibration also dismisses first-click fullscreen, so this
+    // non-fullscreen profile remains valid during the following toolbar tests.
+    await page.getByRole('button', { name: '触屏校准', exact: true }).click();
+    await page.locator('#touchCalibrationClose').click();
     let p = await page.evaluate(() => { const e = TouchCalibration.eventFor(new PointerEvent('pointermove', { clientX: 500, clientY: 400 })); return [e.clientX, e.clientY]; });
     assert.ok(Math.abs(p[0] - 476) < 1 && Math.abs(p[1] - 384) < 1);
+    assert.deepEqual(await page.evaluate(() => [state.annotations.currentColor, state.blackboard.currentColor]), ['#D00000', '#D00000']);
+    const toolbarClick = async (selector, touch = false) => {
+      const button = page.locator(selector);
+      const rect = await button.boundingBox();
+      assert.ok(rect, selector);
+      const raw = { x: rect.x + rect.width - 4 + 24, y: rect.y + rect.height / 2 + 16 };
+      assert.equal(await button.evaluate((el, raw) => el.contains(document.elementFromPoint(raw.x, raw.y)), raw), false,
+        selector + ': test must miss the uncalibrated button');
+      if (touch) await page.touchscreen.tap(raw.x, raw.y);
+      else await page.mouse.click(raw.x, raw.y);
+    };
+    const checkToolbar = async (prefix, touch) => {
+      const blackboard = prefix === 'blackboard';
+      const tools = () => page.evaluate(blackboard => {
+        const s = blackboard ? state.blackboard : state.annotations;
+        return { tool: s.tool, color: s.currentColor, mode: s.mode,
+          strokes: blackboard ? s.pages[s.currentPage].strokes.length : s.strokes.length };
+      }, blackboard);
+      const before = (await tools()).strokes;
+      await toolbarClick(`#${prefix}EraserButton`, touch);
+      assert.equal((await tools()).tool, 'eraser');
+      await toolbarClick(`#${prefix}Colors [data-color="#0057B8"]`, touch);
+      assert.equal((await tools()).color, '#0057B8');
+      assert.equal((await tools()).tool, 'pen');
+      await toolbarClick(`#${prefix}ModeMenu [data-mode="dashed"]`, touch);
+      assert.equal((await tools()).mode, 'dashed');
+      await toolbarClick(`#${prefix}MoreColorsButton`, touch);
+      await toolbarClick(`#${prefix}MoreColorsButton`, touch);
+      await toolbarClick(`#${prefix}MoreColorsMenu [data-color="#7B2CBF"]`, touch);
+      assert.equal((await tools()).color, '#7B2CBF');
+      await toolbarClick(`#${prefix}ModeMenu [data-mode="solid"]`, touch);
+      assert.equal((await tools()).mode, 'solid');
+      assert.equal((await tools()).strokes, before, 'toolbar taps must not leave ink');
+      // Keyboard activation must retain its native target regardless of pointer calibration.
+      await page.locator(`#${prefix}EraserButton`).press('Enter');
+      assert.equal((await tools()).tool, 'eraser');
+      await toolbarClick(`#${prefix}Colors [data-color="#D00000"]`, touch);
+      assert.equal((await tools()).color, '#D00000');
+      await toolbarClick(`#${prefix}ModeMenu [data-mode="solid"]`, touch);
+    };
     // Actual blackboard listeners receive corrected points, including native pointer capture.
     await page.evaluate(() => toggleBlackboard(true));
     await page.mouse.move(500, 400); await page.mouse.down(); await page.mouse.move(600, 450); await page.mouse.up();
     const ink = await page.evaluate(() => state.blackboard.pages[0].strokes[0].points[0]);
     assert.ok(Math.abs(ink.x - 476) < 1 && Math.abs(ink.y - 384) < 1, JSON.stringify(ink));
+    assert.equal(await page.evaluate(() => state.blackboard.pages[0].strokes[0].color), '#D00000');
+    await checkToolbar('blackboard', false);
+    await checkToolbar('blackboard', true);
+    // A physical stroke above the toolbar may be reported inside it. Route it
+    // back to the canvas without applying calibration twice.
+    const edge = await page.locator('.blackboard-toolbar').boundingBox();
+    const edgeStart = { x: edge.x + edge.width / 2, y: edge.y - 8 };
+    const strokesBefore = await page.evaluate(() => state.blackboard.pages[0].strokes.length);
+    await page.mouse.move(edgeStart.x + 24, edgeStart.y + 16); await page.mouse.down();
+    await page.mouse.move(edgeStart.x + 64, edgeStart.y - 24); await page.mouse.up();
+    const edgeInk = await page.evaluate(i => state.blackboard.pages[0].strokes[i]?.points[0], strokesBefore);
+    assert.ok(edgeInk && Math.abs(edgeInk.x - edgeStart.x) < 1 && Math.abs(edgeInk.y - edgeStart.y) < 1, JSON.stringify(edgeInk));
     await page.screenshot({ path: path.join(output, '02-blackboard.png') });
     await page.evaluate(() => toggleBlackboard(false));
+    await page.evaluate(() => showVideoView());
+    // The raw hit lands on disabled Undo: activation must still reach Line.
+    const line = await page.locator('#annotationLineToggle').boundingBox();
+    const disabledHit = await page.evaluate(r => document.elementFromPoint(r.x + r.width - 4 + 24, r.y + r.height / 2 + 16)?.closest('button')?.disabled, line);
+    assert.equal(disabledHit, true);
+    await toolbarClick('#annotationLineToggle', true);
+    assert.equal(await page.evaluate(() => state.annotations.lineMode), true);
+    await toolbarClick('#annotationLineToggle', true);
+    assert.equal(await page.evaluate(() => state.annotations.lineMode), false);
+    await checkToolbar('annotation', false);
+    await checkToolbar('annotation', true);
+    assert.equal(await page.evaluate(() => state.annotations.strokes.length), 0);
+    assert.equal(await page.locator('#undoAnnotationButton').isDisabled(), true);
+    await toolbarClick('#undoAnnotationButton', true);
+    assert.equal(await page.evaluate(() => state.annotations.strokes.length), 0);
+    const eraser = await page.locator('#annotationEraserButton').boundingBox();
+    const blue = await page.locator('#annotationColors [data-color="#0057B8"]').boundingBox();
+    await page.mouse.move(eraser.x + eraser.width / 2 + 24, eraser.y + eraser.height / 2 + 16);
+    await page.mouse.down();
+    await page.mouse.move(blue.x + blue.width / 2 + 24, blue.y + blue.height / 2 + 16);
+    await page.mouse.up();
+    assert.equal(await page.evaluate(() => state.annotations.currentColor), '#D00000', 'drag across buttons must not activate either');
+    await page.mouse.move(500, 400); await page.mouse.down();
+    await page.mouse.move(eraser.x + eraser.width / 2 + 24, eraser.y + eraser.height / 2 + 16); await page.mouse.up();
+    assert.equal(await page.evaluate(() => state.annotations.tool), 'pen', 'ink ending over toolbar must not activate eraser');
+    await page.screenshot({ path: path.join(output, '02-annotation-toolbar.png') });
+    await page.evaluate(() => showJoinView());
     const a = (await (await server.api('/classes', 'alice', 'POST', { name: '校准测试一班' })).json()).item;
     const b = (await (await server.api('/classes', 'alice', 'POST', { name: '校准测试二班' })).json()).item;
     // Exercise the same selection path as direct login / phone connection.
@@ -119,7 +202,7 @@ const { startTestServer } = require('../server/testSupport');
     await page.waitForFunction(() => document.getElementById('touchCalibrationMessage').textContent.includes('已恢复默认'));
     assert.equal((await (await server.api(`/classes/${a.id}/touch-calibration`)).json()).profile, null);
     assert.deepEqual(errors, []);
-    console.log(`PASS: local reload, real ink, class save/switch, fresh browser load, viewport guard, reset; screenshots: ${output}`);
+    console.log(`PASS: red defaults, calibrated mouse/touch toolbar and menus, keyboard, disabled button, canvas edge, local reload, real ink, class save/switch, fresh browser load, viewport guard, reset; screenshots: ${output}`);
   } catch (error) {
     if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
     throw error;
