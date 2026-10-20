@@ -39,6 +39,7 @@ for (const host of ['10.30.13.1', 'sz.imst.xyz', 'sz.imst.xyz:443']) {
     assert.equal(config.body.iosRequiresCertificate, internal);
     assert.equal(config.body.apkUrl, `${base}/myclass.apk?v=${encodeURIComponent(config.body.apkVersion)}`);
     assert.equal(config.body.windowsUrl, `${base}/myclass-windows.exe?v=${encodeURIComponent(config.body.windowsVersion)}`);
+    assert.equal(config.body.tvUrl, `${base}/public/myclass-tv.apk`);
     assert.equal(config.body.iosUrl, `${iosBase}/ios/?v=${encodeURIComponent(config.body.iosVersion)}`);
     for (const [endpoint, url] of [['apk', config.body.apkUrl], ['ios', config.body.iosUrl]]) {
       const qr = await get(server.base, `/api/${endpoint}-qrcode.svg`, host, headers);
@@ -47,6 +48,16 @@ for (const host of ['10.30.13.1', 'sz.imst.xyz', 'sz.imst.xyz:443']) {
       assert.equal(qr.text, await QRCode.toString(url, {
         type: 'svg', margin: 2, width: 360, color: { dark: '#061014', light: '#f7fbff' }
       }));
+    }
+    for (const [platform, url] of [['android', config.body.apkUrl], ['windows', config.body.windowsUrl], ['tv', config.body.tvUrl]]) {
+      const qr = await get(server.base, `/api/download-qrcode.svg?platform=${platform}`, host, headers);
+      assert.equal(qr.status, 200);
+      assert.equal(qr.text, await QRCode.toString(url, {
+        type: 'svg', margin: 2, width: 360, color: { dark: '#061014', light: '#f7fbff' }
+      }));
+    }
+    for (const query of ['', '?platform=invalid', '?platform=https://attacker.invalid']) {
+      assert.equal((await get(server.base, `/api/download-qrcode.svg${query}`, host)).status, 400);
     }
   });
 }

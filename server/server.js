@@ -83,6 +83,15 @@ function getApkUrl(req) {
   return `${getDownloadBaseUrl(req)}/myclass.apk?v=${encodeURIComponent(appVersion)}`;
 }
 
+function getPackageUrl(req, platform) {
+  if (platform === 'android') return getApkUrl(req);
+  if (platform === 'windows') {
+    return `${getDownloadBaseUrl(req)}/myclass-windows.exe?v=${encodeURIComponent(readVersions().windowsVersion)}`;
+  }
+  if (platform === 'tv') return `${getDownloadBaseUrl(req)}/public/myclass-tv.apk`;
+  return null;
+}
+
 // iPhone 网页版必须走 https：iOS Safari 只允许在安全上下文中访问摄像头。
 // 若 PUBLIC_BASE_URL 已是 https 则直接复用（例如域名证书），否则回退到 IP 自签证书地址。
 const IOS_BASE_URL = removeTrailingSlash(
@@ -238,7 +247,8 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
     apkVersion: appVersion,
     apkUrl: getApkUrl(req),
     windowsVersion,
-    windowsUrl: `${getDownloadBaseUrl(req)}/myclass-windows.exe?v=${encodeURIComponent(windowsVersion)}`,
+    windowsUrl: getPackageUrl(req, 'windows'),
+    tvUrl: getPackageUrl(req, 'tv'),
     iosVersion,
     iosUrl,
     iosRequiresCertificate: isInternalViewerHost(new URL(iosUrl).hostname),
@@ -269,9 +279,12 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
   });
 });
 
-app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
+app.get([`${PATH_PREFIX}/api/apk-qrcode.svg`, `${PATH_PREFIX}/api/download-qrcode.svg`], async (req, res, next) => {
   try {
-    const svg = await QRCode.toString(getApkUrl(req), {
+    const platform = req.path.endsWith('/apk-qrcode.svg') ? 'android' : req.query.platform;
+    const url = getPackageUrl(req, platform);
+    if (!url) return res.status(400).json({ error: '请选择安卓、Windows 或安卓 TV' });
+    const svg = await QRCode.toString(url, {
       type: 'svg',
       margin: 2,
       width: 360,

@@ -116,14 +116,6 @@ h1 {
   min-width: 0;
 }
 
-.code-right {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-width: 0;
-}
-
 .code-label {
   margin-bottom: 0.5rem;
   color: var(--muted);
@@ -142,49 +134,10 @@ h1 {
   white-space: nowrap;
 }
 
-.qr-code {
-  width: clamp(7rem, 13vw, 14rem);
-  height: clamp(7rem, 13vw, 14rem);
-  padding: 0.5rem;
-  border-radius: 8px;
-  background: #f7fbff;
-  display: block;
-}
-
-.download-hint {
-  margin-top: 0.6rem;
-  color: var(--text);
-  font-size: clamp(0.9rem, 1.2vw, 1.3rem);
-  text-align: center;
-}
-
-.download-apk-btn,
-.download-windows-btn {
-  display: inline-block;
-  margin-top: 0.5rem;
-  padding: 0.35rem 1rem;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  color: var(--accent);
-  font-size: clamp(0.8rem, 1vw, 0.95rem);
-  text-decoration: none;
-  transition: background 0.2s;
-}
-
-.download-apk-btn:hover,
-.download-windows-btn:hover {
-  background: rgba(101, 240, 200, 0.12);
-}
-
-.platform-note {
-  margin-top: 0.25rem;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
 .code-actions {
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
   gap: clamp(0.6rem, 1.5vw, 1.2rem);
   padding: clamp(0.5rem, 1vw, 1rem) clamp(1rem, 2vw, 2rem);
   border-top: 1px solid rgba(142, 245, 214, 0.15);
@@ -250,22 +203,95 @@ h1 {
   background: rgba(167, 139, 250, 0.2);
 }
 
-.action-btn-ios {
+.action-btn-download {
   border: 1px solid #7dd3fc;
   background: rgba(125, 211, 252, 0.1);
   color: #7dd3fc;
 }
 
-.action-btn-ios:hover {
+.action-btn-download:hover {
   background: rgba(125, 211, 252, 0.2);
 }
 
-/* 注意：必须写成 .modal-card.ios-modal-card（两个类）才能压过更靠后的 .modal-card{width:360px} */
-.modal-card.ios-modal-card {
+/* 两个类保证覆盖通用弹窗宽度。 */
+.modal-card.download-modal-card {
   width: min(58rem, 96vw);
   max-height: 92vh;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.download-platforms {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.download-platforms button {
+  min-width: 0;
+  padding: 0.7rem 0.2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: clamp(0.8rem, 2.4vw, 1rem);
+  cursor: pointer;
+}
+
+.download-platforms button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: rgba(101, 240, 200, 0.12);
+  color: var(--accent);
+}
+
+.download-package {
+  text-align: center;
+}
+
+.download-package h4 {
+  margin: 0 0 0.6rem;
+  font-size: 1.15rem;
+}
+
+.download-description, .download-version {
+  color: var(--muted);
+  line-height: 1.6;
+  font-size: 0.9rem;
+}
+
+.download-qr {
+  display: block;
+  width: min(13rem, 55vw);
+  height: min(13rem, 55vw);
+  margin: 1.1rem auto;
+  padding: 0.5rem;
+  background: #f7fbff;
+  border-radius: 8px;
+}
+
+.download-link {
+  display: inline-block;
+  padding: 0.65rem 1.5rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.download-link:hover {
+  background: rgba(101, 240, 200, 0.12);
+}
+
+.download-url {
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+#downloadModal [hidden] {
+  display: none !important;
 }
 
 .ios-subtitle {
@@ -349,6 +375,7 @@ h1 {
 }
 
 .ios-url {
+  display: block;
   margin: 0 0 0.7rem;
   color: var(--accent);
   font-size: 0.8rem;
@@ -366,7 +393,7 @@ h1 {
 
 /* 窄屏 / 竖屏：两步上下堆叠显示 */
 @media (max-width: 900px) {
-  .modal-card.ios-modal-card {
+  .modal-card.download-modal-card {
     width: min(28rem, 92vw);
   }
   .ios-phases {
@@ -1505,17 +1532,8 @@ video {
     flex: 0 0 auto;
   }
 
-  .code-right {
-    flex: 0 0 auto;
-  }
-
   .code-value {
     font-size: clamp(3rem, 16vw, 7rem);
-  }
-
-  .qr-code {
-    width: clamp(6rem, 28vw, 10rem);
-    height: clamp(6rem, 28vw, 10rem);
   }
 
   .code-actions {
@@ -1893,11 +1911,6 @@ video {
 
   .code-value {
     font-size: clamp(2.5rem, 8vh, 6rem);
-  }
-
-  .qr-code {
-    width: clamp(4rem, 16vh, 8rem);
-    height: clamp(4rem, 16vh, 8rem);
   }
 
   .code-main {

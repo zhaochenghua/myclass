@@ -168,8 +168,6 @@ const elements = {
   videoView: document.getElementById('videoView'),
   roomCode: document.getElementById('roomCode'),
   clockTime: document.getElementById('clockTime'),
-  apkQr: document.getElementById('apkQr'),
-  downloadHint: document.querySelector('.download-hint'),
   statusText: document.getElementById('statusText'),
   videoStatus: document.getElementById('videoStatus'),
   relayBadge: document.getElementById('relayBadge'),
@@ -201,8 +199,6 @@ const elements = {
   switchCoursewareMenuItem: document.getElementById('switchCoursewareMenuItem'),
   prevPageButton: document.getElementById('prevPageButton'),
   nextPageButton: document.getElementById('nextPageButton'),
-  downloadApkButton: document.getElementById('downloadApkButton'),
-  downloadWindowsButton: document.getElementById('downloadWindowsButton'),
   directTeachButton: document.getElementById('directTeachButton'),
   directTeachUser: document.getElementById('directTeachUser'),
   directTeachLogout: document.getElementById('directTeachLogout'),
@@ -263,44 +259,90 @@ const elements = {
   // 课件连接码角标
   coursewareConnIndicator: document.getElementById('coursewareConnIndicator'),
   coursewareConnCode: document.getElementById('coursewareConnCode'),
-  // iPhone 网页版入口
-  iosWebAppButton: document.getElementById('iosWebAppButton'),
-  iosModal: document.getElementById('iosModal'),
+  // 各平台统一下载入口
+  downloadAppButton: document.getElementById('downloadAppButton'),
+  downloadModal: document.getElementById('downloadModal'),
+  downloadModalClose: document.getElementById('downloadModalClose'),
+  downloadPlatforms: Array.from(document.querySelectorAll('[data-download-platform]')),
+  downloadPackagePanel: document.getElementById('downloadPackagePanel'),
+  downloadPackageTitle: document.getElementById('downloadPackageTitle'),
+  downloadDescription: document.getElementById('downloadDescription'),
+  downloadQr: document.getElementById('downloadQr'),
+  downloadVersion: document.getElementById('downloadVersion'),
+  downloadPackageLink: document.getElementById('downloadPackageLink'),
+  downloadUrlText: document.getElementById('downloadUrlText'),
+  iosDownloadPanel: document.getElementById('iosDownloadPanel'),
   iosQr: document.getElementById('iosQr'),
   iosUrlText: document.getElementById('iosUrlText'),
   iosCaQr: document.getElementById('iosCaQr'),
-  iosModalClose: document.getElementById('iosModalClose'),
 };
 
 bootstrap();
 
-/** iPhone 网页版入口：二维码 + 使用说明（iOS 摄像头需要 https 才能授权） */
-function setupIosWebAppEntry() {
-  const iosVersion = state.config?.iosVersion || 'latest';
-  const iosUrl = state.config?.iosUrl || '';
-  if (!iosUrl) {
-    if (elements.iosWebAppButton) elements.iosWebAppButton.hidden = true;
-    return;
-  }
+function setupDownloadEntry() {
+  const { apkUrl, apkVersion, windowsUrl, windowsVersion, tvUrl, iosUrl, iosVersion } = state.config;
+  const packages = {
+    android: { title: '安卓投屏 App', description: '安装在安卓手机或兼容安卓应用的鸿蒙设备上，输入课堂连接码即可投屏。', url: apkUrl, version: apkVersion },
+    windows: { title: 'Windows 投屏程序', description: '在 Windows 电脑上下载安装，也可用手机扫码获取下载地址。', url: windowsUrl, version: windowsVersion },
+    tv: { title: '安卓 TV 大屏接收端', description: '安装在安卓电视或大屏上接收投屏，可下载安装包后通过 U 盘安装。', url: tvUrl }
+  };
+  const selectPlatform = (platform) => {
+    elements.downloadPlatforms.forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.downloadPlatform === platform));
+    });
+    const isIos = platform === 'ios';
+    elements.downloadPackagePanel.hidden = isIos;
+    elements.iosDownloadPanel.hidden = !isIos;
+    if (isIos) return;
+    const item = packages[platform];
+    elements.downloadPackageTitle.textContent = item.title;
+    elements.downloadDescription.textContent = item.description;
+    elements.downloadVersion.textContent = item.version ? `版本 ${item.version}` : '';
+    elements.downloadPackageLink.href = item.url;
+    elements.downloadPackageLink.download = '';
+    elements.downloadPackageLink.textContent = platform === 'windows' ? '下载 Windows 安装程序' : '下载 APK 安装包';
+    elements.downloadUrlText.textContent = item.url;
+    elements.downloadQr.alt = `${item.title}下载二维码`;
+    elements.downloadQr.src = `./api/download-qrcode.svg?platform=${encodeURIComponent(platform)}&v=${encodeURIComponent(item.version || 'latest')}`;
+  };
   elements.iosQr.src = `./api/ios-qrcode.svg?v=${encodeURIComponent(iosVersion)}`;
   elements.iosUrlText.textContent = iosUrl.replace(/\?v=.*$/, '');
+  elements.iosUrlText.href = iosUrl;
   const requiresCertificate = state.config?.iosRequiresCertificate !== false;
-  elements.iosModal.querySelector('.ios-phase-cert').hidden = !requiresCertificate;
-  elements.iosModal.querySelector('.ios-phases').classList.toggle('ios-phases-single', !requiresCertificate);
-  elements.iosModal.querySelector('.ios-phase-app .ios-phase-num').textContent = requiresCertificate ? '2' : '1';
-  elements.iosModal.querySelector('.ios-subtitle').textContent = requiresCertificate
+  elements.iosDownloadPanel.querySelector('.ios-phase-cert').hidden = !requiresCertificate;
+  elements.iosDownloadPanel.querySelector('.ios-phases').classList.toggle('ios-phases-single', !requiresCertificate);
+  elements.iosDownloadPanel.querySelector('.ios-phase-app .ios-phase-num').textContent = requiresCertificate ? '2' : '1';
+  elements.iosDownloadPanel.querySelector('.ios-subtitle').textContent = requiresCertificate
     ? '全程扫码即可，无需手动输网址；第 1 步每台手机只需做一次。'
     : '扫描二维码，在 Safari 中打开网页版即可使用。';
   if (requiresCertificate) elements.iosCaQr.src = './ios-ca-qr.svg';
-  elements.iosWebAppButton.hidden = false;
-  elements.iosWebAppButton.addEventListener('click', () => {
-    elements.iosModal.hidden = false;
+  elements.downloadPlatforms.forEach(button => {
+    button.addEventListener('click', () => selectPlatform(button.dataset.downloadPlatform));
   });
-  elements.iosModalClose.addEventListener('click', () => {
-    elements.iosModal.hidden = true;
+  selectPlatform('android');
+  const close = () => {
+    elements.downloadModal.hidden = true;
+    elements.downloadAppButton.focus();
+  };
+  elements.downloadAppButton.addEventListener('click', () => {
+    elements.downloadModal.hidden = false;
+    elements.downloadPlatforms.find(button => button.getAttribute('aria-pressed') === 'true').focus();
   });
-  elements.iosModal.addEventListener('click', (event) => {
-    if (event.target === elements.iosModal) elements.iosModal.hidden = true;
+  elements.downloadModalClose.addEventListener('click', close);
+  elements.downloadModal.addEventListener('click', (event) => {
+    if (event.target === elements.downloadModal) close();
+  });
+  elements.downloadModal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); close(); }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(elements.downloadModal.querySelectorAll('button, a[href]'))
+      .filter(element => element.getClientRects().length > 0);
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault(); last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first.focus();
+    }
   });
 }
 
@@ -330,20 +372,7 @@ async function bootstrap() {
   }
   try {
     state.config = await loadConfig();
-    const apkVersion = state.config?.apkVersion || 'latest';
-    elements.apkQr.src = `./api/apk-qrcode.svg?v=${encodeURIComponent(apkVersion)}`;
-    elements.downloadHint.textContent = `APP v${apkVersion}`;
-    if (state.config?.apkUrl && elements.downloadApkButton) {
-      elements.downloadApkButton.href = state.config.apkUrl;
-      elements.downloadApkButton.hidden = false;
-    }
-    if (state.config?.windowsUrl && elements.downloadWindowsButton) {
-      elements.downloadWindowsButton.href = state.config.windowsUrl;
-      elements.downloadWindowsButton.download = '';
-      elements.downloadWindowsButton.hidden = false;
-      elements.downloadWindowsButton.textContent = `下载 Windows 投屏程序 v${state.config.windowsVersion || ''}`.trim();
-    }
-    setupIosWebAppEntry();
+    setupDownloadEntry();
     // 直接上课
     elements.directTeachButton.addEventListener('click', () => {
       if (state.teacherToken) {
@@ -435,7 +464,7 @@ async function bootstrap() {
         document.removeEventListener('click', autoFullscreen);
         return;
       }
-      if (e.target.closest('#downloadApkButton, #homeFullscreenButton, #action-btn-admin, #iosWebAppButton, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, #studentRollControls, #classPickerModal, #studentCountModal, .action-btn-exam, .action-btn-exit')) return;
+      if (e.target.closest('#downloadAppButton, #downloadModal, #homeFullscreenButton, #action-btn-admin, #loginModal, #directTeachButton, #teacherLoginForm, #coursewarePicker, #coursewareDropdownMenu, #studentRollControls, #classPickerModal, #studentCountModal, .action-btn-exam, .action-btn-exit')) return;
       document.documentElement.requestFullscreen().catch(() => {});
       document.removeEventListener('click', autoFullscreen);
     };
@@ -3015,7 +3044,6 @@ function updatePageNavButtons() {
 
 function hideDirectTeachUI() {
   elements.directTeachButton.hidden = true;
-  if (elements.downloadApkButton) elements.downloadApkButton.style.display = 'none';
   elements.directTeachUser.hidden = true;
   elements.directTeachLogout.hidden = true;
   elements.coursewarePicker.hidden = true;
@@ -3023,7 +3051,6 @@ function hideDirectTeachUI() {
 
 function showDirectTeachUI() {
   elements.directTeachButton.hidden = false;
-  if (elements.downloadApkButton) elements.downloadApkButton.style.display = '';
 }
 
 function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {

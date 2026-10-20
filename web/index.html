@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>上课投屏平台</title>
-    <link rel="stylesheet" href="./style.css?v=20261021-download-address">
+    <link rel="stylesheet" href="./style.css?v=20261021-download-hub">
   </head>
   <body>
     <main class="stage" aria-live="polite">
@@ -16,20 +16,13 @@
               <div class="code-label">课堂连接码</div>
               <div class="code-value" id="roomCode">----</div>
             </div>
-            <div class="code-right">
-              <img class="qr-code" id="apkQr" alt="APP 下载二维码">
-              <div class="download-hint">请扫描二维码安装APP</div>
-              <a class="download-apk-btn" id="downloadApkButton" hidden>点击下载安卓APP</a>
-              <a class="download-windows-btn" id="downloadWindowsButton" hidden>下载 Windows 投屏程序</a>
-              <div class="platform-note">支持安卓/鸿蒙和 Windows 平台</div>
-            </div>
           </div>
           <div class="code-actions">
             <button class="action-btn action-btn-teach" id="directTeachButton">打开课件</button>
             <button class="action-btn action-btn-blackboard" id="quickBlackboardButton">电子黑板</button>
             <a class="action-btn action-btn-exam" href="https://teacher.chenji100.com/login" target="_blank" rel="noopener">晨计平台</a>
             <a class="action-btn action-btn-admin" href="./admin.html">后台管理</a>
-            <button class="action-btn action-btn-ios" id="iosWebAppButton">iPhone 网页版</button>
+            <button class="action-btn action-btn-download" id="downloadAppButton" aria-haspopup="dialog" aria-controls="downloadModal">投屏 App 下载</button>
             <button class="action-btn action-btn-fullscreen" id="homeFullscreenButton">全屏</button>
           </div>
         </div>
@@ -52,10 +45,25 @@
         </div>
       </div>
 
-      <!-- iPhone 网页版引导：第 1 步安装信任证书（每台 iPhone 首次一次），第 2 步扫码进网页版 -->
-      <div class="modal-overlay" id="iosModal" hidden>
-        <div class="modal-card ios-modal-card">
-          <h3>iPhone 网页版</h3>
+      <!-- 统一下载入口，按设备选择安装包或 iOS 网页版 -->
+      <div class="modal-overlay" id="downloadModal" role="dialog" aria-modal="true" aria-labelledby="downloadModalTitle" hidden>
+        <div class="modal-card download-modal-card">
+          <h3 id="downloadModalTitle">投屏 App 下载</h3>
+          <div class="download-platforms" role="group" aria-label="选择设备平台">
+            <button type="button" data-download-platform="android" aria-pressed="true">安卓</button>
+            <button type="button" data-download-platform="windows" aria-pressed="false">Windows</button>
+            <button type="button" data-download-platform="ios" aria-pressed="false">iOS</button>
+            <button type="button" data-download-platform="tv" aria-pressed="false">安卓 TV</button>
+          </div>
+          <section class="download-package" id="downloadPackagePanel" aria-labelledby="downloadPackageTitle">
+            <h4 id="downloadPackageTitle">安卓投屏 App</h4>
+            <p class="download-description" id="downloadDescription"></p>
+            <img class="download-qr" id="downloadQr" alt="安卓投屏 App 下载二维码">
+            <p class="download-version" id="downloadVersion"></p>
+            <a class="download-link" id="downloadPackageLink">下载安装包</a>
+            <p class="download-url" id="downloadUrlText"></p>
+          </section>
+          <section id="iosDownloadPanel" aria-label="iOS 网页版" hidden>
           <p class="ios-subtitle">全程扫码即可，无需手动输网址；第 1 步每台手机只需做一次。</p>
           <div class="ios-phases">
             <section class="ios-phase ios-phase-cert">
@@ -75,17 +83,18 @@
               <div class="ios-phase-title"><span class="ios-phase-num">2</span>打开网页版并添加主屏幕</div>
               <div class="ios-phase-body">
                 <img class="ios-qr" id="iosQr" alt="iPhone 网页版二维码">
-                <p class="ios-url" id="iosUrlText"></p>
+                <a class="ios-url" id="iosUrlText" target="_blank" rel="noopener"></a>
                 <ol class="ios-steps">
-                  <li>用 iPhone 相机扫<b>第 2 步二维码</b>，用 Safari 打开。</li>
+                  <li>用 iPhone 相机扫描此二维码，用 Safari 打开。</li>
                   <li>点底部分享按钮 → “添加到主屏幕”，即可像 App 一样全屏使用。</li>
                   <li>从主屏幕打开，输入大屏上的 4 位连接码即可投屏。</li>
                 </ol>
               </div>
             </section>
           </div>
+          </section>
           <div class="modal-actions">
-            <button type="button" class="btn-secondary" id="iosModalClose">关闭</button>
+            <button type="button" class="btn-secondary" id="downloadModalClose">关闭</button>
           </div>
         </div>
       </div>
@@ -343,6 +352,6 @@
     <script defer src="./studentRoster.js?v=20260919g"></script>
     <script defer src="./touchCalibrationMath.js?v=20261014-calibration"></script>
     <script defer src="./touchCalibration.js?v=20261019-toolbar"></script>
-    <script defer src="./app.js?v=20261021-download-address"></script>
+    <script defer src="./app.js?v=20261021-download-hub"></script>
   </body>
 </html>
