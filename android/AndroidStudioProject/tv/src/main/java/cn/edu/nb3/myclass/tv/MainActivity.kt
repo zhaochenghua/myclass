@@ -51,6 +51,8 @@ class MainActivity : Activity() {
     private lateinit var next: ImageButton
     private lateinit var play: ImageButton
     private lateinit var retryButton: ImageButton
+    private lateinit var embeddedButton: ImageButton
+    private lateinit var embedded: TvEmbeddedVideos
     private var endpoint = ""
     private var roomCode = ""
     private var token = ""
@@ -102,6 +104,9 @@ class MainActivity : Activity() {
             }
         }
         loader = ContentLoader(this, receiver.http)
+        embedded = TvEmbeddedVideos(this, root, receiver.http, ::safeContentUrl, receiver::send) {
+            embeddedButton.visibility = if (it) View.VISIBLE else View.GONE
+        }
         receiver.start(endpoint)
     }
 
@@ -191,6 +196,9 @@ class MainActivity : Activity() {
         next = icon(android.R.drawable.ic_media_next, "下一屏 / 下一页") { navigate(1) }
         play = icon(android.R.drawable.ic_media_pause, "播放 / 暂停") { controlVideo(JSONObject().put("action", "toggle")) }
         toolbar.addView(previous); toolbar.addView(next); toolbar.addView(play)
+        embeddedButton = icon(android.R.drawable.ic_media_play, "本页视频") { embedded.choose() }
+        embeddedButton.visibility = View.GONE
+        toolbar.addView(embeddedButton)
         pageLabel = label("", 15f).apply { gravity = Gravity.CENTER; maxLines = 2 }
         toolbar.addView(pageLabel, LinearLayout.LayoutParams(0, -1, 1f))
         toolbar.addView(command("打开课件") { library() })
@@ -334,6 +342,7 @@ class MainActivity : Activity() {
             "courseware.annotation" -> picture.annotation(message)
             "courseware.image.viewport" -> { pendingViewport = message; picture.viewport(message) }
             "courseware.video.control" -> controlVideo(message)
+            "courseware.embedded-video" -> embedded.receive(message)
             "room.snapshot" -> snapshot(message.optJSONObject("presentation"))
             "student.selection.set", "student.selection.get" -> receiveSelection(message)
             "student.roll" -> roll(message.optString("requestId"))
@@ -366,6 +375,7 @@ class MainActivity : Activity() {
         waiting.visibility = View.GONE
         notice.text = "正在加载 $presentationTitle…"; notice.visibility = View.VISIBLE
         updateControls()
+        if (kind == "pdf") embedded.context(url, page)
         if (kind == "video") {
             videoReady = false; desiredPlay = true; desiredSeek = 0
             video.visibility = View.VISIBLE; video.setVideoURI(Uri.parse(url))
@@ -378,6 +388,7 @@ class MainActivity : Activity() {
         loader.open(url, kind == "pdf", page, { bitmap, count ->
             if (ticket != loadId || stopped) { bitmap.recycle(); return@open }
             pageCount = count; page = page.coerceIn(1, count)
+            if (kind == "pdf") embedded.context(url, page)
             if (kind == "pdf" && page != initialPage.coerceIn(1, count)) {
                 bitmap.recycle(); changePage(page); return@open
             }
@@ -390,12 +401,14 @@ class MainActivity : Activity() {
     private fun changePage(number: Int) {
         if (kind != "pdf") return
         page = number.coerceIn(1, maxOf(1, pageCount.takeIf { it > 0 } ?: number))
+        embedded.context(presentationUrl, page)
         val ticket = ++renderId
         picture.resetViewport(); pendingViewport = null
         val targetPage = page
         loader.page(presentationUrl, page, { bitmap, count ->
             if (ticket != renderId || kind != "pdf" || stopped) { bitmap.recycle(); return@page }
             pageCount = count; page = targetPage.coerceIn(1, count)
+            embedded.context(presentationUrl, page)
             picture.show(bitmap, true, page); notice.visibility = View.GONE
             pendingViewport?.let { picture.viewport(it) }
             updateControls(); reportPage()
@@ -431,6 +444,7 @@ class MainActivity : Activity() {
     }
 
     private fun endPresentation(notify: Boolean) {
+        if (::embedded.isInitialized) embedded.context("", 1)
         ++loadId; ++renderId
         if (::loader.isInitialized) loader.cancel()
         if (::receiver.isInitialized) {
@@ -628,6 +642,7 @@ class MainActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (::embedded.isInitialized && embedded.isOpen) return embedded.key(event)
         if (BuildConfig.DEBUG && event.action == KeyEvent.ACTION_DOWN) Log.d("MyClassTV", "key=${event.keyCode} dialog=${dialog?.isShowing} toolbar=${toolbar.visibility} kind=$kind")
         if (dialog?.isShowing == true) return super.dispatchKeyEvent(event)
         if (event.action == KeyEvent.ACTION_DOWN) {
@@ -651,6 +666,7 @@ class MainActivity : Activity() {
     }
     @Deprecated("Legacy TV remote back support")
     override fun onBackPressed() {
+        if (::embedded.isInitialized && embedded.isOpen) { embedded.close(); return }
         if (kind.isNotEmpty()) {
             if (toolbar.visibility == View.VISIBLE) setToolbar(false) else { setToolbar(true); retryButton.requestFocus() }
         } else showDialog(AlertDialog.Builder(this).setTitle("退出 MyClass 大屏？").setPositiveButton("退出") { _, _ -> finish() }.setNegativeButton("取消", null).create())
