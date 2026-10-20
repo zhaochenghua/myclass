@@ -40,6 +40,7 @@ const state = {
   },
   framePresentation: {
     frameLocked: false,
+    screenSharing: false,
     lockedFrameZoomRatio: 1,
     cropX: 0,
     cropY: 0,
@@ -410,7 +411,10 @@ async function bootstrap() {
     });
     document.addEventListener('fullscreenchange', updateHomeFullscreenButton);
     elements.remoteVideo.addEventListener('loadedmetadata', updateVideoPresentation);
-    elements.remoteVideo.addEventListener('resize', updateVideoPresentation);
+    elements.remoteVideo.addEventListener('resize', () => {
+      if (state.framePresentation.screenSharing) resetLockedVideoPan();
+      updateVideoPresentation();
+    });
     window.addEventListener('resize', handleViewportResize);
     new ResizeObserver(() => reportViewerCoursewareViewport()).observe(elements.videoView);
     document.addEventListener('fullscreenchange', reportViewerCoursewareViewport);
@@ -1327,7 +1331,8 @@ async function handleSignalMessage(message) {
 }
 
 async function handleOffer(sdp) {
-  cleanupPeerConnection();
+  // Orientation may arrive before the asynchronously created offer.
+  cleanupPeerConnection(false);
   state.pendingRemoteCandidates = [];
   const peerConnection = createPeerConnection();
   if (!peerConnection) return;
@@ -1545,7 +1550,7 @@ function stopRelayBadgeCheck() {
   }
 }
 
-function cleanupPeerConnection() {
+function cleanupPeerConnection(resetPresentation = true) {
   stopRelayBadgeCheck();
   if (state.peerConnection) {
     state.peerConnection.close();
@@ -1553,8 +1558,10 @@ function cleanupPeerConnection() {
   }
   state.pendingRemoteCandidates = [];
   elements.remoteVideo.srcObject = null;
-  state.framePresentation = {
+  resetLockedVideoPan();
+  if (resetPresentation) state.framePresentation = {
     frameLocked: false,
+    screenSharing: false,
     lockedFrameZoomRatio: 1,
     cropX: 0,
     cropY: 0,
@@ -3434,6 +3441,10 @@ function handleTeacherOrientation(message) {
   if (![0, 90, 180, 270].includes(rotationDegrees)) {
     return;
   }
+  // Existing Android screen sharing reports an unknown camera, unlocked landscape video.
+  const screenSharing = message.cameraFacing === 'unknown' && message.frameLocked === false &&
+    (message.orientation === 'landscape' || rotationDegrees === 90 || rotationDegrees === 270);
+  if (state.framePresentation.screenSharing !== screenSharing) resetLockedVideoPan();
 
   state.videoOrientation = {
     orientation:
@@ -3447,6 +3458,7 @@ function handleTeacherOrientation(message) {
   };
   state.framePresentation = {
     frameLocked: message.frameLocked === true,
+    screenSharing,
     lockedFrameZoomRatio: normalizedZoomRatio(message.lockedFrameZoomRatio),
     ...normalizedLockedFrameCrop(message)
   };
@@ -3454,18 +3466,18 @@ function handleTeacherOrientation(message) {
 }
 
 function updateVideoPresentation() {
-  if (!state.framePresentation.frameLocked) resetLockedVideoPan();
+  const localView = isLocalVideoViewEnabled();
+  if (!localView) resetLockedVideoPan();
   if (state.presentationMode === 'video') {
-    elements.panToolButton.hidden = !state.framePresentation.frameLocked;
+    elements.panToolButton.hidden = !localView;
     elements.panToolButton.title = '拖动画面，双指或滚轮缩放，双击复位';
-    if (!state.framePresentation.frameLocked && state.annotations.tool === 'pan') setAnnotationTool('pen');
   }
   elements.videoView.dataset.orientation = state.videoOrientation.orientation;
   elements.videoView.dataset.lockedZoomed =
     state.framePresentation.frameLocked && state.framePresentation.lockedFrameZoomRatio > 1.03
       ? 'true'
       : 'false';
-  if (state.presentationMode === 'video' && state.framePresentation.frameLocked) applyLockedVideoView();
+  if (localView) applyLockedVideoView();
   resizeAnnotationCanvas();
   drawAnnotations();
   updateAnnotationButtons();
@@ -3694,7 +3706,8 @@ function lockedVideoContentRect() {
   const pan = state.lockedVideoPan;
   const vw = elements.remoteVideo.videoWidth || viewport.width || 1;
   const vh = elements.remoteVideo.videoHeight || viewport.height || 1;
-  const cover = state.videoOrientation.orientation === 'landscape' || state.framePresentation.lockedFrameZoomRatio > 1.03;
+  const cover = !state.framePresentation.screenSharing &&
+    (state.videoOrientation.orientation === 'landscape' || state.framePresentation.lockedFrameZoomRatio > 1.03);
   const fit = (cover ? Math.max : Math.min)(viewport.width / vw, viewport.height / vh);
   const width = vw * fit * pan.scale;
   const height = vh * fit * pan.scale;
@@ -3729,8 +3742,14 @@ function zoomLockedVideo(factor, from, to = from) {
   applyLockedVideoView();
 }
 
+function isLocalVideoViewEnabled() {
+  // Every live video is independently zoomable on the large screen. The
+  // source type only affects the default fit mode, never whether controls exist.
+  return state.presentationMode === 'video';
+}
+
 function canControlLockedVideo() {
-  return state.presentationMode === 'video' && state.framePresentation.frameLocked && state.annotations.tool === 'pan';
+  return isLocalVideoViewEnabled() && state.annotations.tool === 'pan';
 }
 
 function zoomLockedVideoWheel(event) {
@@ -3749,9 +3768,9 @@ function resetLockedVideoOnDoubleClick(event) {
 
 function beginLockedVideoPan(event) {
   if (state.presentationMode !== 'video' || state.annotations.tool !== 'pan') return false;
-  // 手型不能落入画笔分支；只有锁定的视频允许移动。
+  // Consume hand-tool input so it cannot fall through to annotation drawing.
   event.preventDefault();
-  if (!state.framePresentation.frameLocked) return true;
+  if (!isLocalVideoViewEnabled()) return true;
   elements.annotationCanvas.setPointerCapture(event.pointerId);
   state.lockedVideoPan.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   elements.annotationCanvas.classList.add('is-panning');
@@ -4200,7 +4219,7 @@ function currentFrameCrop() {
 }
 
 function currentVideoContentRect() {
-  if (state.presentationMode === 'video' && state.framePresentation.frameLocked) return lockedVideoContentRect();
+  if (isLocalVideoViewEnabled()) return lockedVideoContentRect();
   if (state.presentationMode === 'courseware') {
     // 图片课件：标注绑定到图片内容区域（其 transform 已随手机端视口放大/平移，
     // getBoundingClientRect 会返回变换后的实际区域，笔迹自动跟随图片移动）
@@ -4281,7 +4300,7 @@ function showVideoView() {
   // Video/ZIP playback hides these; every annotatable view must restore both.
   elements.annotationCanvas.hidden = false;
   elements.annotationToolbar.hidden = false;
-  elements.panToolButton.hidden = !state.framePresentation.frameLocked;
+  elements.panToolButton.hidden = !isLocalVideoViewEnabled();
   elements.prevPageButton.hidden = true;
   elements.nextPageButton.hidden = true;
   elements.videoStatus.hidden = false;

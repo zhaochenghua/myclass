@@ -525,6 +525,7 @@ video {
 
 .annotation-toolbar > * { flex-shrink: 0; }
 .annotation-toolbar[hidden] { display: none; }
+.annotation-mode[hidden] { display: none; }
 #studentRollToolbarSlot { min-width: 0; max-width: 100%; }
 
 .annotation-modes {
