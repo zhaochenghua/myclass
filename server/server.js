@@ -222,14 +222,16 @@ app.get(`${PATH_PREFIX}/health`, (req, res) => {
 
 app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
   const { appVersion, windowsVersion, iosVersion } = readVersions();
+  const showDownloadLinks = isInternalViewerHost(req.hostname);
   res.json({
     title: '上课投屏平台',
     apkVersion: appVersion,
-    apkUrl: getApkUrl(),
+    apkUrl: showDownloadLinks ? getApkUrl() : null,
     windowsVersion,
-    windowsUrl: `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(windowsVersion)}`,
+    windowsUrl: showDownloadLinks ? `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(windowsVersion)}` : null,
     iosVersion,
-    iosUrl: getIosUrl(),
+    iosUrl: showDownloadLinks ? getIosUrl() : null,
+    showDownloadLinks,
     wsPath: `${PATH_PREFIX}/ws`,
     roomTtlSeconds: Math.floor(ROOM_TTL_MS / 1000),
     video: {
@@ -258,6 +260,7 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
 
 app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
   try {
+    if (!isInternalViewerHost(req.hostname)) return res.sendStatus(404);
     const svg = await QRCode.toString(getApkUrl(), {
       type: 'svg',
       margin: 2,
@@ -276,6 +279,7 @@ app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
 // iPhone 网页版入口二维码（扫码后在 Safari 打开，可"添加到主屏幕"当 App 用）
 app.get(`${PATH_PREFIX}/api/ios-qrcode.svg`, async (req, res, next) => {
   try {
+    if (!isInternalViewerHost(req.hostname)) return res.sendStatus(404);
     const svg = await QRCode.toString(getIosUrl(), {
       type: 'svg',
       margin: 2,
@@ -843,6 +847,18 @@ function normalizePrefix(prefix) {
 
 function removeTrailingSlash(value) {
   return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+// Download links intentionally point at the campus address. Do not expose them
+// when the viewer opened the classroom through a public hostname.
+function isInternalViewerHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host === '::1' || host === SERVER_IP) return true;
+  const parts = host.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return parts[0] === 10 || parts[0] === 127 ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168);
 }
 
 function safeDownloadVersion(value) {

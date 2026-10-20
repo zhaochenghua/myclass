@@ -323,14 +323,17 @@ async function bootstrap() {
   }
   try {
     state.config = await loadConfig();
+    applyDownloadVisibility(state.config?.showDownloadLinks !== false);
     const apkVersion = state.config?.apkVersion || 'latest';
-    elements.apkQr.src = `./api/apk-qrcode.svg?v=${encodeURIComponent(apkVersion)}`;
-    elements.downloadHint.textContent = `APP v${apkVersion}`;
-    if (state.config?.apkUrl && elements.downloadApkButton) {
+    if (state.config?.showDownloadLinks !== false) {
+      elements.apkQr.src = `./api/apk-qrcode.svg?v=${encodeURIComponent(apkVersion)}`;
+      elements.downloadHint.textContent = `APP v${apkVersion}`;
+    }
+    if (state.config?.showDownloadLinks !== false && state.config?.apkUrl && elements.downloadApkButton) {
       elements.downloadApkButton.href = state.config.apkUrl;
       elements.downloadApkButton.style.display = '';
     }
-    if (state.config?.windowsUrl && elements.downloadWindowsButton) {
+    if (state.config?.showDownloadLinks !== false && state.config?.windowsUrl && elements.downloadWindowsButton) {
       elements.downloadWindowsButton.href = state.config.windowsUrl;
       elements.downloadWindowsButton.download = '';
       elements.downloadWindowsButton.hidden = false;
@@ -642,6 +645,15 @@ async function bootstrap() {
   } catch (error) {
     setWaitingStatus('服务配置加载失败，请检查服务端是否启动');
   }
+}
+
+function applyDownloadVisibility(visible) {
+  const codeRight = elements.apkQr?.closest('.code-right');
+  if (codeRight) codeRight.hidden = !visible;
+  if (elements.downloadApkButton) elements.downloadApkButton.hidden = !visible;
+  if (elements.downloadWindowsButton) elements.downloadWindowsButton.hidden = !visible;
+  if (elements.downloadHint) elements.downloadHint.hidden = !visible;
+  if (elements.iosWebAppButton) elements.iosWebAppButton.hidden = !visible;
 }
 
 function startClock() {
