@@ -7,6 +7,11 @@ let rosterDirty = false;
 let classBusy = false;
 let usageData = null;
 let usageRequest = 0;
+let fontItems = [];
+let fontPage = 0;
+let fontBusy = false;
+let fontRequest = 0;
+let fontSupported = false;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -28,6 +33,12 @@ async function bootstrap() {
 }
 
 function showLogin() {
+  fontRequest++;
+  fontItems = [];
+  fontSupported = false;
+  $('#fontTableBody').replaceChildren();
+  $('#fontUploadResults').replaceChildren();
+  $('#fontStatus').textContent = '';
   usageRequest++;
   usageData = null;
   $('#usageTableBody').replaceChildren();
@@ -64,6 +75,7 @@ function renderTabs(role) {
     items.push({ id: 'courseware', label: '我的课件' });
   }
   items.push({ id: 'classes', label: '任教班级' });
+  items.push({ id: 'fonts', label: '字体管理' });
   items.push({ id: 'account', label: '账户设置' });
 
   tabs.innerHTML = items.map((t, i) =>
@@ -82,11 +94,13 @@ function renderTabs(role) {
       $('#tab-courseware').hidden = tab !== 'courseware';
       $('#tab-account').hidden = tab !== 'account';
       $('#tab-classes').hidden = tab !== 'classes';
+      $('#tab-fonts').hidden = tab !== 'fonts';
       if (tab === 'users') loadUsers();
       if (tab === 'usage') loadUsage();
       if (tab === 'courseware') loadCourseware();
       if (tab === 'account') loadProfile();
       if (tab === 'classes') loadTeachingClasses();
+      if (tab === 'fonts') loadFonts();
     });
   });
 }
@@ -622,6 +636,117 @@ async function uploadCourseware(file) {
     fill.style.width = '0%';
   }
 }
+
+// --- 服务器字体 ---
+function renderFonts() {
+  const query = $('#fontSearch').value.trim().toLocaleLowerCase();
+  const matches = fontItems.filter(item => `${item.family} ${item.styles.join(' ')}`.toLocaleLowerCase().includes(query));
+  const pageSize = 100;
+  fontPage = Math.max(0, Math.min(fontPage, Math.ceil(matches.length / pageSize) - 1));
+  const rows = matches.slice(fontPage * pageSize, (fontPage + 1) * pageSize);
+  const body = $('#fontTableBody');
+  body.replaceChildren();
+  for (const item of rows) {
+    const row = document.createElement('tr');
+    for (const value of [item.family, item.styles.join(' / '), item.source === 'uploaded' ? '教师上传' : '系统字体']) {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    body.appendChild(row);
+  }
+  if (!rows.length) {
+    const row = body.insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 3;
+    cell.textContent = query ? '没有匹配的字体' : '暂无字体';
+  }
+  $('#fontCount').textContent = matches.length ? `${fontPage * pageSize + 1} - ${Math.min((fontPage + 1) * pageSize, matches.length)} / ${matches.length} 个字体系列` : '0 个字体系列';
+  $('#fontPreviousButton').disabled = fontPage === 0;
+  $('#fontNextButton').disabled = (fontPage + 1) * pageSize >= matches.length;
+}
+
+function setFontControls() {
+  $('#fontFileInput').disabled = fontBusy || !fontSupported;
+  $('#uploadFontsButton').disabled = fontBusy || !fontSupported;
+  $('#refreshFontsButton').disabled = fontBusy;
+}
+
+async function fontApi(options = {}) {
+  const requestToken = token;
+  const response = await fetch(`${API_BASE}/fonts`, { ...options, cache: 'no-store', headers: { Authorization: `Bearer ${requestToken}` } });
+  if (requestToken !== token) throw new Error('登录用户已改变，请重试');
+  const data = await response.json().catch(() => ({}));
+  if (response.status === 401) { token = ''; localStorage.removeItem('admin_token'); showLogin(); }
+  if (!response.ok) throw new Error(data.error || '字体操作失败');
+  return data;
+}
+
+async function loadFonts({ preserveStatus = false } = {}) {
+  if (fontBusy && !preserveStatus) return;
+  const request = ++fontRequest;
+  if (!preserveStatus) { $('#fontStatus').textContent = '正在读取字体...'; $('#fontStatus').classList.remove('is-error'); }
+  try {
+    const data = await fontApi();
+    if (request !== fontRequest) return;
+    fontItems = data.items;
+    fontSupported = data.supported;
+    if (!preserveStatus || !data.supported) $('#fontStatus').textContent = data.message || '';
+    renderFonts();
+  } catch (error) {
+    if (request !== fontRequest) return;
+    fontSupported = false;
+    $('#fontStatus').textContent = error.message;
+    $('#fontStatus').classList.add('is-error');
+  } finally { if (request === fontRequest) setFontControls(); }
+}
+
+$('#fontSearch').addEventListener('input', () => { fontPage = 0; renderFonts(); });
+$('#fontPreviousButton').addEventListener('click', () => { fontPage--; renderFonts(); });
+$('#fontNextButton').addEventListener('click', () => { fontPage++; renderFonts(); });
+$('#refreshFontsButton').addEventListener('click', () => loadFonts());
+$('#fontUploadForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (fontBusy || !fontSupported) return;
+  const files = [...$('#fontFileInput').files];
+  if (!files.length) return;
+  const requestToken = token;
+  fontBusy = true;
+  setFontControls();
+  $('#fontUploadResults').replaceChildren();
+  $('#fontStatus').classList.remove('is-error');
+  let succeeded = 0;
+  let failed = 0;
+  try {
+    for (let index = 0; index < files.length; index++) {
+      if (token !== requestToken) break;
+      const file = files[index];
+      $('#fontStatus').textContent = `正在上传并安装 ${index + 1} / ${files.length}：${file.name}`;
+      const result = document.createElement('li');
+      try {
+        if (!/\.(ttf|otf|ttc)$/i.test(file.name)) throw new Error('仅支持 TTF、OTF、TTC');
+        if (file.size > 64 * 1024 * 1024) throw new Error('单个字体不能超过 64MB');
+        const body = new FormData();
+        body.append('file', file);
+        const data = await fontApi({ method: 'POST', body });
+        result.textContent = `${file.name}：${data.duplicate ? '已安装，无需重复上传' : '安装成功'}（${data.faces.map(face => `${face.family} ${face.style}`).join(' / ')}）`;
+        result.className = 'font-result-success';
+        succeeded++;
+      } catch (error) {
+        result.textContent = `${file.name}：${error.message}`;
+        result.className = 'font-result-error';
+        failed++;
+      }
+      if (token === requestToken) $('#fontUploadResults').appendChild(result);
+    }
+    if (token === requestToken) {
+      $('#fontFileInput').value = '';
+      $('#fontStatus').textContent = `已处理：成功 ${succeeded} 个，失败 ${failed} 个。`;
+      $('#fontStatus').classList.toggle('is-error', failed > 0);
+      await loadFonts({ preserveStatus: true });
+    }
+  } finally { fontBusy = false; setFontControls(); }
+});
 
 // --- 任教班级 / 学生名单 ---
 function resetClassEditor() {

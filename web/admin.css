@@ -1,3 +1,5 @@
+.admin-document, .admin-document body { height: auto; min-height: 100%; overflow: auto; }
+
 .admin-page {
   min-height: 100vh;
   padding: 1.5rem;
@@ -200,9 +202,36 @@
 
 .admin-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0;
   margin-bottom: 1.5rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.font-upload-form { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+.font-upload-form input { min-width: 0; max-width: 100%; font: inherit; color: var(--muted); }
+.font-search { display: flex; gap: 0.7rem; align-items: center; margin: 1.4rem 0 0.8rem; white-space: nowrap; }
+.font-search input { min-width: 0; width: 320px; max-width: 100%; padding: 0.55rem; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: #101b24; font: inherit; }
+.font-table { table-layout: fixed; }
+#tab-fonts .font-table { min-width: 0; }
+.font-table th:first-child { width: 48%; }
+.font-table th:last-child { width: 16%; }
+.font-table td { overflow-wrap: anywhere; vertical-align: top; line-height: 1.6; }
+.font-upload-results { padding-left: 1.3rem; line-height: 1.8; overflow-wrap: anywhere; }
+.font-result-error, #fontStatus.is-error { color: var(--alert); }
+.font-result-success { color: var(--accent); }
+.font-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 1rem; }
+.font-pagination span { margin-right: auto; color: var(--muted); }
+.font-upload-form button:disabled, .font-pagination button:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 600px) {
+  .admin-header { flex-wrap: wrap; }
+  .admin-header h1, .admin-user { flex-basis: 100%; }
+  .admin-user { overflow-wrap: anywhere; }
+  .admin-header .logout-btn { white-space: nowrap; }
+  #tab-fonts .panel-header { gap: 0.7rem; }
+  .font-upload-form { align-items: stretch; }
+  .font-upload-form input { width: 100%; }
+  .font-table th, .font-table td { padding-inline: 0.35rem; }
 }
 
 .tab-btn {

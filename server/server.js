@@ -14,6 +14,8 @@ const { createCoursewareStore } = require('./coursewareStore');
 const { expandAnimations, PROFILE: ANIMATION_PROFILE } = require('./expandAnimations');
 const { createClassStore } = require('./classStore');
 const { createUsageStore, chinaDay } = require('./usageStore');
+const { createFontStore } = require('./fontStore');
+const { mountFontRoutes } = require('./fontHttp');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
 const HOST = process.env.HOST || '0.0.0.0';
@@ -146,11 +148,17 @@ fs.mkdirSync(coursewareRoot, { recursive: true });
 fs.mkdirSync(tempRoot, { recursive: true });
 const PPT_ANIMATION_MODE = process.env.PPT_ANIMATION_MODE || 'expand';
 if (!['expand', 'static'].includes(PPT_ANIMATION_MODE)) throw new Error('PPT_ANIMATION_MODE must be expand or static');
+const fontStore = createFontStore();
+const fontsReady = fontStore.initialize();
+fontsReady.catch(error => console.error('Font storage unavailable:', error.message));
 const coursewareStore = createCoursewareStore({
   root: coursewareRoot,
   prefix: PATH_PREFIX,
   convertOfficeToPdf,
-  officeProfile: ext => PPT_ANIMATION_MODE === 'expand' && ['.ppt', '.pptx'].includes(ext) ? ANIMATION_PROFILE : '',
+  officeProfile: ext => {
+    const base = PPT_ANIMATION_MODE === 'expand' && ['.ppt', '.pptx'].includes(ext) ? ANIMATION_PROFILE : '';
+    return fontStore.revision() ? `${base || 'office'}-f${fontStore.revision()}` : base;
+  },
   listLimit: Number(process.env.COURSEWARE_LIST_LIMIT || 0)
 });
 const {
@@ -194,6 +202,8 @@ app.use((req, res, next) => {
 
   next();
 });
+
+mountFontRoutes(app, { prefix: PATH_PREFIX, requireAuth, store: fontStore, tempRoot });
 
 app.get('/', (req, res) => {
   res.redirect(`${PATH_PREFIX}/`);
@@ -731,7 +741,7 @@ app.use(
     maxAge: '5m',
     index: 'index.html',
     setHeaders: (res, filePath) => {
-      if (filePath.endsWith('index.html') || filePath.endsWith('app.js')) {
+      if (filePath.endsWith('index.html') || filePath.endsWith('app.js') || filePath.endsWith('admin.html')) {
         res.setHeader('Cache-Control', 'no-cache');
       }
       if (filePath.endsWith('.mjs')) {
@@ -840,6 +850,7 @@ function safeDownloadVersion(value) {
 }
 
 async function publishCourseware(file, fields = {}, userId, uploadRequestId = '') {
+  await fontsReady;
   return coursewareStore.publish(file, preferredCoursewareName(file, fields), userId, uploadRequestId);
 }
 

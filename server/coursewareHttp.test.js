@@ -13,7 +13,7 @@ test('HTTP upload/list/download/range/delete work on a separate storage root', {
   const serverRoot = path.join(directory, 'server');
   const storageRoot = path.join(directory, 'separate-storage');
   await fs.mkdir(path.join(serverRoot, 'data'), { recursive: true });
-  for (const name of ['server.js', 'coursewareStore.js', 'expandAnimations.js', 'classStore.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js', 'annotationStore.js', 'pptxVideos.js', 'usageStore.js']) {
+  for (const name of ['server.js', 'coursewareStore.js', 'expandAnimations.js', 'classStore.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js', 'annotationStore.js', 'pptxVideos.js', 'usageStore.js', 'fontStore.js', 'fontHttp.js']) {
     await fs.copyFile(path.join(__dirname, name), path.join(serverRoot, name));
   }
   await fs.writeFile(path.join(serverRoot, 'data', 'users.json'), JSON.stringify([
@@ -30,7 +30,7 @@ test('HTTP upload/list/download/range/delete work on a separate storage root', {
     env: { ...process.env, NODE_PATH: path.join(__dirname, 'node_modules'),
       HOST: '127.0.0.1', PORT: '0', HTTPS_PORT: '0', PATH_PREFIX: '/myclass',
       ALLOWED_HOSTS: '127.0.0.1,localhost', AUTH_SECRET: 'isolated-test-secret',
-      COURSEWARE_ROOT: storageRoot, COURSEWARE_MAX_BYTES: '1024', COURSEWARE_LIST_LIMIT: '0' }
+      COURSEWARE_ROOT: storageRoot, XDG_DATA_HOME: path.join(directory, 'font-data'), COURSEWARE_MAX_BYTES: '1024', COURSEWARE_LIST_LIMIT: '0' }
   });
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) {
