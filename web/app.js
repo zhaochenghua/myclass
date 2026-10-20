@@ -282,7 +282,7 @@ bootstrap();
 function setupDownloadEntry() {
   const { apkUrl, apkVersion, windowsUrl, windowsVersion, tvUrl, iosUrl, iosVersion } = state.config;
   const packages = {
-    android: { title: '安卓投屏 App', description: '安装在安卓手机或兼容安卓应用的鸿蒙设备上，输入课堂连接码即可投屏。', url: apkUrl, version: apkVersion },
+    android: { title: '安卓/鸿蒙投屏 App', description: '安装在安卓手机或兼容安卓应用的鸿蒙设备上，输入课堂连接码即可投屏。', url: apkUrl, version: apkVersion },
     windows: { title: 'Windows 投屏程序', description: '在 Windows 电脑上下载安装，也可用手机扫码获取下载地址。', url: windowsUrl, version: windowsVersion },
     tv: { title: '安卓 TV 大屏接收端', description: '安装在安卓电视或大屏上接收投屏，可下载安装包后通过 U 盘安装。', url: tvUrl }
   };
