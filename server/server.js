@@ -70,9 +70,17 @@ function readVersions() {
   return data;
 }
 
-function getApkUrl() {
+function getDownloadBaseUrl(req) {
+  // Public access terminates HTTPS at the reverse proxy; use the validated Host,
+  // not the backend HTTP protocol or an untrusted X-Forwarded-Host header.
+  return req && !isInternalViewerHost(req.hostname)
+    ? `https://${req.hostname}${PATH_PREFIX}`
+    : PUBLIC_BASE_URL;
+}
+
+function getApkUrl(req) {
   const { appVersion } = readVersions();
-  return `${PUBLIC_BASE_URL}/myclass.apk?v=${encodeURIComponent(appVersion)}`;
+  return `${getDownloadBaseUrl(req)}/myclass.apk?v=${encodeURIComponent(appVersion)}`;
 }
 
 // iPhone 网页版必须走 https：iOS Safari 只允许在安全上下文中访问摄像头。
@@ -88,9 +96,10 @@ const HTTPS_PORT = Number(process.env.HTTPS_PORT || 0);
 const TLS_KEY_PATH = process.env.TLS_KEY || path.join(__dirname, 'data', 'tls', 'server.key');
 const TLS_CERT_PATH = process.env.TLS_CERT || path.join(__dirname, 'data', 'tls', 'server.crt');
 
-function getIosUrl() {
+function getIosUrl(req) {
   const { iosVersion } = readVersions();
-  return `${IOS_BASE_URL}/ios/?v=${encodeURIComponent(iosVersion)}`;
+  const base = req && !isInternalViewerHost(req.hostname) ? getDownloadBaseUrl(req) : IOS_BASE_URL;
+  return `${base}/ios/?v=${encodeURIComponent(iosVersion)}`;
 }
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 // 大屏断开后保留房间（连接码）的宽限期，默认 5 分钟，设为 0 可恢复“断开即失效”
@@ -222,16 +231,18 @@ app.get(`${PATH_PREFIX}/health`, (req, res) => {
 
 app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
   const { appVersion, windowsVersion, iosVersion } = readVersions();
-  const showDownloadLinks = isInternalViewerHost(req.hostname);
+  const iosUrl = getIosUrl(req);
+  res.set('Cache-Control', 'no-store');
   res.json({
     title: '上课投屏平台',
     apkVersion: appVersion,
-    apkUrl: showDownloadLinks ? getApkUrl() : null,
+    apkUrl: getApkUrl(req),
     windowsVersion,
-    windowsUrl: showDownloadLinks ? `${PUBLIC_BASE_URL}/myclass-windows.exe?v=${encodeURIComponent(windowsVersion)}` : null,
+    windowsUrl: `${getDownloadBaseUrl(req)}/myclass-windows.exe?v=${encodeURIComponent(windowsVersion)}`,
     iosVersion,
-    iosUrl: showDownloadLinks ? getIosUrl() : null,
-    showDownloadLinks,
+    iosUrl,
+    iosRequiresCertificate: isInternalViewerHost(new URL(iosUrl).hostname),
+    showDownloadLinks: true,
     wsPath: `${PATH_PREFIX}/ws`,
     roomTtlSeconds: Math.floor(ROOM_TTL_MS / 1000),
     video: {
@@ -260,8 +271,7 @@ app.get(`${PATH_PREFIX}/api/config`, (req, res) => {
 
 app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
   try {
-    if (!isInternalViewerHost(req.hostname)) return res.sendStatus(404);
-    const svg = await QRCode.toString(getApkUrl(), {
+    const svg = await QRCode.toString(getApkUrl(req), {
       type: 'svg',
       margin: 2,
       width: 360,
@@ -270,7 +280,7 @@ app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
         light: '#f7fbff'
       }
     });
-    res.type('image/svg+xml').send(svg);
+    res.set('Cache-Control', 'no-store').type('image/svg+xml').send(svg);
   } catch (error) {
     next(error);
   }
@@ -279,8 +289,7 @@ app.get(`${PATH_PREFIX}/api/apk-qrcode.svg`, async (req, res, next) => {
 // iPhone 网页版入口二维码（扫码后在 Safari 打开，可"添加到主屏幕"当 App 用）
 app.get(`${PATH_PREFIX}/api/ios-qrcode.svg`, async (req, res, next) => {
   try {
-    if (!isInternalViewerHost(req.hostname)) return res.sendStatus(404);
-    const svg = await QRCode.toString(getIosUrl(), {
+    const svg = await QRCode.toString(getIosUrl(req), {
       type: 'svg',
       margin: 2,
       width: 360,
@@ -289,7 +298,7 @@ app.get(`${PATH_PREFIX}/api/ios-qrcode.svg`, async (req, res, next) => {
         light: '#f7fbff'
       }
     });
-    res.type('image/svg+xml').send(svg);
+    res.set('Cache-Control', 'no-store').type('image/svg+xml').send(svg);
   } catch (error) {
     next(error);
   }
@@ -849,8 +858,7 @@ function removeTrailingSlash(value) {
   return value.endsWith('/') ? value.slice(0, -1) : value;
 }
 
-// Download links intentionally point at the campus address. Do not expose them
-// when the viewer opened the classroom through a public hostname.
+// Select campus links for private-IP access and public links for domain access.
 function isInternalViewerHost(hostname) {
   const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host === '::1' || host === SERVER_IP) return true;

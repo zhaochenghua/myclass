@@ -284,8 +284,15 @@ function setupIosWebAppEntry() {
   }
   elements.iosQr.src = `./api/ios-qrcode.svg?v=${encodeURIComponent(iosVersion)}`;
   elements.iosUrlText.textContent = iosUrl.replace(/\?v=.*$/, '');
-  // 第 1 步：证书安装引导二维码（指向服务器 http://<host>/ca/，扫码即开无需手输）
-  elements.iosCaQr.src = './ios-ca-qr.svg';
+  const requiresCertificate = state.config?.iosRequiresCertificate !== false;
+  elements.iosModal.querySelector('.ios-phase-cert').hidden = !requiresCertificate;
+  elements.iosModal.querySelector('.ios-phases').classList.toggle('ios-phases-single', !requiresCertificate);
+  elements.iosModal.querySelector('.ios-phase-app .ios-phase-num').textContent = requiresCertificate ? '2' : '1';
+  elements.iosModal.querySelector('.ios-subtitle').textContent = requiresCertificate
+    ? '全程扫码即可，无需手动输网址；第 1 步每台手机只需做一次。'
+    : '扫描二维码，在 Safari 中打开网页版即可使用。';
+  if (requiresCertificate) elements.iosCaQr.src = './ios-ca-qr.svg';
+  elements.iosWebAppButton.hidden = false;
   elements.iosWebAppButton.addEventListener('click', () => {
     elements.iosModal.hidden = false;
   });
@@ -323,17 +330,14 @@ async function bootstrap() {
   }
   try {
     state.config = await loadConfig();
-    applyDownloadVisibility(state.config?.showDownloadLinks !== false);
     const apkVersion = state.config?.apkVersion || 'latest';
-    if (state.config?.showDownloadLinks !== false) {
-      elements.apkQr.src = `./api/apk-qrcode.svg?v=${encodeURIComponent(apkVersion)}`;
-      elements.downloadHint.textContent = `APP v${apkVersion}`;
-    }
-    if (state.config?.showDownloadLinks !== false && state.config?.apkUrl && elements.downloadApkButton) {
+    elements.apkQr.src = `./api/apk-qrcode.svg?v=${encodeURIComponent(apkVersion)}`;
+    elements.downloadHint.textContent = `APP v${apkVersion}`;
+    if (state.config?.apkUrl && elements.downloadApkButton) {
       elements.downloadApkButton.href = state.config.apkUrl;
-      elements.downloadApkButton.style.display = '';
+      elements.downloadApkButton.hidden = false;
     }
-    if (state.config?.showDownloadLinks !== false && state.config?.windowsUrl && elements.downloadWindowsButton) {
+    if (state.config?.windowsUrl && elements.downloadWindowsButton) {
       elements.downloadWindowsButton.href = state.config.windowsUrl;
       elements.downloadWindowsButton.download = '';
       elements.downloadWindowsButton.hidden = false;
@@ -645,15 +649,6 @@ async function bootstrap() {
   } catch (error) {
     setWaitingStatus('服务配置加载失败，请检查服务端是否启动');
   }
-}
-
-function applyDownloadVisibility(visible) {
-  const codeRight = elements.apkQr?.closest('.code-right');
-  if (codeRight) codeRight.hidden = !visible;
-  if (elements.downloadApkButton) elements.downloadApkButton.hidden = !visible;
-  if (elements.downloadWindowsButton) elements.downloadWindowsButton.hidden = !visible;
-  if (elements.downloadHint) elements.downloadHint.hidden = !visible;
-  if (elements.iosWebAppButton) elements.iosWebAppButton.hidden = !visible;
 }
 
 function startClock() {

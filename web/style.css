@@ -283,6 +283,14 @@ h1 {
   margin-bottom: 1.2rem;
 }
 
+.ios-phases-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ios-phase[hidden] {
+  display: none;
+}
+
 .ios-phase {
   min-width: 0;
   border: 1px solid var(--line);
