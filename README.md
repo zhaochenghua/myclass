@@ -167,6 +167,10 @@ HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认允许 `10.30.13.1`、`
 
 校准修正大屏本地画笔、直线、板擦、圈选及拖动/缩放坐标，同时修正投屏和电子黑板工具条（含弹出菜单）的按钮命中位置，也适用于把触摸模拟为鼠标的红外触摸框；手机传来的笔迹不重复修正。两种工具条的画笔默认使用深红色。校准适用于当前显示尺寸和全屏状态，分辨率、浏览器缩放或全屏状态变化后暂停使用，恢复原状态会自动重新启用；换教室、调整投影范围后应重新校准。此功能修正偏移、缩放及轻度倾斜误差，不能替代投影仪或系统触摸驱动的硬件校准。
 
+大屏画笔和板擦采用单指书写、双指缩放，适用于课件、图片、直播、电脑投屏和电子黑板。第二指落下时结束当前笔画并切换缩放，抬起全部手指后重新落指恢复书写；不支持大屏本地多点同时书写。手型工具仍支持单指拖动与双指缩放，手机笔迹继续独立同步。验证：`node scripts/test-handwriting-pinch.cjs`。
+
+部署验证可设置 `MYCLASS_TEST_BASE_URL=http://10.30.13.1/myclass` 后运行 `scripts/test-handwriting-pinch.cjs` 和 `scripts/test-pdf-compatibility.cjs`，直接加载线上页面及 PDF 组件；测试课件通过浏览器拦截提供，无需登录或上传文件。
+
 验证：`cd server && npm test`；浏览器完整流程：安装 Playwright 后运行 `node scripts/test-touch-calibration.cjs`（默认使用 Edge，也可通过 `BROWSER_PATH` 指定 Chromium）。自动测试使用隔离数据和虚构账号，截图保存在系统临时目录 `myclass-calibration-proof`。
 
 ### 课件存储与备份

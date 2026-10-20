@@ -877,6 +877,15 @@ video {
   text-shadow: 0 0 1rem #000;
 }
 
+.video-status.courseware-error {
+  inset: 40% 1rem auto;
+  min-height: 0;
+  padding: 0.75rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.85);
+  overflow-wrap: anywhere;
+}
+
 /* 中继模式小字提示（右下角） */
 .relay-badge {
   position: absolute;

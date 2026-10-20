@@ -49,7 +49,7 @@ const state = {
   },
   annotations: {
     strokes: [],
-    activeStrokes: new Map(),  // key: pointerId → stroke，支持多笔同时绘制
+    activeStrokes: new Map(),  // Local ink and independently synchronized remote strokes.
     currentColor: '#D00000',
     tool: 'pen',
     mode: 'solid',  // solid | dashed | dashdot | highlighter
@@ -60,7 +60,7 @@ const state = {
     active: false,
     pages: [{ strokes: [] }],  // 每页保存已完成笔画
     currentPage: 0,
-    activeStrokes: new Map(),  // 黑板当前页活跃笔画，支持多点
+    activeStrokes: new Map(),  // Current local stroke, keyed by pointer ID.
     tool: 'pen',               // 'pen' | 'eraser' | 'hand' | 'select'
     eraserWidth: 40,           // 板擦半径(px)
     currentColor: '#D00000',   // 黑板专用颜色（默认深红色）
@@ -446,6 +446,7 @@ async function bootstrap() {
     elements.annotationCanvas.addEventListener('pointermove', event => continueAnnotationStroke(TouchCalibration.eventFor(event)));
     elements.annotationCanvas.addEventListener('pointerup', event => finishAnnotationStroke(TouchCalibration.eventFor(event)));
     elements.annotationCanvas.addEventListener('pointercancel', event => finishAnnotationStroke(TouchCalibration.eventFor(event)));
+    elements.annotationCanvas.addEventListener('lostpointercapture', event => finishAnnotationStroke(TouchCalibration.eventFor(event)));
     elements.annotationCanvas.addEventListener('lostpointercapture', finishLockedVideoPan);
     elements.annotationCanvas.addEventListener('wheel', zoomLockedVideoWheel, { passive: false });
     elements.annotationCanvas.addEventListener('dblclick', resetLockedVideoOnDoubleClick);
@@ -457,6 +458,7 @@ async function bootstrap() {
     elements.blackboardCanvas.addEventListener('pointermove', event => continueBlackboardStroke(TouchCalibration.eventFor(event)));
     elements.blackboardCanvas.addEventListener('pointerup', event => finishBlackboardStroke(TouchCalibration.eventFor(event)));
     elements.blackboardCanvas.addEventListener('pointercancel', event => finishBlackboardStroke(TouchCalibration.eventFor(event)));
+    elements.blackboardCanvas.addEventListener('lostpointercapture', event => finishBlackboardStroke(TouchCalibration.eventFor(event)));
     elements.blackboardToggleButton.addEventListener('click', toggleBlackboard);
     elements.blackboardCloseButton.addEventListener('click', () => toggleBlackboard(false));
     elements.blackboardPrevPageButton.addEventListener('click', () => navigateBlackboardPage(-1));
@@ -1572,6 +1574,7 @@ function cleanupPeerConnection(resetPresentation = true) {
 }
 
 function openCourseware(message) {
+  elements.videoStatus.classList.remove('courseware-error');
   displayedFileUrl = message.url;
   coursewareLinkControls.then(links => links.clear());
   const url = typeof message.url === 'string' ? message.url : '';
@@ -1668,7 +1671,7 @@ function openCourseware(message) {
     const courseware = state.courseware;
     loadCoursewareDocument(courseware).catch(error => {
       if (state.courseware === courseware) {
-        elements.videoStatus.textContent = '课件加载失败，请检查网络后刷新重试';
+        showCoursewareError('课件加载失败，请检查网络后刷新重试');
         console.warn('课件加载失败', error);
       }
     });
@@ -2657,7 +2660,7 @@ function zoomImageViewAt(nextScale, focusX, focusY) {
   let offsetX1 = ratio * offsetX0;
   let offsetY1 = ratio * offsetY0;
   if (Number.isFinite(focusX) && Number.isFinite(focusY)) {
-    const rect = elements.imagePlayerOverlay.getBoundingClientRect();
+    const rect = (currentContentKind() === 'pdf' ? elements.videoView : elements.imagePlayerOverlay).getBoundingClientRect();
     // 图片居中于 overlay，overlay 中心即图片布局中心
     const ex = focusX - (rect.left + rect.width / 2);
     const ey = focusY - (rect.top + rect.height / 2);
@@ -3070,6 +3073,12 @@ function updateCoursewareConnectionIndicator() {
   elements.coursewareConnCode.textContent = state.roomCode || '----';
 }
 
+function showCoursewareError(message) {
+  elements.videoStatus.classList.add('courseware-error');
+  elements.videoStatus.hidden = false;
+  elements.videoStatus.textContent = message;
+}
+
 async function loadCoursewareDocument(courseware) {
   const pdfjsLib = await loadPdfJs();
   if (state.courseware !== courseware) {
@@ -3098,7 +3107,7 @@ async function loadCoursewareDocument(courseware) {
     renderCoursewarePage();
   } catch (error) {
     if (state.courseware === courseware) {
-      elements.videoStatus.textContent = '课件加载失败，请重新选择课件';
+      showCoursewareError('课件加载失败，请重新选择课件');
     }
   }
 }
@@ -3254,6 +3263,8 @@ async function renderCoursewarePage() {
     if (canvas.height !== buffer.canvas.height) canvas.height = buffer.canvas.height;
     canvas.getContext('2d', { alpha: false }).drawImage(buffer.canvas, 0, 0);
     courseware.displayedPage = pageNumber;
+    elements.videoStatus.classList.remove('courseware-error');
+    elements.videoStatus.hidden = true;
     courseware.fitMode = 'width-fill';
     courseware.cssWidth = buffer.cssWidth;
     courseware.cssHeight = buffer.cssHeight;
@@ -3279,7 +3290,7 @@ async function renderCoursewarePage() {
     void prefetchCoursewarePages(courseware, pageNumber, layout);
   } catch (error) {
     if (error?.name !== 'RenderingCancelledException' && valid()) {
-      elements.videoStatus.textContent = '课件页面渲染失败';
+      showCoursewareError('课件页面渲染失败');
     }
   } finally {
     if (state.courseware === courseware && renderTask && courseware.renderTask === renderTask) {
@@ -3290,12 +3301,31 @@ async function renderCoursewarePage() {
 
 function loadPdfJs() {
   if (!pdfJsPromise) {
-    // Wait for the module even on slow networks; a failed attempt may be retried.
-    pdfJsPromise = import('./vendor/pdfjs/build/pdf.min.mjs?v=5.4.530').then(lib => {
+    pdfJsPromise = (async () => {
+      // Older classroom browsers need the UMD build and its matching worker.
+      if (typeof Promise.withResolvers === 'function') {
+        try {
+          const lib = await import('./vendor/pdfjs/build/pdf.min.mjs?v=5.4.530');
+          lib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs?v=5.4.530';
+          window.pdfjsLib = lib;
+          return lib;
+        } catch {
+          // A browser may lack module syntax support even with newer APIs.
+        }
+      }
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = './vendor/pdfjs/build/pdf.min.js?v=3.11.174';
+        script.onload = () => { script.remove(); resolve(); };
+        script.onerror = () => { script.remove(); reject(new Error('PDF component failed to load')); };
+        document.head.appendChild(script);
+      });
+      const lib = window.pdfjsLib;
+      if (!lib?.getDocument) throw new Error('PDF component is unavailable');
+      lib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.js?v=3.11.174';
       window.pdfjsLib = lib;
-      lib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/build/pdf.worker.min.mjs?v=5.4.530';
       return lib;
-    }).catch(error => {
+    })().catch(error => {
       pdfJsPromise = null;
       throw error;
     });
@@ -3551,8 +3581,83 @@ function resizeAnnotationCanvas() {
   }
 }
 
+const handwritingTouches = new WeakMap();
+
+function resetHandwritingTouches(canvas) {
+  const gesture = handwritingTouches.get(canvas);
+  handwritingTouches.delete(canvas);
+  if (gesture) for (const id of gesture.pointers.keys()) {
+    runCatching(() => canvas.releasePointerCapture(id));
+  }
+}
+
+// Once a second finger arrives, consume the whole gesture until all fingers lift.
+// Keep remote strokes independent; only the current local stroke is completed.
+function handleHandwritingTouch(event, phase, blackboard = false) {
+  const canvas = blackboard ? elements.blackboardCanvas : elements.annotationCanvas;
+  const drawing = blackboard ? state.blackboard : state.annotations;
+  let gesture = handwritingTouches.get(canvas);
+  if (phase === 'down') {
+    if (event.pointerType !== 'touch' || (!gesture?.active && !['pen', 'eraser'].includes(drawing.tool))) return false;
+    if (!gesture) {
+      gesture = { pointers: new Map(), active: false };
+      handwritingTouches.set(canvas, gesture);
+    }
+    gesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    runCatching(() => canvas.setPointerCapture(event.pointerId));
+    if (gesture.pointers.size < 2 && !gesture.active) return false;
+    if (!gesture.active) {
+      gesture.active = true;
+      for (const id of drawing.activeStrokes.keys()) {
+        if (typeof id !== 'number') continue;
+        const finish = { pointerId: id, preventDefault() {} };
+        if (blackboard) completeBlackboardStroke(finish, false);
+        else completeAnnotationStroke(finish, false);
+      }
+    }
+    event.preventDefault();
+    return true;
+  }
+  if (!gesture?.pointers.has(event.pointerId)) return false;
+  if (phase === 'up') {
+    gesture.pointers.delete(event.pointerId);
+    if (blackboard) state.blackboard._activePointers.delete(event.pointerId);
+    if (!gesture.pointers.size) handwritingTouches.delete(canvas);
+    if (!gesture.active) return false;
+    event.preventDefault();
+    runCatching(() => canvas.releasePointerCapture(event.pointerId));
+    return true;
+  }
+  const before = [...gesture.pointers.values()].slice(0, 2);
+  gesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (!gesture.active) return false;
+  event.preventDefault();
+  if (before.length < 2) return true;
+  const after = [...gesture.pointers.values()].slice(0, 2);
+  const distance = pointerDist(before[0], before[1]);
+  if (distance < 1) return true;
+  const factor = pointerDist(after[0], after[1]) / distance;
+  const from = pinchCenter(before[0], before[1]);
+  const to = pinchCenter(after[0], after[1]);
+  if (blackboard) {
+    const board = state.blackboard;
+    const rect = canvas.getBoundingClientRect();
+    const next = clamp(board.scale * factor, board.MIN_SCALE, board.MAX_SCALE);
+    board.panX += (from.x - rect.left) / board.scale - (to.x - rect.left) / next;
+    board.panY += (from.y - rect.top) / board.scale - (to.y - rect.top) / next;
+    board.scale = next;
+    renderBlackboard();
+  } else if (currentContentKind() !== 'none') {
+    zoomImageViewAt(state.imageView.scale * factor, to.x, to.y);
+  } else if (isLocalVideoViewEnabled()) {
+    zoomLockedVideo(factor, from, to);
+  }
+  return true;
+}
+
 function beginAnnotationStroke(event) {
   if (state.courseware?.pdfDocument && state.courseware.displayedPage !== state.courseware.page) return;
+  if (handleHandwritingTouch(event, 'down')) return;
   if (beginLockedVideoPan(event)) return;
   // 投屏图片 + 手型工具：走图片自身的平移/捏合，与 PDF 课件的 coursewarePan 分开
   if (beginImageGesture(event)) return;
@@ -3567,6 +3672,7 @@ function beginAnnotationStroke(event) {
     if (event.isPrimary) beginCoursewarePan(event);
     return;
   }
+  if ([...state.annotations.activeStrokes.keys()].some(id => typeof id === 'number')) return;
   const point = pointerEventToSourcePoint(event);
   if (!point) {
     return;
@@ -3594,6 +3700,7 @@ function beginAnnotationStroke(event) {
 }
 
 function continueAnnotationStroke(event) {
+  if (handleHandwritingTouch(event, 'move')) return;
   if (continueLockedVideoPan(event)) return;
   // 投屏图片：正在平移/捏合时优先处理，避免中途切工具导致手势错乱
   if (continueImageGesture(event)) return;
@@ -3641,6 +3748,7 @@ function continueAnnotationStroke(event) {
 }
 
 function finishAnnotationStroke(event) {
+  if (handleHandwritingTouch(event, 'up')) return;
   if (finishLockedVideoPan(event)) return;
   // 投屏图片：清理本次手势的指针缓存，结束平移或捏合
   if (finishImageGesture(event)) return;
@@ -3656,6 +3764,10 @@ function finishAnnotationStroke(event) {
     finishCoursewarePan(event);
     return;
   }
+  completeAnnotationStroke(event);
+}
+
+function completeAnnotationStroke(event, releaseCapture = true) {
   const stroke = state.annotations.activeStrokes.get(event.pointerId);
   if (!stroke) {
     return;
@@ -3674,7 +3786,7 @@ function finishAnnotationStroke(event) {
   }
   state.annotations.activeStrokes.delete(event.pointerId);
   syncViewerAnnotationEnd(event.pointerId);
-  runCatching(() => elements.annotationCanvas.releasePointerCapture(event.pointerId));
+  if (releaseCapture) runCatching(() => elements.annotationCanvas.releasePointerCapture(event.pointerId));
   if (stroke.lineMode) hideAngleIndicator();
   drawAnnotations();
   updateAnnotationButtons();
@@ -3970,6 +4082,7 @@ function clearAnnotations() {
 }
 
 function resetAnnotations() {
+  resetHandwritingTouches(elements.annotationCanvas);
   state.annotations.strokes = [];
   state.annotations.activeStrokes.clear();
   drawAnnotations();
@@ -4287,6 +4400,7 @@ function showJoinView() {
 }
 
 function showVideoView() {
+  elements.videoStatus.classList.remove('courseware-error');
   coursewareLinkControls.then(links => links.clear());
   resetLockedVideoPan();
   state.presentationMode = 'video';
@@ -4533,6 +4647,7 @@ function showLinkPrompt(title, linkUrl) {
 function toggleBlackboard(forceState) {
   const open = typeof forceState === 'boolean' ? forceState : !state.blackboard.active;
   if (open === state.blackboard.active) return;
+  resetHandwritingTouches(elements.blackboardCanvas);
 
   state.blackboard.active = open;
   elements.blackboardOverlay.hidden = !open;
@@ -4558,9 +4673,11 @@ function toggleBlackboard(forceState) {
 
 function beginBlackboardStroke(event) {
   if (!state.blackboard.active) return;
+  if (handleHandwritingTouch(event, 'down', true)) return;
 
-  // 始终记录指针位置（用于双指缩放检测）
-  state.blackboard._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (state.blackboard.tool === 'hand' || state.blackboard.tool === 'select') {
+    state.blackboard._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  }
 
   // 手型工具：启动平移或双指缩放
   if (state.blackboard.tool === 'hand') {
@@ -4579,6 +4696,7 @@ function beginBlackboardStroke(event) {
     return;
   }
 
+  if (state.blackboard.activeStrokes.size) return;
   const point = blackboardPointerToPoint(event);
   if (!point) return;
 
@@ -4602,9 +4720,11 @@ function beginBlackboardStroke(event) {
 
 function continueBlackboardStroke(event) {
   if (!state.blackboard.active) return;
+  if (handleHandwritingTouch(event, 'move', true)) return;
 
-  // 始终更新指针位置缓存
-  state.blackboard._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (state.blackboard._activePointers.has(event.pointerId)) {
+    state.blackboard._activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  }
 
   // 圈选工具：套索绘制 或 拖拽移动
   if (state.blackboard.tool === 'select') {
@@ -4648,6 +4768,7 @@ function continueBlackboardStroke(event) {
 
 function finishBlackboardStroke(event) {
   if (!state.blackboard.active) return;
+  if (handleHandwritingTouch(event, 'up', true)) return;
 
   // 清理指针缓存
   state.blackboard._activePointers.delete(event.pointerId);
@@ -4669,6 +4790,10 @@ function finishBlackboardStroke(event) {
     finishBlackboardPan(event);
     return;
   }
+  completeBlackboardStroke(event);
+}
+
+function completeBlackboardStroke(event, releaseCapture = true) {
   const stroke = state.blackboard.activeStrokes.get(event.pointerId);
   if (!stroke) return;
   event.preventDefault();
@@ -4684,7 +4809,7 @@ function finishBlackboardStroke(event) {
     });
   }
   state.blackboard.activeStrokes.delete(event.pointerId);
-  runCatching(() => elements.blackboardCanvas.releasePointerCapture(event.pointerId));
+  if (releaseCapture) runCatching(() => elements.blackboardCanvas.releasePointerCapture(event.pointerId));
   if (stroke.lineMode) hideAngleIndicator();
 
   renderBlackboard();
