@@ -544,7 +544,7 @@ video {
   touch-action: none;
   position: absolute;
   right: 1rem;
-  bottom: 0.5rem;
+  bottom: 0;
   z-index: 5;
   display: flex;
   justify-content: flex-end;
@@ -1832,7 +1832,7 @@ video {
   max-width: calc(100vw - 2.4rem);
   position: absolute;
   left: 50%;
-  bottom: 1.2rem;
+  bottom: 0;
   transform: translateX(-50%);
   z-index: 5;
   display: flex;
