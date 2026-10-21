@@ -136,7 +136,7 @@
           <button class="annotation-mode" id="panToolButton" type="button" title="指针（拖动画面）" aria-label="指针" hidden>
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 12.586 19 19"/><path d="M3.688 3.037a.497.497 0 0 0-.651.651l6.5 15.999a.501.501 0 0 0 .947-.062l1.569-6.083a2 2 0 0 1 1.448-1.479l6.124-1.579a.5.5 0 0 0 .063-.947z"/></svg>
           </button>
-          <button class="annotation-button annotation-eraser-btn" id="annotationEraserButton" type="button"><svg class="annotation-tool-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5a2 2 0 0 1 0 3L11 21H6l-4-4a2 2 0 0 1 0-3L13 3a2 2 0 0 1 3 0Z"/><path d="m8 8 8 8M11 21h11"/></svg><span>板擦</span></button>
+          <button class="annotation-button line-toggle-btn" id="annotationLineToggle" type="button" title="直线/曲线切换" aria-label="直线/曲线切换">直线</button>
           <div class="annotation-colors-dropdown" id="annotationColorsDropdown">
             <div class="annotation-colors" id="annotationColors" aria-label="画笔颜色">
               <button class="annotation-color is-active" type="button" data-color="#D00000" aria-label="深红色"></button>
@@ -164,7 +164,7 @@
               </button>
             </div>
           </div>
-          <button class="annotation-button line-toggle-btn" id="annotationLineToggle" type="button" title="直线/曲线切换" aria-label="直线/曲线切换">直线</button>
+          <button class="annotation-button annotation-eraser-btn" id="annotationEraserButton" type="button"><svg class="annotation-tool-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5a2 2 0 0 1 0 3L11 21H6l-4-4a2 2 0 0 1 0-3L13 3a2 2 0 0 1 3 0Z"/><path d="m8 8 8 8M11 21h11"/></svg><span>板擦</span></button>
           <button class="annotation-button" id="undoAnnotationButton" type="button"><svg class="annotation-tool-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6M3 13l4-4a8 8 0 0 1 14 6"/></svg><span>撤销</span></button>
           <button class="annotation-button" id="clearAnnotationButton" type="button"><svg class="annotation-tool-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg><span>清空</span></button>
           <div class="toolbar-divider"></div>
@@ -270,7 +270,7 @@
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="blackboardUndoButton" type="button"><svg class="annotation-tool-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6M3 13l4-4a8 8 0 0 1 14 6"/></svg><span>撤销</span></button>
           <button class="annotation-button" id="blackboardClearButton" type="button"><svg class="annotation-tool-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg><span>清屏</span></button>
-          <button class="annotation-button blackboard-eraser-btn" id="blackboardEraserButton" type="button"><svg class="annotation-tool-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5a2 2 0 0 1 0 3L11 21H6l-4-4a2 2 0 0 1 0-3L13 3a2 2 0 0 1 3 0Z"/><path d="m8 8 8 8M11 21h11"/></svg><span>板擦</span></button>
+          <button class="annotation-button line-toggle-btn" id="blackboardLineToggle" type="button" title="直线/曲线切换" aria-label="直线/曲线切换">直线</button>
           <button class="annotation-button blackboard-hand-btn" id="blackboardHandButton" type="button" title="指针（拖动画面）" aria-label="指针">
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 12.586 19 19"/><path d="M3.688 3.037a.497.497 0 0 0-.651.651l6.5 15.999a.501.501 0 0 0 .947-.062l1.569-6.083a2 2 0 0 1 1.448-1.479l6.124-1.579a.5.5 0 0 0 .063-.947z"/></svg>
           </button>
@@ -304,7 +304,7 @@
               </button>
             </div>
           </div>
-          <button class="annotation-button line-toggle-btn" id="blackboardLineToggle" type="button" title="直线/曲线切换" aria-label="直线/曲线切换">直线</button>
+          <button class="annotation-button blackboard-eraser-btn" id="blackboardEraserButton" type="button"><svg class="annotation-tool-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5a2 2 0 0 1 0 3L11 21H6l-4-4a2 2 0 0 1 0-3L13 3a2 2 0 0 1 3 0Z"/><path d="m8 8 8 8M11 21h11"/></svg><span>板擦</span></button>
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="blackboardNewPageButton" type="button">+新页</button>
           <button class="annotation-button" id="blackboardDelPageButton" type="button">删页</button>

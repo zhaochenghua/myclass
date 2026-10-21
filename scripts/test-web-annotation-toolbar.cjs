@@ -26,7 +26,7 @@ function pdfFixture() {
     const positions = () => page.locator('#prevPageButton, #nextPageButton').evaluateAll(buttons => buttons.map(b => {
       const r = b.getBoundingClientRect(); return [r.x, r.y, r.width, r.height];
     }));
-    for (const width of [1920, 1280, 1024]) {
+    for (const width of [1920, 1280, 1024, 800, 640]) {
       await page.setViewportSize({ width, height: 900 });
       await page.evaluate(() => { showCoursewarePage(1); });
       await page.locator('.embedded-launch').waitFor({ state: 'visible' });
@@ -34,6 +34,11 @@ function pdfFixture() {
       await page.evaluate(() => { showCoursewarePage(2); });
       await page.locator('.embedded-launch').waitFor({ state: 'hidden' });
       assert.deepEqual(await positions(), before, 'video visibility must not move navigation at ' + width);
+      const fits = await page.locator('#annotationToolbar').evaluate(bar => {
+        const r = bar.getBoundingClientRect();
+        return r.left >= 0 && r.right <= innerWidth && getComputedStyle(bar).flexWrap === 'nowrap';
+      });
+      assert.ok(fits, 'single-row toolbar fits viewport at ' + width);
     }
     await page.setViewportSize({ width: 1920, height: 1080 });
     for (const board of [false, true]) {
@@ -63,6 +68,14 @@ function pdfFixture() {
       assert.equal(await button.getAttribute('aria-expanded'), 'false');
     }
     assert.equal(await page.locator('.annotation-tool-icon').count(), 6);
+    for (const width of [1280, 800, 640]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.ok(await page.locator('.blackboard-toolbar').evaluate(bar => {
+        const r = bar.getBoundingClientRect();
+        return r.left >= 0 && r.right <= innerWidth && getComputedStyle(bar).flexWrap === 'nowrap';
+      }), 'blackboard toolbar fits at ' + width);
+    }
     assert.deepEqual(errors, []);
     console.log('PASS: stable paging at three widths; both eraser menus, applied stroke widths, icons and Escape dismissal');
   } finally { await browser?.close(); await server.close(); }

@@ -452,6 +452,7 @@ async function bootstrap() {
       updateVideoPresentation();
     });
     window.addEventListener('resize', handleViewportResize);
+    setupResponsiveToolbars();
     new ResizeObserver(() => reportViewerCoursewareViewport()).observe(elements.videoView);
     document.addEventListener('fullscreenchange', reportViewerCoursewareViewport);
     document.addEventListener('visibilitychange', reportViewerCoursewareViewport);
@@ -4161,6 +4162,33 @@ function updateLineToggleButtons() {
     elements.blackboardLineToggle.textContent = state.blackboard.lineMode ? '曲线' : '直线';
     elements.blackboardLineToggle.classList.toggle('is-active', state.blackboard.lineMode);
   }
+}
+
+function setupResponsiveToolbars() {
+  const bars = [elements.annotationToolbar, document.querySelector('.blackboard-toolbar')];
+  let frame = 0;
+  const fit = () => {
+    frame = 0;
+    for (const bar of bars) {
+      if (!bar.getClientRects().length) continue;
+      const available = Math.max(1, Math.min(window.innerWidth, bar.parentElement.clientWidth) - 32);
+      // offsetWidth stays in layout pixels, independent of the applied zoom.
+      const scale = Math.min(1, available / Math.max(1, bar.offsetWidth));
+      bar.style.zoom = String(scale);
+    }
+  };
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(fit); };
+  const resize = new ResizeObserver(schedule);
+  const changes = new MutationObserver(schedule);
+  for (const bar of bars) {
+    resize.observe(bar);
+    resize.observe(bar.parentElement);
+    changes.observe(bar, { childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: ['hidden', 'class'] });
+  }
+  window.addEventListener('resize', schedule);
+  document.addEventListener('fullscreenchange', schedule);
+  schedule();
 }
 
 function setupEraserSizeMenu(button, settings, selectEraser, cursor) {
