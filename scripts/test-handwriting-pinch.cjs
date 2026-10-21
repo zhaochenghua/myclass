@@ -1,4 +1,4 @@
-// Genuine browser touch input: pen/eraser switch from one stroke to pinch zoom.
+// Genuine browser touch input: reject infrared false contacts and confirm pinches.
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -83,6 +83,39 @@ function pdfFixture() {
           if (blackboard) setBlackboardTool(tool); else setAnnotationTool(tool);
           gestureMessages.length = 0;
         }, { blackboard, tool });
+        for (const scenario of ['close', 'stationary', 'together', 'late', 'long-stroke', 'jitter', 'held-contact']) {
+          const before = await read(blackboard);
+          await touch('touchStart', [point(1, 450)]);
+          await touch('touchMove', [point(1, 470, 370)]);
+          if (scenario === 'late') await page.waitForTimeout(350);
+          if (scenario === 'long-stroke') {
+            await touch('touchMove', [point(1, 500, 400)]);
+            await touch('touchMove', [point(1, 470, 370)]);
+          }
+          const other = scenario === 'close' ? 475 : 700;
+          await touch('touchStart', [point(1, 470, 370), point(2, other, 370)]);
+          assert.equal((await read(blackboard)).local, 1, `${kind}/${tool}/${scenario}: preserve ink at second contact`);
+          if (scenario === 'held-contact') await page.waitForTimeout(450);
+          let firstX = 400, secondX = 770;
+          if (scenario === 'stationary') secondX = other;
+          if (scenario === 'together') { firstX = 530; secondX = 760; }
+          if (scenario === 'jitter') { firstX = 468; secondX = 702; }
+          await touch('touchMove', [point(1, firstX, 370), point(2, secondX, 370)]);
+          let guarded = await read(blackboard);
+          assert.equal(guarded.scale, before.scale, `${kind}/${tool}/${scenario}: no false zoom`);
+          assert.equal(guarded.local, 1, `${kind}/${tool}/${scenario}: keep writing`);
+          assert.equal(guarded.count, before.count, 'do not split the current stroke');
+          await touch('touchEnd', [point(1, firstX, 370)]);
+          await touch('touchStart', [point(2, secondX, 370), point(3, 950, 370)]);
+          await touch('touchMove', [point(2, secondX - 60, 370), point(3, 1010, 370)]);
+          guarded = await read(blackboard);
+          assert.equal(guarded.scale, before.scale, 'remaining contacts cannot become a replacement pinch');
+          assert.equal(guarded.local, 0, 'remaining contacts cannot start ink');
+          assert.equal(guarded.count, before.count + 1, 'only the owner saves a stroke');
+          await touch('touchEnd', []);
+          assert.equal((await read(blackboard)).gesture, false);
+        }
+        await page.evaluate(() => { gestureMessages.length = 0; });
         if (kind === 'pdf' || kind === 'image') await page.evaluate(() => handleTeacherAnnotation({
           action: 'begin', strokeId: 'remote-check', points: [{ x: 0.2, y: 0.2 }], page: 1
         }));
@@ -92,17 +125,27 @@ function pdfFixture() {
         assert.equal((await read(blackboard)).local, 1, `${kind}/${tool}: one local stroke`);
         await touch('touchStart', [point(1, 470, 370), point(2, 700, 370)]);
         let current = await read(blackboard);
+        assert.equal(current.local, 1, 'second contact alone cannot interrupt ink');
+        assert.equal(current.count, initial.count);
+        await touch('touchMove', [point(1, 400, 370), point(2, 770, 370)]);
+        current = await read(blackboard);
         assert.equal(current.local, 0);
         assert.equal(current.count, initial.count + 1, 'finish existing ink once');
+        assert.equal(current.scale, initial.scale, 'confirm pinch without a viewport jump');
+        await touch('touchMove', [point(1, 760, 370), point(2, 770, 370)]);
+        assert.equal((await read(blackboard)).scale, initial.scale, 'coordinate collapse cannot shrink the viewport');
         await touch('touchMove', [point(1, 400, 370), point(2, 770, 370)]);
+        assert.equal((await read(blackboard)).scale, initial.scale, 'recovery from a coordinate spike cannot zoom');
+        await touch('touchMove', [point(1, 340, 370), point(2, 830, 370)]);
+        await touch('touchMove', [point(1, 280, 370), point(2, 890, 370)]);
         current = await read(blackboard);
         assert.ok(current.scale > initial.scale * 1.4, `${kind}/${tool}: pinch must zoom ${JSON.stringify({ initial, current })}`);
         assert.equal(current.tool, tool, 'keep selected tool');
         const enlarged = current.scale;
-        await touch('touchStart', [point(1, 400, 370), point(2, 770, 370), point(3, 850, 420)]);
-        await touch('touchMove', [point(1, 400, 370), point(2, 770, 370), point(3, 900, 460)]);
+        await touch('touchStart', [point(1, 280, 370), point(2, 890, 370), point(3, 1000, 420)]);
+        await touch('touchMove', [point(1, 280, 370), point(2, 890, 370), point(3, 1050, 460)]);
         assert.equal((await read(blackboard)).scale, enlarged, 'third finger cannot reset zoom');
-        await touch('touchEnd', [point(3, 900, 460)]);
+        await touch('touchEnd', [point(3, 1050, 460)]);
         await touch('touchMove', [point(1, 450, 370), point(2, 720, 370)]);
         assert.ok((await read(blackboard)).scale < enlarged, 'pinch inward must shrink');
         await touch('touchEnd', [point(1, 450, 370)]);
@@ -144,9 +187,10 @@ function pdfFixture() {
       assert.equal(afterHand.local, 0);
       await page.evaluate(board => { if (board) setBlackboardTool('pen'); else setAnnotationTool('pen'); }, blackboard);
       await page.screenshot({ path: path.join(output, `${kind}.png`) });
+      console.log(`PASS: ${kind} pen/eraser false-contact guards, confirmed pinch and hand tool`);
     }
     assert.deepEqual(errors, []);
-    console.log(`PASS: actual touch on PDF/image/live/locked/screen/blackboard, pen/eraser, zoom in/out, third finger, release/cancel, fresh ink, mouse, hand tool, remote ink and sync; screenshots: ${output}`);
+    console.log(`PASS: actual touch on PDF/image/live/locked/screen/blackboard, false contacts, pen/eraser, confirmed zoom in/out, third finger, release/cancel, fresh ink, mouse, hand tool, remote ink and sync; screenshots: ${output}`);
   } catch (error) {
     if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
     throw error;

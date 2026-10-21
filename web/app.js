@@ -3664,8 +3664,8 @@ function resetHandwritingTouches(canvas) {
   }
 }
 
-// Once a second finger arrives, consume the whole gesture until all fingers lift.
-// Keep remote strokes independent; only the current local stroke is completed.
+// A second infrared contact may be a thumb or dust. Keep writing until both
+// fingers demonstrate a pinch; never turn an established stroke into a gesture.
 function handleHandwritingTouch(event, phase, blackboard = false) {
   const canvas = blackboard ? elements.blackboardCanvas : elements.annotationCanvas;
   const drawing = blackboard ? state.blackboard : state.annotations;
@@ -3673,43 +3673,80 @@ function handleHandwritingTouch(event, phase, blackboard = false) {
   if (phase === 'down') {
     if (event.pointerType !== 'touch' || (!gesture?.active && !['pen', 'eraser'].includes(drawing.tool))) return false;
     if (!gesture) {
-      gesture = { pointers: new Map(), active: false };
+      gesture = {
+        pointers: new Map(), active: false, candidate: null, blocked: false,
+        ownerId: [...drawing.activeStrokes.keys()].some(id => typeof id === 'number') ? null : event.pointerId,
+        startedAt: event.timeStamp, travel: 0
+      };
       handwritingTouches.set(canvas, gesture);
     }
     gesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     runCatching(() => canvas.setPointerCapture(event.pointerId));
-    if (gesture.pointers.size < 2 && !gesture.active) return false;
-    if (!gesture.active) {
-      gesture.active = true;
-      for (const id of drawing.activeStrokes.keys()) {
-        if (typeof id !== 'number') continue;
-        const finish = { pointerId: id, preventDefault() {} };
-        if (blackboard) completeBlackboardStroke(finish, false);
-        else completeAnnotationStroke(finish, false);
+    if (gesture.pointers.size === 2 && !gesture.active && !gesture.blocked) {
+      const ids = [...gesture.pointers.keys()];
+      const start = [...gesture.pointers.values()];
+      if (gesture.ownerId !== null && event.timeStamp - gesture.startedAt <= 300 &&
+          gesture.travel <= 40 && pointerDist(start[0], start[1]) >= 64) {
+        gesture.candidate = { ids, start, startedAt: event.timeStamp };
+      } else {
+        gesture.blocked = true;
       }
     }
+    if (event.pointerId === gesture.ownerId && !gesture.active) return false;
     event.preventDefault();
     return true;
   }
   if (!gesture?.pointers.has(event.pointerId)) return false;
   if (phase === 'up') {
     gesture.pointers.delete(event.pointerId);
+    if (gesture.candidate?.ids.includes(event.pointerId)) {
+      gesture.candidate = null;
+      gesture.blocked = true;
+    }
     if (blackboard) state.blackboard._activePointers.delete(event.pointerId);
     if (!gesture.pointers.size) handwritingTouches.delete(canvas);
-    if (!gesture.active) return false;
+    if (!gesture.active && event.pointerId === gesture.ownerId) return false;
     event.preventDefault();
     runCatching(() => canvas.releasePointerCapture(event.pointerId));
     return true;
   }
-  const before = [...gesture.pointers.values()].slice(0, 2);
+  const previous = gesture.pointers.get(event.pointerId);
+  if (!gesture.active && gesture.candidate && event.timeStamp - gesture.candidate.startedAt > 400) {
+    gesture.candidate = null;
+    gesture.blocked = true;
+  }
+  const candidate = gesture.candidate;
+  const before = candidate?.ids.map(id => gesture.pointers.get(id));
   gesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (!gesture.active) return false;
+  if (!gesture.active && !candidate && event.pointerId === gesture.ownerId) {
+    gesture.travel += Math.hypot(event.clientX - previous.x, event.clientY - previous.y);
+  }
+  const after = candidate?.ids.map(id => gesture.pointers.get(id));
+  if (!gesture.active && candidate && candidate.ids.includes(event.pointerId)) {
+    const [a, b] = candidate.start;
+    const distance = pointerDist(a, b);
+    const dx = (b.x - a.x) / distance, dy = (b.y - a.y) / distance;
+    const first = (after[0].x - a.x) * dx + (after[0].y - a.y) * dy;
+    const second = (after[1].x - b.x) * dx + (after[1].y - b.y) * dy;
+    if (Math.abs(first) >= 8 && Math.abs(second) >= 8 && first * second < 0 &&
+        Math.abs(pointerDist(after[0], after[1]) - distance) >= 24) {
+      gesture.active = true;
+      const finish = { pointerId: gesture.ownerId, preventDefault() {} };
+      if (blackboard) completeBlackboardStroke(finish, false);
+      else completeAnnotationStroke(finish, false);
+      // Rebase at confirmation so the saved ink and viewport do not jump.
+      event.preventDefault();
+      return true;
+    }
+  }
+  if (!gesture.active && event.pointerId === gesture.ownerId) return false;
   event.preventDefault();
-  if (before.length < 2) return true;
-  const after = [...gesture.pointers.values()].slice(0, 2);
+  if (!gesture.active || !candidate?.ids.includes(event.pointerId)) return true;
   const distance = pointerDist(before[0], before[1]);
-  if (distance < 1) return true;
+  if (distance < 32) return true;
   const factor = pointerDist(after[0], after[1]) / distance;
+  // Drop isolated coordinate spikes instead of magnifying them into a zoom.
+  if (factor < 2 / 3 || factor > 1.5) return true;
   const from = pinchCenter(before[0], before[1]);
   const to = pinchCenter(after[0], after[1]);
   if (blackboard) {
