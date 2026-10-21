@@ -365,7 +365,8 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
       if (!userId || !item || item.linkUrl || !/\.(pdf|jpe?g|png|gif|webp|bmp)$/i.test(pathname) ||
           (item.userId && !['admin', 'legacy', userId].includes(item.userId))) return null;
       const notes = message ? await annotations.apply(item.id, message, role) : await annotations.load(item.id);
-      return message ? true : JSON.parse(JSON.stringify({ strokes: notes.strokes, active: [...notes.active.values()] }));
+      return message ? true : JSON.parse(JSON.stringify({ strokes: notes.strokes, active: [...notes.active.values()],
+        ...(Object.values(notes.cleared).some(history => history.length) ? { cleared: notes.cleared } : {}) }));
     });
   }
 

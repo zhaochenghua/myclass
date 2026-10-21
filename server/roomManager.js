@@ -228,6 +228,7 @@ class RoomManager {
     if (savedNotes) {
       room.presentation.maxPoints = Infinity;
       room.presentation.strokes = [...savedNotes.strokes, ...savedNotes.active];
+      room.presentation.cleared = savedNotes.cleared || {};
       room.presentation.active.clear();
       room.presentation.recount();
     }

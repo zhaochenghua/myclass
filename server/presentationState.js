@@ -6,6 +6,7 @@ class PresentationState {
     this.page = 1;
     this.viewport = null;
     this.strokes = [];
+    this.cleared = {};
     this.active = new Map();
     this.points = 0;
     this.truncated = false;
@@ -67,11 +68,17 @@ class PresentationState {
         if (stroke) { this.strokes.push(stroke); this.active.delete(id); }
         break;
       }
-      case 'clear':
+      case 'clear': {
+        for (const [key, stroke] of this.active) {
+          if (stroke.page === page) { this.strokes.push(stroke); this.active.delete(key); }
+        }
+        const removed = this.strokes.filter(s => s.page === page);
+        if (removed.length) (this.cleared[page] ||= []).push(removed);
         this.strokes = this.strokes.filter(s => s.page !== page);
         for (const [key, stroke] of this.active) if (stroke.page === page) this.active.delete(key);
         this.recount();
         break;
+      }
       case 'undo': {
         // Commit partial strokes before undo, just as the viewer does.
         for (const [key, stroke] of this.active) {
@@ -79,6 +86,7 @@ class PresentationState {
         }
         const index = this.strokes.findLastIndex(s => s.page === page);
         if (index >= 0) this.strokes.splice(index, 1);
+        else if (this.cleared[page]?.length) this.strokes.push(...this.cleared[page].pop());
         this.recount();
         break;
       }
@@ -98,7 +106,7 @@ class PresentationState {
   snapshot() {
     return this.open ? {
       open: { ...this.open, page: this.page }, viewport: this.viewport,
-      strokes: this.strokes, active: [...this.active.values()], truncated: this.truncated
+      strokes: this.strokes, active: [...this.active.values()], cleared: this.cleared, truncated: this.truncated
     } : null;
   }
 }

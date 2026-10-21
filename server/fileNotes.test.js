@@ -99,5 +99,34 @@ test('room lifecycle restores file notes, protects against stale files, and supp
   assert.equal(direct.messages.at(-1).strokes.length, 1);
   await manager.forward(direct, { ...event('clear'), type: 'viewer.annotation' });
   assert.equal((await f.make().fileNotes('alice', f.image.url)).strokes.length, 0);
+  await manager.forward(teacher, open);
+  assert.equal(teacher.messages.filter(m => m.type === 'annotations.snapshot').at(-1).cleared[1][0].length, 1);
+  await manager.forward(teacher, event('undo'));
+  assert.equal(room.presentation.strokes.length, 1);
+  assert.equal((await f.make().fileNotes('alice', f.image.url)).strokes.length, 1);
+  assert.equal(viewer.messages.at(-1).action, 'undo');
   assert.ok(directRoom.notesUserId);
+});
+
+
+test('clear undo restores all styles after restart, new strokes undo first and pages remain isolated', async t => {
+  const f = await fixture(t);
+  await stroke(f.store, f.image.url, 1, 'pen', { mode: 'highlighter' });
+  await stroke(f.store, f.image.url, 1, 'erase', { isEraser: true, width: 80 });
+  await stroke(f.store, f.image.url, 2, 'other');
+  const before = await f.store.fileNotes('alice', f.image.url);
+  await f.store.fileNotes('alice', f.image.url, event('clear', 1), 'teacher');
+  const restarted = f.make();
+  assert.equal((await restarted.fileNotes('alice', f.image.url)).cleared[1][0].length, 2);
+  await stroke(restarted, f.image.url, 1, 'new');
+  await restarted.fileNotes('alice', f.image.url, event('undo', 1), 'viewer');
+  assert.equal((await restarted.fileNotes('alice', f.image.url)).strokes.length, 1);
+  await restarted.fileNotes('alice', f.image.url, event('undo', 1), 'viewer');
+  const after = await f.make().fileNotes('alice', f.image.url);
+  assert.deepEqual(after.strokes.filter(s => s.page === 1), before.strokes.filter(s => s.page === 1));
+  assert.deepEqual(after.strokes.filter(s => s.page === 2), before.strokes.filter(s => s.page === 2));
+  await restarted.fileNotes('alice', f.image.url, event('clear', 1), 'viewer');
+  await restarted.fileNotes('alice', f.image.url, event('clear', 1), 'viewer');
+  await restarted.fileNotes('alice', f.image.url, event('undo', 1), 'teacher');
+  assert.equal((await restarted.fileNotes('alice', f.image.url)).strokes.length, 3);
 });

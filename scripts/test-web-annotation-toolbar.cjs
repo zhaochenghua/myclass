@@ -66,6 +66,25 @@ function pdfFixture() {
       await page.screenshot({ path: path.join(os.tmpdir(), board ? 'myclass-board-eraser.png' : 'myclass-courseware-eraser.png') });
       await page.keyboard.press('Escape');
       assert.equal(await button.getAttribute('aria-expanded'), 'false');
+      const readNotes = () => page.evaluate(board => JSON.stringify(board
+        ? state.blackboard.pages[state.blackboard.currentPage].strokes : strokesForCurrentPage()), board);
+      const beforeClear = await readNotes();
+      const clear = page.locator(board ? '#blackboardClearButton' : '#clearAnnotationButton');
+      const undo = page.locator(board ? '#blackboardUndoButton' : '#undoAnnotationButton');
+      await clear.click();
+      assert.equal(await readNotes(), '[]');
+      assert.ok(await undo.isEnabled());
+      await undo.click();
+      assert.equal(await readNotes(), beforeClear);
+      if (!board) {
+        await page.evaluate(() => handleTeacherAnnotation({ action: 'clear', page: currentCoursewarePage() }));
+        assert.equal(await readNotes(), '[]');
+        await undo.click();
+        assert.equal(await readNotes(), beforeClear, 'web undo restores a phone clear');
+        await clear.click();
+        await page.evaluate(() => handleTeacherAnnotation({ action: 'undo', page: currentCoursewarePage() }));
+        assert.equal(await readNotes(), beforeClear, 'phone undo restores a web clear');
+      }
     }
     assert.equal(await page.locator('.annotation-tool-icon').count(), 6);
     for (const width of [1280, 800, 640]) {

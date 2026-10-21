@@ -1720,6 +1720,7 @@ function sameFileUrl(a, b) {
 }
 function restoreFileAnnotations(snapshot) {
   if (!sameFileUrl(displayedFileUrl, snapshot.url)) return;
+  state.annotations.cleared = snapshot.cleared || {};
   state.annotations.strokes = [...(snapshot.strokes || []), ...(snapshot.active || [])].map(s => ({
     ...s, points: normalizeAnnotationPoints(s.points), color: s.isEraser ? '#000' : (s.color || '#ff4d6d'),
     width: Number(s.width) || 4, page: Number(s.page) || 1
@@ -1748,6 +1749,7 @@ function restoreClassroomPresentation(snapshot) {
     color: s.isEraser ? '#000' : (s.color || '#ff4d6d'),
     width: Number(s.width) || 4, page: Number(s.page) || 1
   });
+  state.annotations.cleared = snapshot.cleared || {};
   state.annotations.strokes = (snapshot.strokes || []).map(strokeFromSnapshot);
   state.annotations.activeStrokes.clear();
   for (const s of snapshot.active || []) {
@@ -2299,12 +2301,13 @@ function strokesForCurrentPage() {
  * @param {boolean} all true 清空当前页全部，false 只撤销最后一笔
  * @returns 是否真的移除了内容
  */
-function removeStrokesForCurrentPage(all) {
-  const page = currentCoursewarePage();
+function removeStrokesForCurrentPage(all, page = currentCoursewarePage()) {
+  const history = (state.annotations.cleared ||= {});
   const strokes = state.annotations.strokes;
   if (all) {
     const kept = strokes.filter((stroke) => stroke.page && stroke.page !== page);
     if (kept.length === strokes.length) return false;
+    (history[page] ||= []).push(strokes.filter(stroke => !stroke.page || stroke.page === page));
     state.annotations.strokes = kept;
     return true;
   }
@@ -2314,6 +2317,10 @@ function removeStrokesForCurrentPage(all) {
       strokes.splice(index, 1);
       return true;
     }
+  }
+  if (history[page]?.length) {
+    strokes.push(...history[page].pop());
+    return true;
   }
   return false;
 }
@@ -2375,9 +2382,7 @@ function handleTeacherAnnotation(message) {
   if (action === 'undo') {
     const page = Number(message.page) || currentCoursewarePage();
     flushTeacherActiveStrokes();
-    for (let i = state.annotations.strokes.length - 1; i >= 0; i--) {
-      if (state.annotations.strokes[i].page === page) { state.annotations.strokes.splice(i, 1); break; }
-    }
+    removeStrokesForCurrentPage(false, page);
     drawAnnotations();
     updateAnnotationButtons();
     return;
@@ -2386,7 +2391,8 @@ function handleTeacherAnnotation(message) {
   if (action === 'clear') {
     // 按页清空：只清当前页，其它页的标注保留
     const page = Number(message.page) || currentCoursewarePage();
-    state.annotations.strokes = state.annotations.strokes.filter(s => s.page !== page);
+    flushTeacherActiveStrokes();
+    removeStrokesForCurrentPage(true, page);
     for (const [key, s] of state.annotations.activeStrokes) {
       if (s.page === page) state.annotations.activeStrokes.delete(key);
     }
@@ -4098,6 +4104,7 @@ function endCoursewarePinch() {
 }
 
 function undoAnnotationStroke() {
+  flushTeacherActiveStrokes();
   // 只撤销当前页的最后一笔，其它页的标注不受影响
   if (!removeStrokesForCurrentPage(false)) return;
   drawAnnotations();
@@ -4106,6 +4113,7 @@ function undoAnnotationStroke() {
 }
 
 function clearAnnotations() {
+  flushTeacherActiveStrokes();
   // 只清空当前页，其它页的标注保留（关闭课件时用 resetAnnotations 全清）
   if (!removeStrokesForCurrentPage(true)) return;
   state.annotations.activeStrokes.clear();
@@ -4117,6 +4125,7 @@ function clearAnnotations() {
 function resetAnnotations() {
   resetHandwritingTouches(elements.annotationCanvas);
   state.annotations.strokes = [];
+  state.annotations.cleared = {};
   state.annotations.activeStrokes.clear();
   drawAnnotations();
   updateAnnotationButtons();
@@ -4284,7 +4293,7 @@ function updateAnnotationToolButtons() {
 
 function updateAnnotationButtons() {
   const hasStrokes = strokesForCurrentPage().length > 0;
-  elements.undoAnnotationButton.disabled = !hasStrokes;
+  elements.undoAnnotationButton.disabled = !hasStrokes && !state.annotations.cleared?.[currentCoursewarePage()]?.length;
   elements.clearAnnotationButton.disabled = !hasStrokes;
 }
 
@@ -5153,7 +5162,7 @@ function updateBlackboardPageIndicator() {
   elements.blackboardPrevPageButton.disabled = state.blackboard.currentPage <= 0;
   elements.blackboardNextPageButton.disabled = state.blackboard.currentPage >= pages.length - 1;
   elements.blackboardDelPageButton.disabled = pages.length <= 1;
-  elements.blackboardUndoButton.disabled = !hasStrokes;
+  elements.blackboardUndoButton.disabled = !hasStrokes && !page?.cleared?.length;
   elements.blackboardClearButton.disabled = !hasStrokes;
 }
 
@@ -5211,6 +5220,8 @@ function undoBlackboardStroke() {
   const page = state.blackboard.pages[state.blackboard.currentPage];
   if (page && page.strokes.length > 0) {
     page.strokes.pop();
+  } else if (page?.cleared?.length) {
+    page.strokes = page.cleared.pop();
   }
   renderBlackboard();
   updateBlackboardPageIndicator();
@@ -5221,6 +5232,7 @@ function clearBlackboard() {
   clearBlackboardSelection();
   const page = state.blackboard.pages[state.blackboard.currentPage];
   if (page) {
+    if (page.strokes.length) (page.cleared ||= []).push(page.strokes);
     page.strokes = [];
   }
   state.blackboard.activeStrokes.clear();
