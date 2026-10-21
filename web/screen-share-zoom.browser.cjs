@@ -116,6 +116,33 @@ const path = require('node:path');
     await viewer.waitForFunction(() => state.videoOrientation.cameraFacing === 'unknown');
     await viewer.mouse.dblclick(1000, 350);
     assert.equal(await viewer.evaluate(() => state.lockedVideoPan.scale), 1);
+    // Portrait camera transitions must keep decoding visible frames, not just
+    // report a connected ICE channel while the screen has gone black.
+    await sender.evaluate(() => {
+      clearInterval(testSender.timer);
+      testSender.timer = setInterval(() => {
+        const canvas = testSender.canvas, ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#126b50'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 16, 16);
+      }, 100);
+    });
+    for (const [width, height] of [[640, 960], [960, 640], [640, 960]]) {
+      const frames = await viewer.evaluate(() => elements.remoteVideo.getVideoPlaybackQuality().totalVideoFrames);
+      await sender.evaluate(([width, height]) => {
+        testSender.canvas.width = width; testSender.canvas.height = height;
+        testSender.send({ type: 'teacher.orientation', orientation: width > height ? 'landscape' : 'portrait',
+          rotationDegrees: width > height ? 90 : 0, cameraFacing: 'back', frameLocked: false });
+      }, [width, height]);
+      await viewer.waitForFunction(({ width, frames }) => elements.remoteVideo.videoWidth === width &&
+        elements.remoteVideo.getVideoPlaybackQuality().totalVideoFrames > frames + 2, { width, frames });
+      const picture = await viewer.evaluate(() => {
+        const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+        const ctx = canvas.getContext('2d'); ctx.drawImage(elements.remoteVideo, 0, 0, 1, 1);
+        return { pixel: [...ctx.getImageData(0, 0, 1, 1).data], rect: currentVideoContentRect(), mode: state.presentationMode };
+      });
+      assert.equal(picture.mode, 'video'); assert.ok(picture.pixel[1] > 70);
+      assert.ok(picture.rect.width > 0 && picture.rect.height > 0);
+    }
     await sender.evaluate(() => testSender.send({ type: 'teacher.stop' }));
     await viewer.waitForFunction(() => !state.framePresentation.screenSharing && !state.peerConnection);
     await sender.evaluate(() => { clearInterval(testSender.timer); testSender.pc.close(); testSender.socket.close(); });

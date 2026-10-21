@@ -1381,19 +1381,24 @@ async function handleOffer(sdp) {
       type: 'offer',
       sdp
     });
+    if (state.peerConnection !== peerConnection) return;
     const pendingCandidates = state.pendingRemoteCandidates.splice(0);
     for (const candidate of pendingCandidates) {
+      if (state.peerConnection !== peerConnection) return;
       try { await peerConnection.addIceCandidate(candidate); }
       catch (error) { console.warn('add queued ICE candidate failed', error); }
     }
     const answer = await peerConnection.createAnswer();
+    if (state.peerConnection !== peerConnection) return;
     await peerConnection.setLocalDescription(answer);
+    if (state.peerConnection !== peerConnection) return;
     sendMessage({
       type: 'webrtc.answer',
       sdp: answer.sdp
     });
     elements.videoStatus.textContent = '正在建立视频连接...';
   } catch (error) {
+    if (state.peerConnection !== peerConnection) return;
     console.error('handleOffer failed:', error);
     elements.videoStatus.textContent = '建立视频连接失败，请刷新页面重试';
     cleanupPeerConnection();
@@ -1415,6 +1420,7 @@ function createPeerConnection() {
 
   // 教师端推送的媒体轨到达后，浏览器立即切换到全屏视频。
   peerConnection.addEventListener('track', (event) => {
+    if (state.peerConnection !== peerConnection) return;
     configureLowLatencyReceiver(event.receiver);
 
     // 处理 stream：某些浏览器 event.streams 可能为空
@@ -1422,11 +1428,16 @@ function createPeerConnection() {
     if (event.streams && event.streams.length > 0) {
       stream = event.streams[0];
     }
+    if (!stream && event.track) {
+      stream = elements.remoteVideo.srcObject || new MediaStream();
+      if (!stream.getTracks().includes(event.track)) stream.addTrack(event.track);
+    }
 
     if (stream) {
       if (elements.remoteVideo.srcObject !== stream) {
         elements.remoteVideo.srcObject = stream;
       }
+      if (event.track?.kind === 'audio') return;
       showVideoView();
       updateVideoPresentation();
       elements.videoStatus.textContent = '';
@@ -1434,9 +1445,12 @@ function createPeerConnection() {
       const playPromise = elements.remoteVideo.play();
       if (playPromise) {
         playPromise.catch(() => {
+          if (state.peerConnection !== peerConnection) return;
           // 极少数情况 muted autoplay 也被阻止，等待用户点击恢复
           elements.videoStatus.textContent = '点击画面开始播放';
           const resumeOnClick = () => {
+            document.removeEventListener('click', resumeOnClick);
+            if (state.peerConnection !== peerConnection || state.presentationMode !== 'video') return;
             elements.remoteVideo.muted = false;
             elements.remoteVideo.play().then(() => {
               elements.videoStatus.textContent = '';
@@ -1453,6 +1467,7 @@ function createPeerConnection() {
   });
 
   peerConnection.addEventListener('icecandidate', (event) => {
+    if (state.peerConnection !== peerConnection) return;
     if (event.candidate) {
       sendMessage({
         type: 'webrtc.ice-candidate',
@@ -1463,6 +1478,7 @@ function createPeerConnection() {
 
   // ICE 连接状态 — 提供诊断信息
   peerConnection.addEventListener('iceconnectionstatechange', () => {
+    if (state.peerConnection !== peerConnection) return;
     const iceState = peerConnection.iceConnectionState;
     if (iceState === 'checking') {
       elements.videoStatus.textContent = '正在建立视频连接...';
@@ -1477,11 +1493,11 @@ function createPeerConnection() {
 
   // 整体连接状态
   peerConnection.addEventListener('connectionstatechange', () => {
+    if (state.peerConnection !== peerConnection) return;
     const status = peerConnection.connectionState;
     if (status === 'connected') {
       state.teacherConnected = true;
       updateCoursewareConnectionIndicator();
-      showVideoView();
       elements.videoStatus.textContent = '';
       console.log('[WebRTC] 连接已建立，正在检测直连/中继模式...');
       startRelayBadgeCheck();
@@ -1590,8 +1606,9 @@ function stopRelayBadgeCheck() {
 function cleanupPeerConnection(resetPresentation = true) {
   stopRelayBadgeCheck();
   if (state.peerConnection) {
-    state.peerConnection.close();
+    const previous = state.peerConnection;
     state.peerConnection = null;
+    previous.close();
   }
   state.pendingRemoteCandidates = [];
   elements.remoteVideo.srcObject = null;
@@ -3155,6 +3172,7 @@ async function loadCoursewareDocument(courseware) {
 const COURSEWARE_RENDER_OVERSAMPLE = 1.5;
 /** 课件页渲染的最长边上限，避免超大页面占用过多显存 */
 const COURSEWARE_MAX_RENDER_EDGE = 4096;
+const COURSEWARE_MAX_RENDER_PIXELS = 4 * 1024 * 1024;
 const COURSEWARE_RENDER_CACHE_BYTES = 64 * 1024 * 1024;
 const COURSEWARE_RENDER_CACHE_PAGES = 3;
 
@@ -3190,6 +3208,8 @@ async function createCoursewarePageBuffer(courseware, pageNumber, layout, valid,
   let renderScale = fitScale * layout.outputScale * COURSEWARE_RENDER_OVERSAMPLE;
   const longestEdge = Math.max(baseViewport.width, baseViewport.height) * renderScale;
   if (longestEdge > COURSEWARE_MAX_RENDER_EDGE) renderScale *= COURSEWARE_MAX_RENDER_EDGE / longestEdge;
+  const pixels = baseViewport.width * baseViewport.height * renderScale * renderScale;
+  if (pixels > COURSEWARE_MAX_RENDER_PIXELS) renderScale *= Math.sqrt(COURSEWARE_MAX_RENDER_PIXELS / pixels);
   const renderViewport = page.getViewport({ scale: renderScale });
   const width = Math.max(1, Math.round(renderViewport.width));
   const height = Math.max(1, Math.round(renderViewport.height));
@@ -3213,12 +3233,26 @@ async function createCoursewarePageBuffer(courseware, pageNumber, layout, valid,
   const buffer = { canvas, bytes, cssWidth: Math.round(cssViewport.width), cssHeight: Math.round(cssViewport.height) };
   let complete = false;
   try {
-    const context = canvas.getContext('2d', { alpha: false });
-    context.fillStyle = '#fff';
-    context.fillRect(0, 0, width, height);
-    const task = page.render({ canvasContext: context, viewport: renderViewport });
-    onTask(task);
-    await task.promise;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const viewport = attempt ? page.getViewport({ scale: renderScale / 2 }) : renderViewport;
+        canvas.width = Math.max(1, Math.floor(viewport.width));
+        canvas.height = Math.max(1, Math.floor(viewport.height));
+        const context = canvas.getContext('2d', { alpha: false });
+        if (!context || context.isContextLost?.()) throw new Error('PDF canvas unavailable');
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        const task = page.render({ canvasContext: context, viewport });
+        onTask(task);
+        await task.promise;
+        if (context.isContextLost?.()) throw new Error('PDF canvas lost');
+        buffer.bytes = canvas.width * canvas.height * 4;
+        break;
+      } catch (error) {
+        if (!valid() || error?.name === 'RenderingCancelledException' || attempt || background) throw error;
+        console.warn('PDF render failed; retrying at lower resolution', error);
+      }
+    }
     if (!valid()) return null;
     complete = true;
     return buffer;
