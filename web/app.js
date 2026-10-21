@@ -503,7 +503,7 @@ async function bootstrap() {
     elements.blackboardDelPageButton.addEventListener('click', deleteBlackboardPage);
     elements.blackboardUndoButton.addEventListener('click', undoBlackboardStroke);
     elements.blackboardClearButton.addEventListener('click', clearBlackboard);
-    elements.blackboardEraserButton.addEventListener('click', toggleBlackboardEraser);
+    setupEraserSizeMenu(elements.blackboardEraserButton, state.blackboard, () => setBlackboardTool('eraser'), elements.blackboardEraserCursor);
     elements.blackboardHandButton.addEventListener('click', toggleBlackboardHand);
     elements.blackboardSelectButton.addEventListener('click', toggleBlackboardSelect);
     elements.blackboardDeleteSelButton.addEventListener('click', deleteBlackboardSelection);
@@ -583,9 +583,7 @@ async function bootstrap() {
       elements.penToolButton.addEventListener('click', () => setAnnotationTool('pen'));
     }
     elements.panToolButton.addEventListener('click', () => setAnnotationTool('pan'));
-    elements.annotationEraserButton.addEventListener('click', () => {
-      setAnnotationTool(state.annotations.tool === 'eraser' ? 'pen' : 'eraser');
-    });
+    setupEraserSizeMenu(elements.annotationEraserButton, state.annotations, () => setAnnotationTool('eraser'), elements.annotationEraserCursor);
     // 普通标注板擦光标跟踪（文档级，绕过 canvas 指针捕获）
     document.addEventListener('pointermove', (event) => {
       event = TouchCalibration.eventFor(event);
@@ -4163,6 +4161,61 @@ function updateLineToggleButtons() {
     elements.blackboardLineToggle.textContent = state.blackboard.lineMode ? '曲线' : '直线';
     elements.blackboardLineToggle.classList.toggle('is-active', state.blackboard.lineMode);
   }
+}
+
+function setupEraserSizeMenu(button, settings, selectEraser, cursor) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'toolbar-dropdown eraser-size-dropdown';
+  button.before(wrapper);
+  wrapper.append(button);
+  const menu = document.createElement('div');
+  menu.className = 'toolbar-dropdown-menu eraser-size-menu';
+  menu.id = button.id + 'SizeMenu';
+  menu.setAttribute('role', 'group');
+  menu.setAttribute('aria-label', '板擦大小');
+  wrapper.append(menu);
+  button.setAttribute('aria-controls', menu.id);
+  button.setAttribute('aria-expanded', 'false');
+  const close = () => {
+    menu.classList.remove('is-open');
+    button.setAttribute('aria-expanded', 'false');
+  };
+  const update = () => {
+    menu.querySelectorAll('button').forEach(option => {
+      const selected = Number(option.dataset.size) === settings.eraserWidth;
+      option.classList.toggle('is-active', selected);
+      option.setAttribute('aria-pressed', String(selected));
+    });
+    cursor.style.width = settings.eraserWidth + 'px';
+    cursor.style.height = settings.eraserWidth + 'px';
+  };
+  for (const [label, size] of [['小', 20], ['中', 40], ['大', 80]]) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'toolbar-dropdown-item';
+    option.dataset.size = String(size);
+    option.textContent = label;
+    option.setAttribute('aria-label', label + '号板擦');
+    option.addEventListener('click', () => {
+      settings.eraserWidth = size;
+      selectEraser();
+      update();
+      close();
+    });
+    menu.append(option);
+  }
+  button.addEventListener('click', () => {
+    const open = !menu.classList.contains('is-open');
+    selectEraser();
+    update();
+    menu.classList.toggle('is-open', open);
+    button.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', event => { if (!wrapper.contains(event.target)) close(); });
+  wrapper.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { close(); button.focus(); }
+  });
+  update();
 }
 
 function setAnnotationTool(tool) {

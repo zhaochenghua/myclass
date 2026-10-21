@@ -560,6 +560,28 @@ video {
 
 .annotation-toolbar > * { flex-shrink: 0; }
 .annotation-toolbar[hidden] { display: none; }
+
+/* Keep page controls stationary while per-page video availability changes. */
+.annotation-toolbar .embedded-launch {
+  box-sizing: border-box;
+  width: 10rem;
+  height: 2.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.annotation-toolbar .embedded-launch[hidden] {
+  display: block !important;
+  visibility: hidden;
+  pointer-events: none;
+}
+.annotation-tool-icon {
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.15em;
+  margin-right: 0.25em;
+}
+.eraser-size-menu { flex-direction: row; }
+.eraser-size-menu .is-active { background: #315e83; }
 .annotation-mode[hidden] { display: none; }
 #studentRollToolbarSlot { min-width: 0; max-width: 100%; }
 
