@@ -40,7 +40,7 @@ class EmbeddedVideoController(
 
     fun attach(view: Button) {
         button = view
-        view.visibility = View.GONE
+        view.visibility = View.INVISIBLE
         view.setOnClickListener { launch() }
         refresh()
     }
@@ -98,9 +98,10 @@ class EmbeddedVideoController(
 
     private fun renderButton() {
         val count = videos().size
-        button?.visibility = if (context != null && (count > 0 || warning.isNotBlank() || loading)) View.VISIBLE else View.GONE
+        // Keep the fixed video slot so page navigation never shifts between slides.
+        button?.visibility = if (context != null && (count > 0 || warning.isNotBlank() || loading)) View.VISIBLE else View.INVISIBLE
         button?.isEnabled = !loading
-        button?.text = when { loading -> "视频加载中"; count > 0 -> "本页视频（$count）"; else -> "视频信息" }
+        button?.text = when { loading -> "▶加载中"; count > 0 -> "▶视频"; else -> "▶视频" }
     }
 
     private fun launch() {

@@ -55,6 +55,8 @@ class ImportUploadService : Service() {
                         report(message)
                     }
                     ExternalFileReceiver.complete(this, item)
+                    getSharedPreferences("myclass_import_updates", MODE_PRIVATE).edit()
+                        .putLong(username, System.currentTimeMillis()).commit()
                     report("${item.displayName} 上传完成", finished = true)
                 }
             } catch (e: Exception) {

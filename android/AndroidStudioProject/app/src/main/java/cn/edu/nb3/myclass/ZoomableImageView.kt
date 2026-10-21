@@ -30,7 +30,7 @@ enum class ImageCastMode { Gesture, Pen }
 enum class ImageFitMode { Contain, FitWidth }
 
 /**
- * 经典图片查看控件：双指缩放、拖动平移、双击放大/还原、90° 步进旋转，
+ * 经典图片查看控件：双指缩放、拖动平移、90° 步进旋转，
  * 并支持切换到画笔模式做标注。
  *
  * 对外只暴露归一化视口：放大倍数 userScale（1 为完整显示）加上视口中心
@@ -64,7 +64,7 @@ class ZoomableImageView(context: Context) : View(context) {
      *
      * 手势模式下单指点击即可；画笔模式下单指留给绘制，改为**双指点击**触发，
      * 与 iOS 端的"点动翻页（非画笔单指、画笔双指）"一致。
-     * 与双击放大共用判定窗口：只有确认不是双击时才翻页，不会"放大一次又翻一页"。
+     * 单指抬起立即翻页，避免快速连续点击被双击手势拦截。
      */
     var onPageTap: ((direction: Int) -> Unit)? = null
 
@@ -192,7 +192,7 @@ class ZoomableImageView(context: Context) : View(context) {
     private val transformMatrix = Matrix()
     private val displayRect = RectF()
 
-    private val gestureDetector = GestureDetector(context, GestureListener())
+    private val gestureDetector = GestureDetector(context, GestureListener()).apply { setOnDoubleTapListener(null) }
 
     fun setImage(next: Bitmap?, atBottom: Boolean = false) {
         reportedViewerRect = null
@@ -255,11 +255,15 @@ class ZoomableImageView(context: Context) : View(context) {
     }
 
     /** 撤销最后一笔，返回是否真的撤销了（供调用方决定是否同步大屏） */
+    var clearedHistory: MutableList<List<AnnotationStroke>> = mutableListOf()
+    val canUndoAnnotation: Boolean get() = annotationCount > 0 || clearedHistory.isNotEmpty()
+
     fun undoAnnotation(): Boolean {
         finishActiveStroke(notify = false)
         flushRemoteStrokes()
-        if (strokes.isEmpty()) return false
-        strokes.removeAt(strokes.size - 1)
+        if (strokes.isNotEmpty()) strokes.removeAt(strokes.size - 1)
+        else if (clearedHistory.isNotEmpty()) strokes.addAll(clearedHistory.removeAt(clearedHistory.lastIndex))
+        else return false
         annotationDirty = true
         invalidate()
         onAnnotationCountChanged?.invoke()
@@ -271,6 +275,7 @@ class ZoomableImageView(context: Context) : View(context) {
         finishActiveStroke(notify = false)
         flushRemoteStrokes()
         if (strokes.isEmpty()) return false
+        clearedHistory.add(currentStrokes())
         strokes.clear()
         annotationDirty = true
         invalidate()
@@ -396,14 +401,17 @@ class ZoomableImageView(context: Context) : View(context) {
     private fun remoteUndo() {
         // 撤销前把大屏尚未结束的笔画落盘，保证撤销的是完整的一笔
         flushRemoteStrokes()
-        if (strokes.isEmpty()) return
-        strokes.removeAt(strokes.size - 1)
+        if (strokes.isNotEmpty()) strokes.removeAt(strokes.size - 1)
+        else if (clearedHistory.isNotEmpty()) strokes.addAll(clearedHistory.removeAt(clearedHistory.lastIndex))
+        else return
         annotationDirty = true
         invalidate()
         onAnnotationCountChanged?.invoke()
     }
 
     private fun remoteClear() {
+        flushRemoteStrokes()
+        if (strokes.isNotEmpty()) clearedHistory.add(currentStrokes())
         remoteStrokes.clear()
         strokes.clear()
         annotationDirty = true
@@ -1140,38 +1148,20 @@ class ZoomableImageView(context: Context) : View(context) {
             return true
         }
 
-        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+        override fun onSingleTapUp(e: MotionEvent): Boolean {
             // 点动翻页：点击左半边向前翻、右半边向后翻。
-            // onSingleTapConfirmed 只在确认不是双击之后回调，与双击放大共用判定窗口，
-            // 不会出现"放大一次又翻一页"。画笔模式单指用于绘制，翻页走双指点击（见 onTouchEvent）。
+            // 单指抬起立即处理，快速连续点击也能逐次翻页。画笔模式单指用于绘制，
+            // 翻页走双指点击（见 onTouchEvent）。
             if (mode == ImageCastMode.Pen) return false
             val handler = onPageTap ?: return false
             handler(if (e.x < width / 2f) -1 else 1)
             return true
         }
 
-        override fun onDoubleTap(e: MotionEvent): Boolean {
-            // 画笔模式下禁用双击缩放，避免绘制过程中的误触
-            if (mode == ImageCastMode.Pen) return true
-            if (userScale > 1.01f) {
-                userScale = 1f
-                translateX = 0f
-                translateY = 0f
-            } else {
-                userScale = DOUBLE_TAP_SCALE
-                clampTranslation()
-            }
-            markAnnotationDirty()
-            notifyViewport(force = true)
-            invalidate()
-            return true
-        }
     }
 
     companion object {
         private const val MAX_SCALE = 8f
-        private const val DOUBLE_TAP_SCALE = 2.5f
-
         /** 宽高比 ≥ 1.2 视为横向课件（4:3 = 1.33，16:9 = 1.78），见 [fitPageForWidePages] */
         private const val FIT_PAGE_MIN_ASPECT = 1.2f
 

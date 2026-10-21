@@ -77,7 +77,8 @@ class CoursewarePdfRenderer(
     }
 
     private fun downloadBlocking(url: String, target: File, onProgress: ((Int) -> Unit)?) {
-        val part = File(target.parentFile, "${target.name}.part")
+        // A dismissed preview may still be downloading when the same file is reopened.
+        val part = File.createTempFile("${target.name}-", ".part", target.parentFile)
         try {
             val request = Request.Builder().url(url).build()
             client.newCall(request).execute().use { response ->
@@ -140,6 +141,11 @@ class CoursewarePdfRenderer(
 
         val pageCount: Int
             get() = renderer?.pageCount ?: 0
+
+        @Synchronized fun pageSize(pageIndex: Int): android.util.Size {
+            val target = renderer ?: throw IllegalStateException("课件已关闭")
+            return target.openPage(pageIndex).use { android.util.Size(it.width, it.height) }
+        }
 
         /**
          * 渲染指定页（0 基）为位图。

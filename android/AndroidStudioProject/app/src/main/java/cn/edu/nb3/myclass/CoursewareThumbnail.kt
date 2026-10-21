@@ -2,6 +2,7 @@ package cn.edu.nb3.myclass
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.util.LruCache
@@ -12,6 +13,8 @@ import okhttp3.Cache
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -24,7 +27,7 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
     private var loaded = false
     @Volatile private var call: Call? = null
     @Volatile private var generation = 0
-    private val key = "$url@$targetPixels:page=$pdfPage:video=$video"
+    private val key = "final-slide-v2:$url@$targetPixels:page=$pdfPage:video=$video"
     private var observedTree: ViewTreeObserver? = null
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener { loadIfVisible() }
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { loadIfVisible() }
@@ -53,7 +56,7 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
         }
     })
     init {
-        scaleType = if (allowZoom) ScaleType.MATRIX else ScaleType.CENTER_CROP
+        scaleType = if (allowZoom) ScaleType.MATRIX else ScaleType.FIT_CENTER
         setBackgroundColor(0xffeeeeee.toInt())
         setImageResource(android.R.drawable.ic_menu_gallery)
     }
@@ -71,12 +74,42 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
         if (isAttachedToWindow && isShown && !loading && !loaded && getLocalVisibleRect(Rect())) load()
     }
     private fun load() {
-        bitmaps.get(key)?.let { showBitmap(it); loaded = true; return }
+        bitmaps.get(key)?.let { showBitmap(it) }
         loading = true
         val version = generation
         val app = context.applicationContext
         executor.execute {
             if (version != generation) return@execute
+            val cached = bitmaps.get(key) ?: diskBitmap(app)
+            if (cached != null) {
+                bitmaps.put(key, cached)
+                post { if (version == generation && isAttachedToWindow) showBitmap(cached) }
+            }
+            val fresh = System.currentTimeMillis() - cacheFile(app).lastModified() < TimeUnit.MINUTES.toMillis(5)
+            if (cached != null && fresh) {
+                post { if (version == generation) { loading = false; loaded = true } }
+                return@execute
+            }
+            // Revalidate cheaply: unchanged files do not need another PDF/video download.
+            val remoteStamp = runCatching {
+                val request = http(app).newCall(Request.Builder().url(url).head()
+                    .cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build())
+                call = request
+                if (version != generation) request.cancel()
+                request.execute().use { response ->
+                    check(response.isSuccessful)
+                    response.header("ETag") ?: response.header("Last-Modified")?.let {
+                        "$it:${response.header("Content-Length")}"
+                    }
+                }
+            }.getOrNull()
+            val stampFile = File(cacheFile(app).path + ".stamp")
+            if (cached != null && remoteStamp != null &&
+                runCatching { stampFile.readText() }.getOrNull() == remoteStamp) {
+                cacheFile(app).setLastModified(System.currentTimeMillis())
+                post { if (version == generation) { loading = false; loaded = true } }
+                return@execute
+            }
             val bitmap = runCatching {
                 if (video) return@runCatching renderVideo(app, version)
                 val pdfFile = if (pdfPage != null) File(app.cacheDir, "courseware-thumbnail-pdfs").let { directory ->
@@ -84,11 +117,12 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
                     val digest = java.security.MessageDigest.getInstance("SHA-256").digest(url.toByteArray())
                     File(directory, digest.joinToString("") { "%02x".format(it) } + ".pdf")
                 } else null
-                if (pdfFile != null && pdfFile.length() > 0) {
-                    pdfFile.setLastModified(System.currentTimeMillis())
+                if (cached == null && pdfFile != null && pdfFile.length() > 0 &&
+                    System.currentTimeMillis() - pdfFile.lastModified() < TimeUnit.MINUTES.toMillis(5)) {
                     return@runCatching renderPdf(pdfFile)
                 }
-                val request = http(app).newCall(Request.Builder().url(url).build())
+                val request = http(app).newCall(Request.Builder().url(url)
+                    .cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build())
                 call = request
                 if (version != generation) { request.cancel(); return@runCatching null }
                 request.execute().use { response ->
@@ -112,7 +146,7 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
                         if (pdfFile != null) {
                             val rendered = renderPdf(temporary)
                             // Unique temporary files keep simultaneous preview downloads independent.
-                            if (!pdfFile.exists()) temporary.renameTo(pdfFile)
+                            temporary.renameTo(pdfFile)
                             var total = pdfFile.parentFile?.listFiles()?.sumOf { it.length() } ?: 0L
                             pdfFile.parentFile?.listFiles()?.sortedBy { it.lastModified() }?.forEach { cached ->
                                 if (total > MAX_PDF_BYTES && cached != pdfFile) {
@@ -126,15 +160,52 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
                     } finally { temporary.delete() }
                 }
             }.getOrNull()
-            if (bitmap != null) bitmaps.put(key, bitmap)
+            if (bitmap != null) {
+                bitmaps.put(key, bitmap)
+                saveDiskBitmap(app, bitmap)
+                if (remoteStamp != null) runCatching { stampFile.writeText(remoteStamp) }
+            }
             post {
                 if (version == generation && isAttachedToWindow) {
                     loading = false
                     loaded = true
                     if (bitmap != null) showBitmap(bitmap)
-                    else contentDescription = "$contentDescription（预览不可用）"
+                    else if (cached == null) contentDescription = "$contentDescription（预览不可用）"
                 }
             }
+        }
+    }
+
+    private fun cacheFile(app: Context): File {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(key.toByteArray())
+        val name = digest.joinToString("") { "%02x".format(it) }
+        return File(app.cacheDir, "courseware-thumbnail-bitmaps/$name.png")
+    }
+
+    private fun diskBitmap(app: Context): Bitmap? = runCatching {
+        cacheFile(app).takeIf { it.length() > 0 }?.let { BitmapFactory.decodeFile(it.absolutePath) }
+    }.getOrNull()
+
+    private fun saveDiskBitmap(app: Context, bitmap: Bitmap) {
+        runCatching {
+            val file = cacheFile(app)
+            file.parentFile?.mkdirs()
+            val temporary = File.createTempFile("thumb-", ".part", file.parentFile)
+            try {
+                temporary.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 90, it)) }
+                check(temporary.renameTo(file))
+            } finally { temporary.delete() }
+            var bytes = file.parentFile?.listFiles()?.sumOf { it.length() } ?: 0L
+            file.parentFile?.listFiles()?.filter { it.extension == "png" && it != file }
+                ?.sortedBy { it.lastModified() }?.forEach {
+                    if (bytes > 48L * 1024 * 1024) {
+                        val size = it.length()
+                        if (it.delete()) {
+                            bytes -= size
+                            File(it.path + ".stamp").delete()
+                        }
+                    }
+                }
         }
     }
     private fun showBitmap(bitmap: Bitmap) {
@@ -301,9 +372,27 @@ class CoursewareThumbnail(context: Context, private val url: String, private val
         return output.toByteArray()
     }
     private fun renderPdf(file: File): Bitmap {
+        // Saved progress is a physical animation state. Thumbnails show the last
+        // state of that original slide, just like the continuous document reader.
+        val version = generation
+        val endpoint = url.toHttpUrl().newBuilder()
+            .encodedPath(url.toHttpUrl().encodedPath + ".metadata").build()
+        val request = http(context.applicationContext).newCall(Request.Builder().url(endpoint)
+            .cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build())
+        call = request
+        request.timeout().timeout(8, TimeUnit.SECONDS)
+        if (version != generation) request.cancel()
+        val conversion = request.execute().use { response ->
+            check(response.isSuccessful) { "无法读取课件页码映射" }
+            JSONObject(response.body?.string().orEmpty()).optJSONObject("conversion")
+        }
         android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
             android.graphics.pdf.PdfRenderer(descriptor).use { renderer ->
-                renderer.openPage(((pdfPage ?: 1) - 1).coerceIn(0, renderer.pageCount - 1)).use { page ->
+                val physical = (pdfPage ?: 1).coerceIn(1, renderer.pageCount)
+                val mapping = CoursewarePages.parse(conversion, renderer.pageCount)
+                check(conversion?.has("statePages") != true || mapping != null) { "课件页码映射不完整" }
+                val finalIndex = mapping?.let { it.statePages.lastIndexOf(it.slide(physical)) } ?: (physical - 1)
+                renderer.openPage(finalIndex).use { page ->
                     val scale = targetPixels.toFloat() / maxOf(page.width, page.height).coerceAtLeast(1)
                     return Bitmap.createBitmap((page.width * scale).toInt().coerceAtLeast(1),
                         (page.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888).also { bitmap ->

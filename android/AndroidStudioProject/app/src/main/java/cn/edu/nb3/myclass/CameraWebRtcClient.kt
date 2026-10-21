@@ -21,6 +21,7 @@ import org.webrtc.IceCandidate
 import org.webrtc.IceCandidateErrorEvent
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RendererCommon
@@ -76,6 +77,37 @@ class CameraWebRtcClient(
     private var useFrontCamera = initialUseFrontCamera
     private var previewStarted = false
     private var audioEnabled = false
+    private val healthHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var lastEncodedFrames = -1L
+    private var lastVideoProgressAt = 0L
+    private val healthCheck = object : Runnable {
+        override fun run() {
+            val connection = peerConnection ?: return
+            connection.getStats { report ->
+                val frames = report.statsMap.values.filter {
+                    it.type == "outbound-rtp" && (it.members["kind"] == "video" || it.members["mediaType"] == "video")
+                }.mapNotNull { (it.members["framesEncoded"] as? Number)?.toLong() }.maxOrNull()
+                healthHandler.post {
+                    if (peerConnection !== connection || frames == null) return@post
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    val connected = connection.iceConnectionState() in listOf(
+                        PeerConnection.IceConnectionState.CONNECTED, PeerConnection.IceConnectionState.COMPLETED)
+                    if (!connected) {
+                        lastEncodedFrames = frames
+                        lastVideoProgressAt = 0L
+                    } else if (frames != lastEncodedFrames || lastVideoProgressAt == 0L) {
+                        lastEncodedFrames = frames
+                        lastVideoProgressAt = now
+                    } else if (now - lastVideoProgressAt >= 9000L) {
+                        lastVideoProgressAt = now
+                        Log.w(TAG, "Video encoder stalled; rebuilding media connection")
+                        onIceConnectionFailed()
+                    }
+                }
+            }
+            healthHandler.postDelayed(this, 3000L)
+        }
+    }
 
     init {
         initializeFactoryOnce(appContext)
@@ -167,7 +199,8 @@ class CameraWebRtcClient(
         if (captureMode == WebRtcCaptureMode.Screen) {
             screenShareCaptureSize()
         } else {
-            Size(BuildConfig.VIDEO_WIDTH, BuildConfig.VIDEO_HEIGHT)
+            // Keep portrait output within common hardware encoder limits, too.
+            Size(1280, 960)
         }
 
     private fun captureFps(): Int =
@@ -236,6 +269,11 @@ class CameraWebRtcClient(
         val connection = factory.createPeerConnection(config, peerObserver())
             ?: throw IllegalStateException("无法创建 WebRTC 连接")
         peerConnection = connection
+        lastEncodedFrames = -1L
+        lastVideoProgressAt = 0L
+        healthHandler.removeCallbacks(healthCheck)
+        // Screen capture may legitimately stop producing frames on a static screen.
+        if (captureMode == WebRtcCaptureMode.Camera) healthHandler.postDelayed(healthCheck, 3000L)
 
         Log.i(TAG, "startLive: adding local video track")
         // Android 端只负责推送本地摄像头，浏览器端只接收。
@@ -251,6 +289,14 @@ class CameraWebRtcClient(
                 localAudioSender = sender
             }
         }
+        if (captureMode == WebRtcCaptureMode.Camera) {
+            // VP8 has a software fallback in DefaultVideoEncoderFactory;
+            // H.264 often has none when a vendor encoder rejects portrait size.
+            val codecs = factory.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO).codecs
+            val preferred = codecs.sortedBy { if (it.name.equals("VP8", ignoreCase = true)) 0 else 1 }
+            connection.transceivers.filter { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO }
+                .forEach { it.setCodecPreferences(preferred) }
+        }
         resendStaticPresentationBurst()
 
         val constraints = MediaConstraints().apply {
@@ -261,8 +307,10 @@ class CameraWebRtcClient(
         Log.i(TAG, "startLive: creating offer")
         connection.createOffer(object : SimpleSdpObserver() {
             override fun onCreateSuccess(description: SessionDescription) {
+                if (peerConnection !== connection) return
                 connection.setLocalDescription(object : SimpleSdpObserver() {
                     override fun onSetSuccess() {
+                        if (peerConnection !== connection) return
                         sendOffer(description.description)
                         updateStatus("直播信令已发送")
                     }
@@ -438,6 +486,7 @@ class CameraWebRtcClient(
         val answer = SessionDescription(SessionDescription.Type.ANSWER, sdp)
         connection.setRemoteDescription(object : SimpleSdpObserver() {
             override fun onSetSuccess() {
+                if (peerConnection !== connection) return
                 remoteDescriptionSet = true
                 // answer 就绪后，补发此前因远端描述未就绪而缓存下来的 ICE 候选，
                 // 避免大屏返回 answer 前到达的候选被丢弃导致连接建立失败。
@@ -480,6 +529,7 @@ class CameraWebRtcClient(
     }
 
     fun stopLive() {
+        healthHandler.removeCallbacks(healthCheck)
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null

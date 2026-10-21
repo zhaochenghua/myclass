@@ -4,6 +4,20 @@ import org.json.JSONObject
 
 /** Wire format shared with the server journal and iOS; restoration never emits ink. */
 object FileAnnotations {
+    fun clearHistory(message: JSONObject): Map<Int, MutableList<List<AnnotationStroke>>> {
+        val result = linkedMapOf<Int, MutableList<List<AnnotationStroke>>>()
+        val cleared = message.optJSONObject("cleared") ?: return result
+        for (key in cleared.keys()) {
+            val page = key.toIntOrNull()?.takeIf { it > 0 } ?: continue
+            val entries = cleared.optJSONArray(key) ?: continue
+            result[page] = (0 until entries.length()).mapNotNull { index ->
+                val strokes = entries.optJSONArray(index) ?: return@mapNotNull null
+                snapshot(JSONObject().put("strokes", strokes))[page]
+            }.toMutableList()
+        }
+        return result
+    }
+
     fun points(json: JSONObject): List<AnnotationPoint> {
         val array = json.optJSONArray("points") ?: return emptyList()
         return (0 until array.length()).mapNotNull { index ->

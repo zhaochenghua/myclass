@@ -7,6 +7,11 @@ data class CoursewarePages(val slideCount: Int, val statePages: List<Int>) {
     fun slide(page: Int): Int = statePages.getOrNull(page - 1) ?: page
     fun firstState(slide: Int): Int = statePages.indexOf(slide) + 1
 
+    /** Zero-based PDF pages containing each slide's completed animation state. */
+    fun finalStateIndices(): List<Int> = statePages.indices.filter { index ->
+        index == statePages.lastIndex || statePages[index] != statePages[index + 1]
+    }
+
     companion object {
         fun parse(json: JSONObject?, pageCount: Int): CoursewarePages? {
             val array = json?.optJSONArray("statePages") ?: return null

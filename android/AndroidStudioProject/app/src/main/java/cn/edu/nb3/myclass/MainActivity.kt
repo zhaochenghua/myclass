@@ -90,6 +90,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private enum class Screen {
         Auth,
         Connect,
+        CoursewareManagement,
         Menu,
         Camera,
         ScreenShare,
@@ -183,6 +184,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var lastSentDeviceOrientation: DeviceOrientationPayload? = null
     private var activeRoomCode: String? = null
     private var roomJoined = false
+        set(value) {
+            if (field == value) return
+            field = value
+            applyOrientationPreference()
+        }
     private var cameraPausedForBackground = false
     private var restartLiveOnResume = false
     private var resumeCameraAfterJoin = false
@@ -208,6 +214,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var viewerRectUrl = ""
     /** 刷新课件列表（如删除后）时保留用户当前的滚动位置。 */
     private var coursewareListScrollY = 0
+    private var displayedImportRevision = -1L
+    private var importListRefreshSerial = 0
+    private var managementPreview: CoursewarePreviewDialog? = null
     /** 本次投屏课件的本地原文件：图片投屏时用它预览，避免从服务器重复下载 */
     private var coursewareLocalUri: Uri? = null
     private var castImageBitmap: Bitmap? = null
@@ -245,6 +254,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private val coursewarePdfBitmaps = LinkedHashMap<Int, Bitmap>()
     /** 按页保存的笔迹：翻页不丢，"撤销 / 清空"只作用于当前页 */
     private val coursewarePdfStrokes = LinkedHashMap<Int, List<AnnotationStroke>>()
+    private val coursewareClearHistory = LinkedHashMap<Int, MutableList<List<AnnotationStroke>>>()
     private var annotationsFile = ""
     private var renderedAnnotationsFile = ""
     private var renderedAnnotationsPage = 0
@@ -353,6 +363,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }.start()
     }
     private var coursewareSubScreen: CoursewareSubScreen = CoursewareSubScreen.None
+    private var coursewareReturnList: CoursewareSubScreen? = null
     private var clipboardCheckRunning = false
     private var clipboardManualRequested = false
     private var clipboardDialog: AlertDialog? = null
@@ -449,6 +460,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 if (campusCheckRunning) "请稍候，正在检测校园投屏服务…" else campusNetworkMessage(), campusCheckRunning
             ) else showAuthScreen()
             Screen.Connect -> showConnectScreen()
+            Screen.CoursewareManagement -> showCoursewareManagement()
             Screen.Menu -> showMenuScreen()
             Screen.Camera -> {
                 // 不重建整个相机页面（会中断预览），仅更新按钮布局和悬浮按钮位置
@@ -493,6 +505,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         appInForeground = true
         window.decorView.post { checkClipboardLink() }
         ImportUploadService.observe(this)
+        refreshListAfterImport()
         triggerPendingUploadIfReady()
         // 从「允许安装未知应用」设置页返回：已授权就复用已下载的安装包继续安装，不重新下载
         updateManager?.onResumeFromSettings()
@@ -598,6 +611,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     override fun onDestroy() {
+        managementPreview?.dismiss()
         embeddedVideos.destroy()
         ImportUploadService.detach(this)
         clipboardDialog?.dismiss()
@@ -636,6 +650,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
+            if (quickPagePopup?.isShowing == true) {
+                quickPagePopup?.dismiss()
+                return
+            }
             when (currentScreen) {
                 Screen.Auth -> {
                     isEnabled = false
@@ -665,6 +683,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
                 }
+                Screen.CoursewareManagement -> showConnectScreen()
             }
         }
     }
@@ -687,6 +706,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun clearAuth() {
+        managementPreview?.dismiss()
         clipboardDialog?.dismiss()
         authGeneration += 1
         authToken = null
@@ -707,7 +727,50 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (isDestroyed || !appInForeground) return
         if (currentScreen == Screen.Connect || currentScreen == Screen.Menu) updateStatus(message)
         if (finished) toast(message)
+        if (finished && rejectedToken == null) refreshListAfterImport()
         if (rejectedToken != null) onAuthenticationExpired(rejectedToken)
+    }
+
+    private fun importRevision(): Long = getSharedPreferences("myclass_import_updates", MODE_PRIVATE)
+        .getLong(authUsername.orEmpty(), 0L)
+
+    private fun refreshListAfterImport() {
+        val management = currentScreen == Screen.CoursewareManagement
+        val media = currentScreen == Screen.Courseware && coursewareSubScreen == CoursewareSubScreen.ServerMediaList
+        val server = currentScreen == Screen.Courseware && coursewareSubScreen == CoursewareSubScreen.ServerList
+        val revision = importRevision()
+        if ((!management && !media && !server) || revision == displayedImportRevision || authToken == null) return
+        val screen = currentScreen
+        val subScreen = coursewareSubScreen
+        val generation = authGeneration
+        val serial = ++importListRefreshSerial
+        val content = findViewById<ViewGroup>(android.R.id.content)
+        val originalRoot = content.getChildAt(0)
+        fun findScroll(view: View): ScrollView? {
+            if (view is ScrollView) return view
+            if (view is ViewGroup) for (i in 0 until view.childCount) {
+                findScroll(view.getChildAt(i))?.let { return it }
+            }
+            return null
+        }
+        originalRoot?.let { findScroll(it)?.let { scroll -> coursewareListScrollY = scroll.scrollY } }
+        Thread {
+            runCatching { fetchServerCoursewareListBlocking() }.onSuccess { items ->
+                runOnUiThread {
+                    if (isDestroyed || serial != importListRefreshSerial || generation != authGeneration ||
+                        currentScreen != screen || coursewareSubScreen != subScreen || content.getChildAt(0) !== originalRoot) return@runOnUiThread
+                    when {
+                        management -> showCoursewareManagementList(items)
+                        media -> showServerMediaList(items.filter {
+                            it.linkUrl.isNotBlank() || mediaKindOf(it.url) in listOf(CastMediaKind.Image, CastMediaKind.Video)
+                        })
+                        else -> showServerCoursewareList(items)
+                    }
+                    displayedImportRevision = revision
+                    refreshListAfterImport()
+                }
+            }
+        }.start()
     }
 
     private fun addAuthHeader(builder: Request.Builder) {
@@ -1231,7 +1294,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showCoursewareManagementUploading(fileName: String) {
-        currentScreen = Screen.Connect
+        currentScreen = Screen.CoursewareManagement
         val root = baseColumn().apply {
             setPadding(dp(28), dp(32), dp(28), dp(32))
         }
@@ -1249,7 +1312,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun showCoursewareManagement() {
-        currentScreen = Screen.Connect  // 停留在 Connect 状态，避免 back 混乱
+        currentScreen = Screen.CoursewareManagement
+        val generation = authGeneration
         val root = baseColumn().apply {
             setPadding(dp(28), dp(32), dp(28), dp(32))
         }
@@ -1275,107 +1339,21 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             runCatching {
                 fetchServerCoursewareListBlocking()
             }.onSuccess { items ->
-                runOnUiThread { showCoursewareManagementList(items) }
+                runOnUiThread {
+                    if (!isDestroyed && authGeneration == generation && currentScreen == Screen.CoursewareManagement) {
+                        showCoursewareManagementList(items)
+                    }
+                }
             }.onFailure { error ->
                 runOnUiThread {
-                    statusView.text = "加载失败：${error.message}"
+                    if (!isDestroyed && authGeneration == generation) statusView.text = "加载失败：${error.message}"
                 }
             }
         }.start()
     }
 
     private fun showCoursewareManagementList(items: List<StoredCoursewareItem>) {
-        val root = baseColumn().apply {
-            setPadding(dp(28), dp(32), dp(28), dp(32))
-        }
-        root.addView(titleText("课件管理", 22f))
-
-        if (items.isEmpty()) {
-            root.addView(bodyText("暂无课件").apply {
-                gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(24) }
-            })
-        } else {
-            val listColumn = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    0,
-                    1f
-                )
-            }
-            items.forEachIndexed { index, item ->
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply {
-                        if (index > 0) topMargin = dp(4)
-                    }
-                }
-                addCoursewareThumbnail(row, item)
-                row.addView(coursewareProgressButton(item).apply {
-                    maxLines = 2
-                    setSingleLine(false)
-                    ellipsize = TextUtils.TruncateAt.END
-                    textSize = 14f
-                    layoutParams = LinearLayout.LayoutParams(
-                        0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        1f
-                    ).apply { marginEnd = dp(4) }
-                    setOnClickListener { openStoredCourseware(item, items) }
-                    setOnLongClickListener {
-                        showRenameCoursewareDialog(item)
-                        true
-                    }
-                })
-                row.addView(deleteButton("删除").apply {
-                    setOnClickListener {
-                        rememberCoursewareListScroll(row)
-                        confirmDeleteManagementCourseware(item)
-                    }
-                })
-                listColumn.addView(row)
-            }
-            val listScroll = ScrollView(this).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    0,
-                    1f
-                ).apply { topMargin = dp(12) }
-                addView(listColumn)
-            }
-            listScroll.post { listScroll.scrollTo(0, coursewareListScrollY) }
-            root.addView(listScroll)
-        }
-
-        if (ExternalFileReceiver.pendingCount() > 0) {
-            root.addView(bodyText(ImportUploadService.lastStatus.ifBlank { "有文件等待上传" }))
-            root.addView(secondaryButton("重试待上传文件").apply { setOnClickListener { triggerPendingUploadIfReady() } })
-        }
-        root.addView(primaryButton("上传课件").apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(50)
-            ).apply { topMargin = dp(16) }
-            setOnClickListener {
-                uploadFromManagement()
-            }
-        })
-        root.addView(secondaryButton("返回").apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(50)
-            ).apply { topMargin = dp(8) }
-            setOnClickListener { showConnectScreen() }
-        })
-        showScreenView(root)
+        showServerCoursewareList(items, management = true)
     }
 
     private val managementPickerLauncher = registerForActivityResult(
@@ -1383,6 +1361,23 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     ) { uri: Uri? ->
         if (uri == null) return@registerForActivityResult
         managementUploadProgress(uri)
+    }
+
+    private fun previewManagementCourseware(item: StoredCoursewareItem) {
+        if (item.linkUrl.isNotBlank()) {
+            val uri = Uri.parse(item.linkUrl)
+            if (uri.scheme !in listOf("http", "https")) { toast("无法预览该链接"); return }
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                .onFailure { toast("没有可打开此链接的浏览器") }
+            return
+        }
+        val kind = mediaKindOf(item.url)
+        if (kind == CastMediaKind.None) { toast("暂不支持预览此类课件"); return }
+        val absolute = absoluteCoursewareUrl(item.url) ?: return
+        managementPreview?.dismiss()
+        managementPreview = CoursewarePreviewDialog(this, coursewareHttpClient, item.title, absolute,
+            kind == CastMediaKind.Pdf,
+            kind == CastMediaKind.Video, onDismiss = { managementPreview = null }).also { it.show() }
     }
 
     private fun uploadFromManagement() {
@@ -1452,7 +1447,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun applyOrientationPreference() {
-        requestedOrientation = when (prefs.getString("screen_orientation", "auto")) {
+        requestedOrientation = if (!roomJoined) ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        else when (prefs.getString("screen_orientation", "auto")) {
             "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
@@ -1474,8 +1470,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      */
     private fun applyImmersiveFullscreen(enabled: Boolean) {
         if (!enabled && !immersiveFullscreen) return
+        val changed = immersiveFullscreen != enabled
         immersiveFullscreen = enabled
         val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (changed) androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, !enabled)
         if (enabled) {
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -1490,6 +1488,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      * 只有课件播放页全屏，其余页面（连接码、菜单、课件列表等）保持系统栏。
      */
     private fun showScreenView(view: View) {
+        quickPagePopup?.dismiss()
         // 离开拍照页（内容视图不再是它）时释放相机，避免相机被一直占用
         val captureRoot = captureUiRoot
         if (captureRoot != null && captureRoot !== view) releaseCaptureCamera()
@@ -2421,7 +2420,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         showScreenView(root)
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val bars = insets.getInsets(if (immersiveFullscreen) WindowInsetsCompat.Type.displayCutout() else WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
@@ -2544,6 +2543,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             return
         }
         if (!captureSessionActive) {
+            coursewareReturnList = null
             mediaQueue.clear()
             mediaQueueIndex = -1
             captureSessionActive = true
@@ -2666,6 +2666,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     /** 用本次选择的多个本机文件建立投屏队列，并立即投屏第一个 */
     private fun startLocalMediaQueue(uris: List<Uri>) {
+        coursewareReturnList = null
         mediaQueue.clear()
         mediaQueueIndex = -1
         uris.forEach { uri ->
@@ -3126,7 +3127,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) window.decorView.post { checkClipboardLink() }
+        if (hasFocus) window.decorView.post {
+            applyImmersiveFullscreen(currentScreen == Screen.Courseware &&
+                coursewareSubScreen == CoursewareSubScreen.Playback)
+            checkClipboardLink()
+        }
     }
 
     private fun handleClipboardLink() = checkClipboardLink(manual = true)
@@ -3285,12 +3290,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    private fun showServerCoursewareList(items: List<StoredCoursewareItem>) {
-        currentScreen = Screen.Courseware
-        coursewareSubScreen = CoursewareSubScreen.ServerList
+    private fun showServerCoursewareList(items: List<StoredCoursewareItem>, management: Boolean = false) {
+        currentScreen = if (management) Screen.CoursewareManagement else Screen.Courseware
+        if (!management) coursewareSubScreen = CoursewareSubScreen.ServerList
+        val screenTitle = if (management) "课件管理" else "服务器课件"
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        val uploadBtn = primaryButton("本地上传").apply {
+        val uploadBtn = primaryButton(if (management) "上传课件" else "本地上传").apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)
@@ -3298,7 +3304,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 topMargin = dp(16)
             }
             setOnClickListener {
-                launchCoursewarePicker()
+                if (management) uploadFromManagement() else launchCoursewarePicker()
             }
         }
         val backBtn = secondaryButton("返回").apply {
@@ -3309,7 +3315,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 topMargin = dp(12)
             }
             setOnClickListener {
-                showCoursewareSourceScreen()
+                if (management) showConnectScreen() else showCoursewareSourceScreen()
             }
         }
 
@@ -3323,10 +3329,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     marginEnd = dp(20)
                 }
             }
-            leftPanel.addView(titleText("服务器课件", 22f))
+            leftPanel.addView(titleText(screenTitle, 22f))
 
             if (items.isEmpty()) {
-                leftPanel.addView(bodyText("服务器还没有暂存课件").apply {
+                leftPanel.addView(bodyText(if (management) "暂无课件" else "服务器还没有暂存课件").apply {
                     gravity = Gravity.CENTER
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -3369,7 +3375,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             ViewGroup.LayoutParams.WRAP_CONTENT,
                             1f
                         ).apply { marginEnd = dp(4) }
-                        setOnClickListener { openStoredCourseware(item, items) }
+                        setOnClickListener {
+                            rememberCoursewareListScroll(row)
+                            if (management && !roomJoined) previewManagementCourseware(item)
+                            else openStoredCourseware(item, items)
+                        }
                         setOnLongClickListener {
                             showRenameCoursewareDialog(item)
                             true
@@ -3378,7 +3388,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     row.addView(deleteButton("删除").apply {
                         setOnClickListener {
                             rememberCoursewareListScroll(row)
-                            confirmDeleteServerCourseware(item)
+                            if (management) confirmDeleteManagementCourseware(item)
+                            else confirmDeleteServerCourseware(item)
                         }
                     })
                     listColumn.addView(row)
@@ -3402,6 +3413,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             compactLandscapeAction(uploadBtn, dp(58), dp(16))
             compactLandscapeAction(backBtn, dp(58), dp(12))
+            if (management) addPendingCoursewareUploadActions(rightPanel)
             rightPanel.addView(uploadBtn)
             rightPanel.addView(backBtn)
             rightPanel.addView(landscapeVersionLabel())
@@ -3414,10 +3426,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             val root = baseColumn().apply {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
             }
-            root.addView(titleText("服务器课件", 28f))
+            root.addView(titleText(screenTitle, 28f))
 
             if (items.isEmpty()) {
-                root.addView(bodyText("服务器还没有暂存课件").apply {
+                root.addView(bodyText(if (management) "暂无课件" else "服务器还没有暂存课件").apply {
                     gravity = Gravity.CENTER
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -3453,7 +3465,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                             ViewGroup.LayoutParams.WRAP_CONTENT,
                             1f
                         ).apply { marginEnd = dp(4) }
-                        setOnClickListener { openStoredCourseware(item, items) }
+                        setOnClickListener {
+                            rememberCoursewareListScroll(row)
+                            if (management && !roomJoined) previewManagementCourseware(item)
+                            else openStoredCourseware(item, items)
+                        }
                         setOnLongClickListener {
                             showRenameCoursewareDialog(item)
                             true
@@ -3462,7 +3478,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     row.addView(deleteButton("删除").apply {
                         setOnClickListener {
                             rememberCoursewareListScroll(row)
-                            confirmDeleteServerCourseware(item)
+                            if (management) confirmDeleteManagementCourseware(item)
+                            else confirmDeleteServerCourseware(item)
                         }
                     })
                     listColumn.addView(row)
@@ -3478,6 +3495,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 })
             }
 
+            if (management) addPendingCoursewareUploadActions(root)
             root.addView(uploadBtn)
             root.addView(backBtn)
             root.addView(versionLabel())
@@ -3485,6 +3503,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    private fun addPendingCoursewareUploadActions(panel: LinearLayout) {
+        if (ExternalFileReceiver.pendingCount() == 0) return
+        panel.addView(bodyText(ImportUploadService.lastStatus.ifBlank { "有文件等待上传" }))
+        panel.addView(secondaryButton("重试待上传文件").apply {
+            setOnClickListener { triggerPendingUploadIfReady() }
+        })
+    }
     private fun fetchServerCoursewareListBlocking(): List<StoredCoursewareItem> {
         val request = Request.Builder()
             .url("${serverBaseUrl().trimEnd('/')}/api/courseware")
@@ -3550,7 +3575,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }.onSuccess {
                 runOnUiThread {
                     toast("课件已重命名")
-                    loadServerCoursewareList()
+                    if (currentScreen == Screen.CoursewareManagement) showCoursewareManagement()
+                    else loadServerCoursewareList()
                 }
             }.onFailure { error ->
                 runOnUiThread {
@@ -3621,13 +3647,43 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val isPdf = item.linkUrl.isBlank() && mediaKindOf(item.url) == CastMediaKind.Pdf
         val remembered = rememberedCoursewarePage(item)
         if (isPdf && remembered > 1) {
-            AlertDialog.Builder(this)
-                .setTitle("继续播放课件")
-                .setMessage("上次播放到第 ${remembered} 页，从哪里开始？")
-                .setNegativeButton("从第一页开始") { _, _ -> openStoredCoursewareNow(item, sourceItems, 1) }
-                .setPositiveButton("从第 ${remembered} 页继续") { _, _ -> openStoredCoursewareNow(item, sourceItems, remembered) }
-                .setOnCancelListener { openStoredCoursewareNow(item, sourceItems, remembered) }
-                .show()
+            val generation = authGeneration
+            val screen = currentScreen
+            val loading = AlertDialog.Builder(this).setMessage("正在读取课件页码…").show()
+            Thread {
+                val result = runCatching {
+                    val url = requireNotNull(absoluteCoursewareUrl(item.url))
+                    val uri = Uri.parse(url).buildUpon()
+                        .path(Uri.parse(url).path.orEmpty() + ".metadata").build().toString()
+                    coursewareHttpClient.newBuilder()
+                        .callTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
+                        .newCall(Request.Builder().url(uri).build()).execute().use { response ->
+                            check(response.isSuccessful)
+                            val conversion = JSONObject(response.body?.string().orEmpty()).optJSONObject("conversion")
+                            if (conversion?.has("statePages") == true) {
+                                val pages = requireNotNull(CoursewarePages.parse(conversion,
+                                    conversion.optJSONArray("statePages")?.length() ?: 0))
+                                require(remembered in 1..pages.statePages.size)
+                                pages.slide(remembered)
+                            } else remembered
+                        }
+                }
+                runOnUiThread {
+                    if (isDestroyed || generation != authGeneration || currentScreen != screen || !loading.isShowing) {
+                        loading.dismiss()
+                        return@runOnUiThread
+                    }
+                    loading.dismiss()
+                    val slide = result.getOrNull()
+                    AlertDialog.Builder(this)
+                        .setTitle("继续播放课件")
+                        .setMessage(if (slide != null) "上次播放到第${slide}页，从哪里开始？" else "暂时无法读取原始页码，是否从上次位置继续？")
+                        .setNegativeButton("从第1页开始") { _, _ -> openStoredCoursewareNow(item, sourceItems, 1) }
+                        .setPositiveButton(if (slide != null) "从第${slide}页继续" else "从上次位置继续") { _, _ -> openStoredCoursewareNow(item, sourceItems, remembered) }
+                        .setOnCancelListener { openStoredCoursewareNow(item, sourceItems, remembered) }
+                        .show()
+                }
+            }.start()
             return
         }
         openStoredCoursewareNow(item, sourceItems, 1)
@@ -3639,6 +3695,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (!roomJoined) {
             toast("文件已在服务器课件库中；投屏时请先连接课堂")
             return
+        }
+        coursewareReturnList = if (coursewareSubScreen == CoursewareSubScreen.ServerMediaList) {
+            CoursewareSubScreen.ServerMediaList
+        } else {
+            CoursewareSubScreen.ServerList
         }
         cancelCoursewareFastSeek()
         mediaQueue.clear()
@@ -3713,19 +3774,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun addCoursewareThumbnail(row: LinearLayout, item: StoredCoursewareItem) {
         val kind = mediaKindOf(item.url)
         val page = if (kind == CastMediaKind.Pdf) item.lastPage.coerceAtLeast(1) else null
-        val previewTitle = if (page != null) "${item.title} · 第 $page 页" else item.title
+        val previewTitle = item.title
         val url = absoluteCoursewareUrl(item.url)
         if (url != null && item.linkUrl.isBlank() && kind in listOf(CastMediaKind.Image, CastMediaKind.Pdf, CastMediaKind.Video)) {
-            row.addView(CoursewareThumbnail(this, url, dp(80), page, kind == CastMediaKind.Video).apply {
+            row.addView(CoursewareThumbnail(this, url, dp(240), page, kind == CastMediaKind.Video).apply {
                 contentDescription = "预览：$previewTitle"
-                layoutParams = LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(8) }
+                layoutParams = LinearLayout.LayoutParams(dp(96), dp(54)).apply { marginEnd = dp(8) }
                 setOnClickListener {
-                    val preview = CoursewareThumbnail(this@MainActivity, url, dp(360), page, kind == CastMediaKind.Video, true).apply {
-                        contentDescription = previewTitle
-                        minimumHeight = dp(300)
-                    }
-                    AlertDialog.Builder(this@MainActivity).setTitle(previewTitle).setView(preview)
-                        .setPositiveButton("关闭", null).show()
+                    previewManagementCourseware(item)
                 }
             })
         }
@@ -3734,6 +3790,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun coursewareProgressButton(item: StoredCoursewareItem): MaterialButton =
         CoursewareProgressButton(this).apply {
             isAllCaps = false
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            textAlignment = View.TEXT_ALIGNMENT_GRAVITY
             text = coursewareButtonText(item)
             textSize = 14f
             playbackProgress = rememberedCoursewareProgress(item)
@@ -3766,6 +3824,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun uploadCourseware(uri: Uri) {
+        coursewareReturnList = null
         if (!roomJoined || activeRoomCode == null) {
             toast("请先连接教室端")
             return
@@ -4112,7 +4171,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         return safe.ifBlank { "cw${coursewareUrl.hashCode().toString().replace('-', 'n')}" }
     }
 
-    /** 图片投屏界面：手机端用经典图片控件查看（双指缩放/拖动/双击），并把视口同步到大屏 */
+    /** 图片投屏界面：手机端用经典图片控件查看（双指缩放/拖动），并把视口同步到大屏 */
     private fun showImageCastScreen(title: String) {
         currentScreen = Screen.Courseware
         coursewareSubScreen = CoursewareSubScreen.Playback
@@ -4174,14 +4233,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 dp(44)
             )
         }
-        val modeHint = TextView(this).apply {
-            textSize = 12f
-            setSingleLine(true)
-            ellipsize = TextUtils.TruncateAt.END
-            setTextColor(Color.parseColor("#8899AA"))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        modeBar.addView(modeHint)
         val modeButton = compactButton(secondaryButton("画笔"), 13f).apply {
             layoutParams = LinearLayout.LayoutParams(dp(96), dp(40))
         }
@@ -4342,10 +4393,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         if (isLandscape) {
-            penBar.addView(buildActionRow(listOf(eraserButton, undoButton, clearButton)))
+            penBar.addView(buildActionRow(listOf(eraserButton, undoButton)))
             penBar.addView(buildActionRow(listOf(penBackButton, penEndButton)))
         } else {
-            penBar.addView(buildActionRow(listOf(undoButton, clearButton, penBackButton, penEndButton)))
+            penBar.addView(buildActionRow(listOf(undoButton, penBackButton, penEndButton)))
+        }
+
+        modeBar.addView(clearButton)
+        for (index in 0 until modeBar.childCount) {
+            modeBar.getChildAt(index).layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                if (index > 0) marginStart = dp(4)
+            }
         }
 
         refreshAnnotationBar = {
@@ -4359,21 +4417,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 if (zoomable.penEraser) Color.argb(0.22f, 1f, 1f, 1f) else Color.TRANSPARENT
             )
             val hasStrokes = zoomable.annotationCount > 0
-            undoButton.isEnabled = hasStrokes
+            undoButton.isEnabled = zoomable.canUndoAnnotation
             clearButton.isEnabled = hasStrokes
-            undoButton.alpha = if (hasStrokes) 1f else 0.4f
+            undoButton.alpha = if (zoomable.canUndoAnnotation) 1f else 0.4f
             clearButton.alpha = if (hasStrokes) 1f else 0.4f
         }
 
         applyImageCastMode = {
             val penMode = imageCastPenMode
             zoomable.mode = if (penMode) ImageCastMode.Pen else ImageCastMode.Gesture
-            modeHint.text = if (penMode) {
-                "画笔模式：单指绘制，双指缩放拖动"
-            } else {
-                "手势模式：双指缩放 / 拖动，双击放大"
-            }
-            modeButton.text = if (penMode) "手势" else "画笔"
+            updateCastModeButton(modeButton, penMode)
             modeButton.backgroundTintList = ColorStateList.valueOf(
                 if (penMode) Color.parseColor("#4DA6FF") else Color.TRANSPARENT
             )
@@ -4469,6 +4522,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             addToActionRow(modeButton, dp(96), end = 6)
             addToActionRow(rollButton, dp(80), end = 6)
+            addToActionRow(clearButton, dp(76), end = 6)
             addToActionRow(rotateButton, 0, weight = 1f, end = 6)
             addToActionRow(captureButton, 0, weight = 1f, end = 6)
             addToActionRow(gestureBackButton, 0, weight = 1f, end = 6)
@@ -4489,7 +4543,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 takeOver(it)
                 penRow.addView(it)
             }
-            listOf(eraserButton, undoButton, clearButton).forEach { button ->
+            listOf(eraserButton, undoButton).forEach { button ->
                 takeOver(button)
                 button.layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
                     marginStart = dp(8)
@@ -4498,7 +4552,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             penToolsRow = penRow
 
-            bottomBar.addView(actionRow)
+            bottomBar.addView(AdaptiveToolbar(this, actionRow))
             bottomBar.addView(penRow)
             // 多选投屏时提供“上一个 / 媒体列表 / 下一个”，切换无需重新选择文件
             if (mediaQueue.size > 1) {
@@ -4521,7 +4575,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         // Android 15+ 默认边到边绘制，按系统栏留出安全边距，
         // 否则横屏时右侧竖栏顶部的按钮会被状态栏挡住
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val bars = insets.getInsets(if (immersiveFullscreen) WindowInsetsCompat.Type.displayCutout() else WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
@@ -4652,14 +4706,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setPadding(dp(12), dp(2), dp(12), dp(2))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
         }
-        val modeHint = TextView(this).apply {
-            textSize = 12f
-            setSingleLine(true)
-            ellipsize = TextUtils.TruncateAt.END
-            setTextColor(Color.parseColor("#8899AA"))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        modeBar.addView(modeHint)
         val modeButton = compactButton(secondaryButton("画笔"), 13f).apply {
             layoutParams = LinearLayout.LayoutParams(dp(96), dp(40))
         }
@@ -4710,26 +4756,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 dp(if (isLandscape) 48 else 56)
             )
         }
-        val pageInput = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            imeOptions = EditorInfo.IME_ACTION_GO
-            hint = "页码"
-            gravity = Gravity.CENTER
-            textSize = 16f
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
-            setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_muted))
-            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_surface))
-            setPadding(dp(10), dp(4), dp(10), dp(4))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                marginEnd = dp(8)
-            }
+        val jumpButton = compactButton(primaryButton("快速翻页"), 14f).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
-        val jumpButton = primaryButton("跳转").apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                marginStart = dp(8)
-            }
-        }
-        jumpRow.addView(pageInput)
         jumpRow.addView(jumpButton)
 
         // 手势模式工具栏（课件页方向固定，不提供旋转）
@@ -4854,10 +4883,17 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             // 横屏右侧面板较窄：拆成两行，避免"返回主菜单"这类长文字被截断
-            penBar.addView(buildActionRow(listOf(eraserButton, undoButton, clearButton)))
+            penBar.addView(buildActionRow(listOf(eraserButton, undoButton)))
             penBar.addView(buildActionRow(listOf(penBackButton, penEndButton)))
         } else {
-            penBar.addView(buildActionRow(listOf(undoButton, clearButton, penBackButton, penEndButton)))
+            penBar.addView(buildActionRow(listOf(undoButton, penBackButton, penEndButton)))
+        }
+
+        modeBar.addView(clearButton)
+        for (index in 0 until modeBar.childCount) {
+            modeBar.getChildAt(index).layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                if (index > 0) marginStart = dp(4)
+            }
         }
 
         refreshAnnotationBar = {
@@ -4871,21 +4907,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 if (zoomable.penEraser) Color.argb(0.22f, 1f, 1f, 1f) else Color.TRANSPARENT
             )
             val hasStrokes = zoomable.annotationCount > 0
-            undoButton.isEnabled = hasStrokes
+            undoButton.isEnabled = zoomable.canUndoAnnotation
             clearButton.isEnabled = hasStrokes
-            undoButton.alpha = if (hasStrokes) 1f else 0.4f
+            undoButton.alpha = if (zoomable.canUndoAnnotation) 1f else 0.4f
             clearButton.alpha = if (hasStrokes) 1f else 0.4f
         }
 
         applyCastMode = {
             val penMode = imageCastPenMode
             zoomable.mode = if (penMode) ImageCastMode.Pen else ImageCastMode.Gesture
-            modeHint.text = if (penMode) {
-                "画笔模式：单指绘制，双指点击翻页 / 缩放拖动"
-            } else {
-                "手势模式：上下滑动调整大屏区域，双指缩放，点击左右两侧翻页"
-            }
-            modeButton.text = if (penMode) "手势" else "画笔"
+            updateCastModeButton(modeButton, penMode)
             modeButton.backgroundTintList = ColorStateList.valueOf(
                 if (penMode) Color.parseColor("#4DA6FF") else Color.TRANSPARENT
             )
@@ -4919,7 +4950,6 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             embeddedVideos.refresh()
             val total = coursewarePdf?.pageCount?.takeIf { it > 0 } ?: coursewarePageCount
             pageLabel.text = "第 ${displayedCoursewarePage()} / ${displayedCoursewareCount()} 页"
-            pageInput.hint = "页码 1-${displayedCoursewareCount()}"
             val canPrev = coursewarePage > 1
             val canNext = coursewarePage < total
             prevButton.isEnabled = canPrev
@@ -5048,33 +5078,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }.start()
         }
 
-        /** 读取输入框里的页码并跳转：本地换页 + 同步大屏 */
-        fun jumpToInputPage() {
-            val total = displayedCoursewareCount()
-            val target = pageInput.text.toString().trim().toIntOrNull()
-            if (target == null || target < 1 || target > total) {
-                toast("请输入 1 - $total 之间的页码")
-                return
-            }
-            pageInput.text?.clear()
-            val physical = coursewareStateForSlide(target)
-            if (physical == 0) { toast("该页是隐藏幻灯片，无法播放"); return }
-            showPage(physical, notifyRemote = true)
-        }
-
         prevButton.setOnClickListener { pagingOrStep(-1) }
         nextButton.setOnClickListener { pagingOrStep(1) }
         // 点动翻页：点击屏幕左半边向前翻、右半边向后翻，与「上一屏 / 下一屏」走同一条路径
         // （长页课件仍是先逐屏滚动、滚到边界才真正翻页，放大状态下直接翻页）
         zoomable.onPageTap = { direction -> pagingOrStep(direction) }
-        jumpButton.setOnClickListener { jumpToInputPage() }
-        pageInput.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
-                jumpToInputPage()
-                true
-            } else {
-                false
-            }
+        jumpButton.setOnClickListener {
+            showQuickPagePicker(jumpButton) { physical -> showPage(physical, notifyRemote = true) }
         }
 
         zoomable.penColorHex = imageCastPenColor
@@ -5148,11 +5158,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             addToPageRow(modeButton, dp(96), end = 6)
             addToPageRow(rollButton, dp(80), end = 6)
-            addToPageRow(embeddedButton, dp(104), end = 6)
+            addToPageRow(clearButton, dp(76), end = 6)
+            addToPageRow(embeddedButton, dp(76), end = 6)
             addToPageRow(prevButton, 0, weight = 1f, end = 6)
             addToPageRow(pageLabel, dp(88))
             addToPageRow(nextButton, 0, weight = 1f, start = 6)
-            addToPageRow(pageInput, 0, weight = 1f, start = 6, end = 8)
             addToPageRow(jumpButton, 0, weight = 1f, end = 8)
             addToPageRow(gestureBackButton, 0, weight = 1f, end = 6)
             addToPageRow(gestureEndButton, 0, weight = 1f, start = 6)
@@ -5172,7 +5182,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 takeOver(it)
                 penRow.addView(it)
             }
-            listOf(eraserButton, undoButton, clearButton).forEach { button ->
+            listOf(eraserButton, undoButton).forEach { button ->
                 takeOver(button)
                 button.layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
                     marginStart = dp(8)
@@ -5181,7 +5191,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
             penToolsRow = penRow
 
-            bottomBar.addView(pageRow)
+            bottomBar.addView(AdaptiveToolbar(this, pageRow))
             bottomBar.addView(penRow)
             root.addView(imageHost)
             root.addView(bottomBar)
@@ -5198,7 +5208,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         // Android 15+（targetSdk 35）默认边到边绘制，内容会延伸到系统栏下方。
         // 这里按系统栏给根布局留出安全边距，否则横屏时右侧竖栏顶部的按钮会被状态栏压住。
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val bars = insets.getInsets(if (immersiveFullscreen) WindowInsetsCompat.Type.displayCutout() else WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
@@ -5757,6 +5767,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         imageCastPenEraser = false
         releaseCoursewarePdf()
         coursewarePdfStrokes.clear()
+        coursewareClearHistory.clear()
         annotationsFile = ""
         renderedAnnotationsFile = ""
         renderedAnnotationsPage = 0
@@ -5819,6 +5830,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             val isVolumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
                 event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
             if (isVolumeKey) {
+                if (immersiveFullscreen) applyImmersiveFullscreen(true)
                 if (event.action == KeyEvent.ACTION_DOWN) {
                     handleCoursewareVolumeKey(event)
                 }
@@ -5826,6 +5838,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && immersiveFullscreen &&
+            ViewCompat.getRootWindowInsets(window.decorView)?.isVisible(WindowInsetsCompat.Type.systemBars()) == true
+        ) {
+            applyImmersiveFullscreen(true)
+        }
+        return super.dispatchTouchEvent(event)
     }
 
     private fun isCoursewarePlayingForVolumeKeys(): Boolean {
@@ -5858,6 +5879,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun changeCoursewarePage(delta: Int) {
+        if (immersiveFullscreen) applyImmersiveFullscreen(true)
         if (coursewareUploadInProgress) {
             return
         }
@@ -6003,45 +6025,109 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         updateStatus("$coursewareTitle\n正在跳转到第 $target 页...")
     }
 
-    private fun buildCoursewareJumpRow(isUploading: Boolean): LinearLayout {
-        val pageInput = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            imeOptions = EditorInfo.IME_ACTION_GO
-            hint = "页码 1-${displayedCoursewareCount()}"
-            gravity = Gravity.CENTER
-            textSize = 18f
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
-            setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_muted))
-            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_surface))
+    private var quickPagePopup: android.widget.PopupWindow? = null
+
+    private fun showQuickPagePicker(anchor: View, select: (Int) -> Unit) {
+        val pdf = coursewarePdf ?: run { toast("课件预览加载完成后可快速翻页"); return }
+        if (!roomJoined) { toast("请先连接课堂"); return }
+        quickPagePopup?.dismiss()
+        val openingUrl = coursewareUrl
+        val mapping = coursewarePages()
+        val slides = mapping?.statePages?.distinct() ?: (1..pdf.pageCount).toList()
+        if (slides.isEmpty()) return
+        val bounds = android.graphics.Rect().also { anchor.getWindowVisibleDisplayFrame(it) }
+        val position = IntArray(2).also { anchor.getLocationOnScreen(it) }
+        // The landscape side rail can place the anchor near the top. Allow the
+        // panel to overlap controls so a tall PDF still gets a useful preview.
+        val popupHeight = minOf((bounds.height() * 0.78f).toInt(), bounds.height() - dp(16)).coerceAtLeast(dp(96))
+        val popupWidth = minOf(dp(720), bounds.width() - dp(16)).coerceAtLeast(1)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                marginEnd = dp(8)
-            }
-            setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
-                    gotoCoursewarePageFromInput(this)
-                    true
-                } else {
-                    false
+            setBackgroundColor(Color.rgb(27, 39, 54))
+        }
+        val label = TextView(this).apply { gravity = Gravity.CENTER; setTextColor(Color.WHITE); textSize = 14f }
+        val preview = android.widget.ImageView(this).apply {
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(Color.rgb(15, 22, 32))
+        }
+        val slider = android.widget.SeekBar(this).apply {
+            max = slides.lastIndex
+            progress = slides.indexOf(displayedCoursewarePage()).coerceAtLeast(0)
+            contentDescription = "快速翻页进度"
+        }
+        panel.addView(label, LinearLayout.LayoutParams(-1, dp(32)))
+        panel.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f))
+        panel.addView(slider, LinearLayout.LayoutParams(-1, dp(48)))
+        // Keep the Activity's immersive window focused: a focusable PopupWindow
+        // gets independent system-bar policy and can reveal the bars on Android.
+        val popup = android.widget.PopupWindow(panel, popupWidth, popupHeight, false).apply {
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(12).toFloat()
+            isOutsideTouchable = true
+            inputMethodMode = android.widget.PopupWindow.INPUT_METHOD_NOT_NEEDED
+        }
+        quickPagePopup = popup
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val revision = java.util.concurrent.atomic.AtomicInteger()
+        var closed = false
+        fun refresh(index: Int) {
+            val slide = slides[index]
+            label.text = "第 $slide / ${mapping?.slideCount ?: pdf.pageCount} 页 · 松手投屏"
+            preview.setImageDrawable(null)
+            val serial = revision.incrementAndGet()
+            val physicalIndex = mapping?.statePages?.lastIndexOf(slide) ?: (slide - 1)
+            worker.execute {
+                if (revision.get() != serial) return@execute
+                val bitmap = runCatching { pdf.renderPage(physicalIndex, maxOf(popupWidth, popupHeight).coerceAtMost(1600)) }.getOrNull()
+                runOnUiThread {
+                    if (!closed && revision.get() == serial && coursewareUrl == openingUrl) {
+                        preview.setImageBitmap(bitmap)
+                        preview.contentDescription = "第${slide}页预览"
+                    } else bitmap?.recycle()
                 }
             }
         }
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(58)
-            ).apply { topMargin = dp(12) }
-            addView(pageInput)
-            addView(primaryButton("跳转").apply {
-                isEnabled = !isUploading && roomJoined
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                    marginStart = dp(8)
+        slider.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: android.widget.SeekBar, progress: Int, fromUser: Boolean) {
+                if (fromUser) refresh(progress)
+            }
+            override fun onStartTrackingTouch(bar: android.widget.SeekBar) {}
+            override fun onStopTrackingTouch(bar: android.widget.SeekBar) {
+                if (closed) return
+                val slide = slides[bar.progress]
+                popup.dismiss()
+                if (roomJoined && coursewareUrl == openingUrl && coursewarePdf === pdf) {
+                    select(mapping?.firstState(slide) ?: slide)
                 }
-                setOnClickListener { gotoCoursewarePageFromInput(pageInput) }
-            })
+            }
+        })
+        slider.setOnTouchListener { _, event ->
+            if (event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) popup.dismiss()
+            false
         }
+        popup.setOnDismissListener {
+            closed = true
+            revision.incrementAndGet()
+            worker.shutdownNow()
+            preview.setImageDrawable(null)
+            if (quickPagePopup === popup) quickPagePopup = null
+            if (immersiveFullscreen) applyImmersiveFullscreen(true)
+        }
+        if (immersiveFullscreen) applyImmersiveFullscreen(true)
+        popup.showAtLocation(anchor, Gravity.TOP or Gravity.LEFT,
+            (position[0] + anchor.width / 2 - popup.width / 2).coerceIn(bounds.left, (bounds.right - popup.width).coerceAtLeast(bounds.left)),
+            (position[1] - popup.height).coerceAtLeast(bounds.top))
+        refresh(slider.progress)
+    }
+
+    private fun buildCoursewareJumpRow(isUploading: Boolean): LinearLayout = LinearLayout(this).apply {
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52))
+        addView(compactButton(primaryButton("快速翻页"), 14f).apply {
+            isEnabled = !isUploading && roomJoined
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            setOnClickListener { showQuickPagePicker(this) { page -> jumpToCoursewarePage(coursewarePages()?.slide(page) ?: page) } }
+        })
     }
 
     private fun gotoCoursewarePageFromInput(input: EditText) {
@@ -6065,6 +6151,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     private fun closeCoursewareAndReturnMenu() {
+        val returnList = coursewareReturnList
+        coursewareReturnList = null
         cancelCoursewareFastSeek()
         if (!sendCoursewareCloseSignal() && activeRoomCode != null) {
             pendingCoursewareCloseAfterJoin = true
@@ -6083,7 +6171,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         mediaQueueIndex = -1
         coursewareSubScreen = CoursewareSubScreen.None
         resetMediaCastState()
-        showMenuScreen()
+        when {
+            !roomJoined -> showMenuScreen()
+            returnList == CoursewareSubScreen.ServerList -> loadServerCoursewareList()
+            returnList == CoursewareSubScreen.ServerMediaList -> loadServerMediaList()
+            else -> showMenuScreen()
+        }
     }
 
     private fun pauseCoursewareAndReturnMenu() {
@@ -6717,8 +6810,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
-    private fun embeddedVideoButton(): MaterialButton = compactButton(secondaryButton("本页视频"), 12f).apply {
-        layoutParams = LinearLayout.LayoutParams(dp(104), dp(40))
+    private fun embeddedVideoButton(): MaterialButton = compactButton(secondaryButton("▶视频"), 12f).apply {
+        layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
         embeddedVideos.attach(this)
     }
 
@@ -6726,6 +6819,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val file = coursewareFilePath(coursewareUrl)
         if (annotationsFile == file) return
         coursewarePdfStrokes.clear()
+        coursewareClearHistory.clear()
         annotationsFile = file
         renderedAnnotationsFile = ""
         renderedAnnotationsPage = 0
@@ -6743,6 +6837,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         restoringAnnotations = true
         try {
             view.setImage(bitmap, atBottom)
+            view.clearedHistory = coursewareClearHistory.getOrPut(page) { mutableListOf() }
             view.replaceStrokes(notes)
             renderedAnnotationsFile = annotationsFile
             renderedAnnotationsPage = page
@@ -6754,10 +6849,15 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (coursewareUrl.isBlank() || coursewareFilePath(message.optString("url")) != coursewareFilePath(coursewareUrl)) return@runOnUiThread
             ensureFileAnnotations()
             coursewarePdfStrokes.clear()
+            coursewareClearHistory.clear()
             coursewarePdfStrokes.putAll(FileAnnotations.snapshot(message))
+            coursewareClearHistory.putAll(FileAnnotations.clearHistory(message))
             if (renderedAnnotationsFile == annotationsFile && renderedAnnotationsPage > 0) {
                 restoringAnnotations = true
-                try { zoomableImageView?.replaceStrokes(coursewarePdfStrokes[renderedAnnotationsPage].orEmpty()) }
+                try {
+                    zoomableImageView?.clearedHistory = coursewareClearHistory.getOrPut(renderedAnnotationsPage) { mutableListOf() }
+                    zoomableImageView?.replaceStrokes(coursewarePdfStrokes[renderedAnnotationsPage].orEmpty())
+                }
                 finally { restoringAnnotations = false }
             }
         }
@@ -6777,7 +6877,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (view != null && renderedAnnotationsFile == annotationsFile && renderedAnnotationsPage == page) {
                 view.applyRemoteAnnotation(payload)
             } else {
-                coursewarePdfStrokes[page] = FileAnnotations.apply(coursewarePdfStrokes[page].orEmpty(), payload)
+                val strokes = coursewarePdfStrokes[page].orEmpty()
+                val history = coursewareClearHistory.getOrPut(page) { mutableListOf() }
+                if (payload.action == "clear" && strokes.isNotEmpty()) history.add(strokes)
+                coursewarePdfStrokes[page] = if (payload.action == "undo" && strokes.isEmpty() && history.isNotEmpty()) {
+                    history.removeAt(history.lastIndex)
+                } else FileAnnotations.apply(strokes, payload)
             }
         }
     }
@@ -7374,6 +7479,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      */
     private fun compactButton(button: MaterialButton, textSizeSp: Float): MaterialButton =
         button.apply {
+            gravity = Gravity.CENTER
+            minWidth = 0
+            minimumWidth = 0
             textSize = textSizeSp
             setSingleLine(true)
             maxLines = 1
@@ -7384,14 +7492,31 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             minHeight = 0
             minimumHeight = 0
             setPadding(dp(8), 0, dp(8), 0)
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(
+                this, 10, textSizeSp.toInt().coerceAtLeast(11), 1, android.util.TypedValue.COMPLEX_UNIT_SP
+            )
         }
 
     /**
      * 画笔工具栏里的小按钮：描边样式、单行、无 inset，
      * 用于“板擦 / 撤销 / 清空 / 返回主菜单 / 结束投屏”这类窄按钮。
      */
+    private fun updateCastModeButton(button: MaterialButton, penMode: Boolean) {
+        button.text = if (penMode) "手势" else "画笔"
+        button.setIconResource(if (penMode) R.drawable.ic_tool_gesture else R.drawable.ic_tool_pen)
+        button.iconSize = dp(18)
+        button.iconPadding = dp(4)
+        button.iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+        button.iconTint = ColorStateList.valueOf(
+            if (penMode) Color.WHITE else ContextCompat.getColor(this, R.color.myclass_on_surface)
+        )
+    }
+
     private fun annotationToolButton(textValue: String): MaterialButton =
         MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            gravity = Gravity.CENTER
+            minWidth = 0
+            minimumWidth = 0
             text = textValue
             textSize = 12f
             setSingleLine(true)
@@ -7407,6 +7532,22 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setStrokeColor(ColorStateList.valueOf(Color.argb(0.3f, 1f, 1f, 1f)))
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.myclass_on_surface))
             setPadding(dp(6), 0, dp(6), 0)
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(
+                this, 10, 12, 1, android.util.TypedValue.COMPLEX_UNIT_SP
+            )
+            val toolIcon = when (textValue) {
+                "板擦" -> R.drawable.ic_tool_eraser
+                "撤销" -> R.drawable.ic_tool_undo
+                "清空" -> R.drawable.ic_tool_clear
+                else -> null
+            }
+            toolIcon?.let {
+                setIconResource(it)
+                iconSize = dp(18)
+                iconPadding = dp(4)
+                iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+                iconTint = textColors
+            }
         }
 
     private fun deleteButton(textValue: String): MaterialButton =
