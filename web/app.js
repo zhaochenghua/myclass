@@ -2439,13 +2439,14 @@ function sendViewerAnnotation(payload) {
   sendMessage(Object.assign({ type: 'viewer.annotation', url: displayedFileUrl }, payload));
 }
 
-function syncViewerAnnotationBegin(pointerId) {
+function syncViewerAnnotationBegin(pointerId, force = false) {
   if (!viewerAnnotationEnabled()) return;
+  if (viewerStrokeIds.has(pointerId) || (!force && handwritingPinchPending(pointerId))) return;
   const stroke = state.annotations.activeStrokes.get(pointerId);
   if (!stroke || stroke.points.length === 0) return;
   const strokeId = `v${++viewerStrokeSeq}`;
   viewerStrokeIds.set(pointerId, strokeId);
-  viewerPendingPoints.set(strokeId, []);
+  viewerPendingPoints.set(strokeId, stroke.points.slice(1));
   viewerLastSyncAt = Date.now();
   sendViewerAnnotation({
     action: 'begin',
@@ -2462,7 +2463,11 @@ function syncViewerAnnotationBegin(pointerId) {
 
 function syncViewerAnnotationPoints(pointerId, point) {
   const strokeId = viewerStrokeIds.get(pointerId);
-  if (!strokeId || !point || !viewerAnnotationEnabled()) return;
+  if (!point || !viewerAnnotationEnabled()) return;
+  if (!strokeId) {
+    syncViewerAnnotationBegin(pointerId);
+    return;
+  }
   const buffer = viewerPendingPoints.get(strokeId) || [];
   buffer.push(point);
   viewerPendingPoints.set(strokeId, buffer);
@@ -3656,6 +3661,11 @@ function resizeAnnotationCanvas() {
 
 const handwritingTouches = new WeakMap();
 
+function handwritingPinchPending(pointerId) {
+  const gesture = handwritingTouches.get(elements.annotationCanvas);
+  return gesture?.ownerId === pointerId && !gesture.blocked && !gesture.active;
+}
+
 function resetHandwritingTouches(canvas) {
   const gesture = handwritingTouches.get(canvas);
   handwritingTouches.delete(canvas);
@@ -3720,6 +3730,7 @@ function handleHandwritingTouch(event, phase, blackboard = false) {
   gesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (!gesture.active && !candidate && event.pointerId === gesture.ownerId) {
     gesture.travel += Math.hypot(event.clientX - previous.x, event.clientY - previous.y);
+    if (gesture.travel > 40 || event.timeStamp - gesture.startedAt > 300) gesture.blocked = true;
   }
   const after = candidate?.ids.map(id => gesture.pointers.get(id));
   if (!gesture.active && candidate && candidate.ids.includes(event.pointerId)) {
@@ -3731,10 +3742,17 @@ function handleHandwritingTouch(event, phase, blackboard = false) {
     if (Math.abs(first) >= 8 && Math.abs(second) >= 8 && first * second < 0 &&
         Math.abs(pointerDist(after[0], after[1]) - distance) >= 24) {
       gesture.active = true;
-      const finish = { pointerId: gesture.ownerId, preventDefault() {} };
-      if (blackboard) completeBlackboardStroke(finish, false);
-      else completeAnnotationStroke(finish, false);
-      // Rebase at confirmation so the saved ink and viewport do not jump.
+      const stroke = drawing.activeStrokes.get(gesture.ownerId);
+      drawing.activeStrokes.delete(gesture.ownerId);
+      if (stroke?.lineMode) hideAngleIndicator();
+      if (blackboard) {
+        renderBlackboard();
+        updateBlackboardPageIndicator();
+      } else {
+        drawAnnotations();
+        updateAnnotationButtons();
+      }
+      // The trial stroke was never synchronized. Discard it and rebase the pinch.
       event.preventDefault();
       return true;
     }
@@ -3883,6 +3901,8 @@ function completeAnnotationStroke(event, releaseCapture = true) {
     return;
   }
   event.preventDefault();
+  // A normal short touch still needs its buffered ink sent before the stroke ends.
+  syncViewerAnnotationBegin(event.pointerId, true);
   if (stroke.points.length > 0) {
     state.annotations.strokes.push({
       color: stroke.color,

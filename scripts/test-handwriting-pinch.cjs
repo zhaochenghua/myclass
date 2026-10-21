@@ -120,6 +120,10 @@ function pdfFixture() {
           action: 'begin', strokeId: 'remote-check', points: [{ x: 0.2, y: 0.2 }], page: 1
         }));
         const initial = await read(blackboard);
+        const inkBefore = await page.evaluate(board => {
+          if (board) renderBlackboard(); else drawAnnotations();
+          return (board ? elements.blackboardCanvas : elements.annotationCanvas).toDataURL();
+        }, blackboard);
         await touch('touchStart', [point(1, 450)]);
         await touch('touchMove', [point(1, 470, 370)]);
         assert.equal((await read(blackboard)).local, 1, `${kind}/${tool}: one local stroke`);
@@ -130,7 +134,13 @@ function pdfFixture() {
         await touch('touchMove', [point(1, 400, 370), point(2, 770, 370)]);
         current = await read(blackboard);
         assert.equal(current.local, 0);
-        assert.equal(current.count, initial.count + 1, 'finish existing ink once');
+        assert.equal(current.count, initial.count, 'discard trial ink when pinch is confirmed');
+        assert.equal(current.pendingSync, 0, 'pinch trial ink must never enter sync');
+        assert.equal(await page.evaluate(board =>
+          (board ? elements.blackboardCanvas : elements.annotationCanvas).toDataURL(), blackboard), inkBefore,
+        'confirmed pinch restores the exact canvas pixels, including eraser effects');
+        assert.equal(await page.evaluate(() => gestureMessages.filter(m => m.type === 'viewer.annotation').length), 0,
+          'pinch cannot persist trial ink or undo someone else\'s stroke');
         assert.equal(current.scale, initial.scale, 'confirm pinch without a viewport jump');
         await touch('touchMove', [point(1, 760, 370), point(2, 770, 370)]);
         assert.equal((await read(blackboard)).scale, initial.scale, 'coordinate collapse cannot shrink the viewport');
@@ -150,19 +160,22 @@ function pdfFixture() {
         assert.ok((await read(blackboard)).scale < enlarged, 'pinch inward must shrink');
         await touch('touchEnd', [point(1, 450, 370)]);
         await touch('touchMove', [point(2, 780, 410)]);
-        assert.equal((await read(blackboard)).count, initial.count + 1, 'remaining finger must not draw');
+        assert.equal((await read(blackboard)).count, initial.count, 'remaining finger must not draw');
         await touch('touchEnd', []);
         current = await read(blackboard);
         assert.equal(current.local, 0); assert.equal(current.gesture, false); assert.equal(current.pendingSync, 0);
         await touch('touchStart', [point(1, 580, 400)]);
-        await touch('touchMove', [point(1, 620, 440)]);
+        await touch('touchMove', [point(1, 600, 410)]);
         await touch('touchEnd', []);
-        assert.equal((await read(blackboard)).count, initial.count + 2, 'fresh touch resumes ink');
+        assert.equal((await read(blackboard)).count, initial.count + 1, 'fresh short touch resumes ink');
         if (kind === 'pdf' || kind === 'image') {
           const sync = await page.evaluate(() => gestureMessages.filter(m => m.type === 'viewer.annotation'));
           const begins = sync.filter(m => m.action === 'begin'), ends = sync.filter(m => m.action === 'end');
-          assert.equal(begins.length, 2); assert.equal(ends.length, 2);
+          assert.equal(begins.length, 1); assert.equal(ends.length, 1);
           assert.deepEqual(begins.map(m => m.strokeId), ends.map(m => m.strokeId));
+          const syncedPoints = sync.filter(m => ['begin', 'points'].includes(m.action)).flatMap(m => m.points);
+          const savedPoints = await page.evaluate(() => state.annotations.strokes.at(-1).points);
+          assert.deepEqual(syncedPoints, savedPoints, 'short stroke sync keeps every buffered point exactly once');
           assert.equal(await page.evaluate(() => state.annotations.activeStrokes.has('teacher:remote-check')), true);
           await page.evaluate(() => handleTeacherAnnotation({ action: 'end', strokeId: 'remote-check', page: 1 }));
         }
