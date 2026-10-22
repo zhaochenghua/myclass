@@ -1974,9 +1974,22 @@ video {
 .touch-calibration-target::before { width: 76px; height: 2px; top: 23px; left: -14px; }
 .touch-calibration-target::after { height: 76px; width: 2px; left: 23px; top: -14px; }
 
-/* 手机端断开后大屏的兜底「结束投屏」：放在标注工具栏里、原本"本页视频"按钮的位置，
-   没有内嵌视频时那里是空的 */
+/* 手机端断开后大屏的兜底「结束投屏」：精确占用「本页视频」按钮的槽位。
+   视频按钮用 visibility:hidden 常驻占位（保持翻页控件不跳动），
+   所以这里也用同样的尺寸叠在同一个位置上，没有内嵌视频时正好显示它。 */
 .screen-end-button {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  box-sizing: border-box;
+  width: 6.75rem;
+  height: 2.75rem;
+  padding-inline: 0.35rem;
+  font-size: 0.875rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-color: rgba(255, 255, 255, 0.45);
   background: rgba(255, 255, 255, 0.18);
   font-weight: 600;

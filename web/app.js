@@ -3153,9 +3153,11 @@ function updateScreenEndButton() {
   const button = elements.screenEndButton;
   if (!button) return;
   const showing = state.presentationMode !== 'waiting';
-  // 「本页视频」按钮占着同一个位置：有内嵌视频时让给它，避免两个按钮挤在一起
+  // 「本页视频」按钮用 visibility:hidden 常驻占位，有视频时它才是真正可见的；
+  // 那种情况下结束按钮让位（两者叠在同一个槽位，不能同时出现）
   const videoButton = elements.annotationToolbar?.querySelector('.embedded-launch');
-  const videoVisible = !!videoButton && !videoButton.hidden && !!videoButton.offsetParent;
+  const videoVisible = !!videoButton && !videoButton.hidden
+    && getComputedStyle(videoButton).visibility !== 'hidden';
   button.hidden = !(showing && !state.teacherConnected) || videoVisible;
 }
 
