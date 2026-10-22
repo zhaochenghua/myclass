@@ -184,6 +184,7 @@ let pdfJsPromise = null;
 
 const elements = {
   joinView: document.getElementById('joinView'),
+  screenEndButton: document.getElementById('screenEndButton'),
   videoView: document.getElementById('videoView'),
   roomCode: document.getElementById('roomCode'),
   clockTime: document.getElementById('clockTime'),
@@ -500,6 +501,9 @@ async function bootstrap() {
     document.addEventListener('click', unmuteOnFirstInteraction, { once: true });
     document.addEventListener('touchstart', unmuteOnFirstInteraction, { once: true });
     document.addEventListener('keydown', unmuteOnFirstInteraction, { once: true });
+    // 手机端断开后大屏的兜底「结束投屏」：手机上按不到时，大屏自己退出
+    elements.screenEndButton?.addEventListener('click', endScreenPresentation);
+    setInterval(updateScreenEndButton, 700);
     elements.annotationCanvas.addEventListener('pointerdown', event => beginAnnotationStroke(TouchCalibration.eventFor(event)));
     elements.annotationCanvas.addEventListener('pointermove', event => continueAnnotationStroke(TouchCalibration.eventFor(event)));
     elements.annotationCanvas.addEventListener('pointerup', event => finishAnnotationStroke(TouchCalibration.eventFor(event)));
@@ -3137,6 +3141,26 @@ function hideDirectTeachUI() {
 
 function showDirectTeachUI() {
   elements.directTeachButton.hidden = false;
+}
+
+/**
+ * 大屏的兜底「结束投屏」按钮：只有"正在显示内容 + 手机端已断开"时才出现。
+ * 手机在线时由手机控件结束，避免两处重复操作。
+ */
+function updateScreenEndButton() {
+  const button = elements.screenEndButton;
+  if (!button) return;
+  const showing = state.presentationMode !== 'waiting';
+  button.hidden = !(showing && !state.teacherConnected);
+}
+
+/** 手机端已断开，大屏自己结束投屏并回到首页（房间与连接码保留） */
+function endScreenPresentation() {
+  state.teacherConnected = false;
+  cleanupPeerConnection();
+  resetAnnotations();
+  closeCourseware('已结束投屏，等待教师重新连接...');
+  updateScreenEndButton();
 }
 
 function closeCourseware(statusText = '课件播放已结束，等待教师连接...') {

@@ -1973,3 +1973,23 @@ video {
 .touch-calibration-target::before, .touch-calibration-target::after { content: ''; position: absolute; background: var(--touch-calibration-accent); }
 .touch-calibration-target::before { width: 76px; height: 2px; top: 23px; left: -14px; }
 .touch-calibration-target::after { height: 76px; width: 2px; left: 23px; top: -14px; }
+
+/* 手机端断开后大屏的兜底「结束投屏」：浮在画面右上角，点一下回到首页 */
+.screen-end-button {
+  position: absolute;
+  top: 9rem;
+  right: 1rem;
+  z-index: 60;
+  padding: 0.55rem 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font: inherit;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.screen-end-button:hover { background: rgba(0, 0, 0, 0.8); }
+.screen-end-button[hidden] { display: none; }
