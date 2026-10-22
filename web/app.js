@@ -1287,8 +1287,21 @@ function setConnectionNotice(text) {
   notice.hidden = !text;
 }
 
+// 只有手机端会发出的消息类型：收到即说明手机在线
+const TEACHER_ACTIVITY_TYPES = new Set([
+  'courseware.open', 'courseware.navigate', 'courseware.page', 'courseware.close',
+  'courseware.video.control', 'courseware.image.viewport', 'courseware.annotation',
+  'courseware.original', 'courseware.embedded-video', 'webrtc.offer', 'webrtc.ice-candidate',
+  'teacher.orientation', 'teacher.stop', 'student.roll', 'student.selection.set',
+  'student.selection.get'
+]);
 async function handleSignalMessage(message) {
   if (Number.isFinite(message.presentationRevision)) state.presentationRevision = message.presentationRevision;
+  // 手机端发来的任何一条消息都证明它还连着。
+  // 关键场景：手机在直播中打开 PDF 会先发 teacher.stop（停推流）再发 courseware.open，
+  // teacher.stop 把 teacherConnected 清成了 false，若不在这里补回来，
+  // 大屏会误以为手机已离线，从而冒出「结束投屏」按钮。
+  if (TEACHER_ACTIVITY_TYPES.has(message.type)) state.teacherConnected = true;
   switch (message.type) {
     case 'server.pong':
       break;
@@ -1405,8 +1418,8 @@ async function handleSignalMessage(message) {
       break;
     case 'teacher.stop':
       state.coursewareFromViewer = false;
-      // teacher.stop 仅表示停止推流/课件播放，手机端仍在线，不清除登录态
-      state.teacherConnected = false;
+      // teacher.stop 只表示停止推流，手机端仍然在线，绝不能清 teacherConnected：
+      // 手机在直播中打开 PDF 就是先 stop 再 open，清掉会让大屏误判手机离线
       cleanupPeerConnection();
       if (state.presentationMode === 'courseware') {
         closeCourseware('课件已结束');
@@ -2730,8 +2743,8 @@ function reportViewerCoursewareViewport() {
   if (viewerViewportTimer !== null) return;
   viewerViewportTimer = setTimeout(() => {
     viewerViewportTimer = null;
-    // teacherConnected is also cleared by teacher.stop before opening a PDF;
-    // it describes playback, not whether the signaling connection can send.
+    // 只依赖"能否发送"和"当前是否显示 PDF"，不看 teacherConnected：
+    // 那个标记跟推流/课件播放状态绑定，不能代表信令连接是否可用。
     if (!isCoursewarePdfVisible() || elements.videoView.hidden ||
         state.socket?.readyState !== WebSocket.OPEN) return;
     if (state.courseware.displayedPage !== state.courseware.page) return;
