@@ -3,10 +3,11 @@ export function createEmbeddedVideos({ container, getContext, send, remote = fal
   const style = document.createElement('style');
   style.textContent = `
     .embedded-launch {padding:8px 12px;border:1px solid #64748b;border-radius:8px;background:#174b47;color:white;cursor:pointer;font:inherit;white-space:nowrap}
-    .embedded-overlay {position:fixed;inset:0;z-index:1200;background:#000e;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
+    .embedded-overlay {position:fixed;inset:0;z-index:1200;background:#000e;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box}
     .embedded-overlay[hidden],.embedded-launch[hidden] {display:none!important}
-    .embedded-card {width:min(100%,1100px);max-height:100%;overflow:auto;background:#111c26;color:white;padding:16px;border-radius:12px;box-sizing:border-box}
-    .embedded-card video {display:block;position:relative;inset:auto;width:100%;height:auto;max-height:70dvh;object-fit:contain;background:black;transform:none}
+    /* 大屏投影时学生离得远，播放窗口尽量铺满：原来固定 1100px 宽，在 1920 的投影上只占一半 */
+    .embedded-card {width:min(96vw,1800px);max-height:100%;overflow:auto;background:#111c26;color:white;padding:12px;border-radius:12px;box-sizing:border-box}
+    .embedded-card video {display:block;position:relative;inset:auto;width:100%;height:auto;max-height:78dvh;object-fit:contain;background:black;transform:none}
     .embedded-card video[hidden] {display:none}
     .embedded-actions {display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
     .embedded-card button {padding:10px 16px;font:inherit;background:#263b4e;color:white;border:1px solid #8ba1b5;border-radius:8px;cursor:pointer}
