@@ -726,7 +726,19 @@ function setupStudentRoller() {
   // 班级人数，首次使用抽学号时设置，默认 50
   let studentCount = 50;
   let countConfigured = false;
-  const drawRounds = StudentRoster.createRoundDraw();
+  let drawOwnerId = 'anonymous';
+  const drawRounds = StudentRoster.createRoundDraw(Math.random, {
+    load(scope) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(`myclass.studentDraw.v1:${scope}`));
+        if (saved && Array.isArray(saved.drawn) && Array.isArray(saved.recent) && Number.isSafeInteger(saved.number) && saved.number > 0) return saved;
+      } catch {}
+      return null;
+    },
+    save(scope, progress) {
+      try { localStorage.setItem(`myclass.studentDraw.v1:${scope}`, JSON.stringify(progress)); } catch {}
+    }
+  });
 
   // ---- 设置人数模态框 ----
   const modal = document.getElementById('studentCountModal');
@@ -785,9 +797,9 @@ function setupStudentRoller() {
     positionControls();
   }
 
-  async function classRequest(route = '') {
+  async function classRequest(route = '', options = {}) {
     const currentToken = token;
-    const response = await fetch(`./api/classes${route}`, { cache: 'no-store', headers: { Authorization: `Bearer ${currentToken}` } });
+    const response = await fetch(`./api/classes${route}`, { ...options, cache: 'no-store', headers: { Authorization: `Bearer ${currentToken}`, 'Content-Type': 'application/json' } });
     const data = await response.json();
     if (currentToken !== token) throw new Error('教师已切换，请重新选择班级');
     if (!response.ok) throw new Error(data.error || '班级加载失败，请重试');
@@ -840,6 +852,7 @@ function setupStudentRoller() {
   async function setTeacher(nextToken, offerPicker = true) {
     if (nextToken === token) return;
     token = nextToken;
+    drawOwnerId = nextToken ? null : 'anonymous';
     const currentGeneration = ++generation;
     clearTimeout(timer);
     clearTimeout(hideTimer);
@@ -864,8 +877,13 @@ function setupStudentRoller() {
     if (!token) return;
     classesLoading = (async () => {
       try {
-        const data = await classRequest();
+        const [data, identityResponse] = await Promise.all([
+          classRequest(), fetch('./api/auth/me', { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } })
+        ]);
+        if (!identityResponse.ok) throw new Error('教师身份加载失败，请重新连接');
+        const identity = await identityResponse.json();
         if (generation !== currentGeneration) return;
+        drawOwnerId = identity.id;
         classes = data.items;
         classButton.hidden = !classes.length;
         positionControls();
@@ -890,6 +908,7 @@ function setupStudentRoller() {
     try {
       await classesLoading;
       if (generation !== currentGeneration) return;
+      if (token && !drawOwnerId) throw new Error('教师身份未加载，请重新连接后抽取');
       if (classes.length && !selectionConfirmed) {
         renderClassOptions();
         classModal.hidden = false;
@@ -906,7 +925,11 @@ function setupStudentRoller() {
       const selected = selectedClassId ? (await classRequest(`/${encodeURIComponent(selectedClassId)}`)).item : null;
       if (generation !== currentGeneration) return;
       const candidates = StudentRoster.candidates(selected, displayMode, studentCount);
-      startRoll(candidates, JSON.stringify([token, selectedClassId || 'numbers']));
+      const outcome = selectedClassId ? await classRequest(`/${encodeURIComponent(selectedClassId)}/draw`, {
+        method: 'POST', body: JSON.stringify({ mode: displayMode })
+      }) : null;
+      if (generation !== currentGeneration) return;
+      startRoll(candidates, JSON.stringify([drawOwnerId, 'numbers']), outcome);
       feedback('正在抽取…', 'started');
     } catch (error) {
       if (generation === currentGeneration) feedback(error.message, 'error');
@@ -1055,14 +1078,14 @@ function setupStudentRoller() {
     closeCountModal();
   });
 
-  function startRoll(candidates, scope) {
+  function startRoll(candidates, scope, savedOutcome = null) {
     if (rolling) return;
     rolling = true;
     btn.disabled = true;
     const startTime = Date.now();
     clearTimeout(hideTimer);
     big.setAttribute('aria-hidden', 'false');
-    const previewPool = drawRounds.preview(scope, candidates);
+    const previewPool = savedOutcome ? candidates : drawRounds.preview(scope, candidates);
     const pick = () => previewPool[Math.floor(Math.random() * previewPool.length)];
     const showCandidate = candidate => {
       result.textContent = bigNum.textContent = candidate.text;
@@ -1082,7 +1105,7 @@ function setupStudentRoller() {
       if (elapsed >= DURATION) {
         result.classList.remove('rolling');
         big.classList.remove('rolling');
-        const outcome = drawRounds.draw(scope, candidates);
+        const outcome = savedOutcome || drawRounds.draw(scope, candidates);
         const final = outcome.candidate;
         showCandidate(final);
         const progress = `第 ${outcome.round} 轮 · ${outcome.remaining ? `剩余 ${outcome.remaining} 人` : '已抽完，下次开始新一轮'}`;

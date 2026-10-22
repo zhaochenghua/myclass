@@ -24,6 +24,7 @@ test('HTTP upload/list/download/range/delete work on a separate storage root', {
   const oldPublic = path.join(directory, 'web', 'public', 'courseware');
   await fs.mkdir(oldPublic, { recursive: true });
   await fs.copyFile(path.join(__dirname, '../web/touchCalibrationMath.js'), path.join(directory, 'web/touchCalibrationMath.js'));
+  await fs.copyFile(path.join(__dirname, '../web/studentRoster.js'), path.join(directory, 'web/studentRoster.js'));
   await fs.writeFile(path.join(oldPublic, 'index.json'), 'private metadata');
   const child = spawn(process.execPath, [path.join(serverRoot, 'server.js')], {
     cwd: directory, windowsHide: true,

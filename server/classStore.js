@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { validateProfile } = require('../web/touchCalibrationMath');
+const { candidates, nextDraw } = require('../web/studentRoster');
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
@@ -67,6 +68,16 @@ function createClassStore(filename) {
   return {
     async list(ownerId) { return (await load()).filter(item => item.ownerId === ownerId); },
     async get(ownerId, id) { return find(await load(), ownerId, id); },
+    draw(ownerId, id, mode) {
+      if (!['name', 'number'].includes(mode)) throw fail(400, '抽取方式无效');
+      return change(items => {
+        const item = find(items, ownerId, id);
+        if (!item.students.length) throw fail(400, '这个班级还没有学生，请先在管理界面录入名单');
+        const { state, ...outcome } = nextDraw(candidates(item, mode), item.studentDraw);
+        item.studentDraw = state;
+        return outcome;
+      });
+    },
     setCalibration(ownerId, id, body) {
       if (!body || (body.profile !== null && !validateProfile(body.profile))) throw fail(400, '校准数据无效，请重新校准');
       return change(items => {

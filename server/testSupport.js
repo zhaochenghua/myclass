@@ -17,6 +17,7 @@ async function startTestServer({ port = 0, withWeb = false, env = {} } = {}) {
   await fs.cp(path.join(__dirname, 'vendor'), path.join(serverRoot, 'vendor'), { recursive: true });
   await fs.mkdir(path.join(directory, 'web'), { recursive: true });
   await fs.copyFile(path.join(__dirname, '..', 'web', 'touchCalibrationMath.js'), path.join(directory, 'web', 'touchCalibrationMath.js'));
+  await fs.copyFile(path.join(__dirname, '..', 'web', 'studentRoster.js'), path.join(directory, 'web', 'studentRoster.js'));
   if (withWeb) {
     await fs.symlink(path.join(__dirname, 'node_modules'), path.join(serverRoot, 'node_modules'), 'junction');
     await fs.cp(path.join(__dirname, '..', 'web', 'ios'), path.join(directory, 'web', 'ios'), { recursive: true });

@@ -515,6 +515,10 @@ app.get(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) =>
   try { res.set('Cache-Control', 'no-store').json({ item: await classStore.get(req.user.id, req.params.id) }); }
   catch (error) { next(error); }
 });
+app.post(`${PATH_PREFIX}/api/classes/:id/draw`, requireAuth, async (req, res, next) => {
+  try { res.set('Cache-Control', 'no-store').json(await classStore.draw(req.user.id, req.params.id, req.body?.mode)); }
+  catch (error) { next(error); }
+});
 app.get(`${PATH_PREFIX}/api/classes/:id/touch-calibration`, requireAuth, async (req, res, next) => {
   try {
     const item = await classStore.get(req.user.id, req.params.id);

@@ -28,35 +28,49 @@
       detail: `${classItem.name} · ${mode === 'number' ? student.name : `学号 ${student.number}`}`
     }));
   }
-  // Keep only student numbers in each round; names/display mode may change.
-  // The caller supplies a teacher + class scope, independent of the display mode.
-  function createRoundDraw(random = Math.random) {
+  // Store identities only, so changing names/order/display mode preserves progress.
+  function nextDraw(items, state = {}, random = Math.random) {
+    if (!items.length) throw new Error('没有可抽取的学生');
+    const ids = new Set(items.map(item => item.id));
+    let drawn = new Set((state.drawn || []).filter(id => ids.has(id)));
+    let number = state.number || 1;
+    const recent = (state.recent || []).filter(id => ids.has(id)).slice(-Math.max(1, Math.floor(items.length / 2)));
+    let pool = items.filter(item => !drawn.has(item.id));
+    if (!pool.length) { drawn = new Set(); number++; pool = items; }
+    // Across round boundaries, prefer students outside the most recent half-class.
+    const rested = pool.filter(item => !recent.includes(item.id));
+    const eligible = rested.length ? rested : pool;
+    const candidate = eligible[Math.floor(random() * eligible.length)];
+    drawn.add(candidate.id);
+    recent.push(candidate.id);
+    return {
+      candidate, round: number, remaining: pool.length - 1, total: items.length,
+      state: { drawn: [...drawn], number, recent: recent.slice(-Math.max(1, Math.floor(items.length / 2))) }
+    };
+  }
+  function createRoundDraw(random = Math.random, storage = null) {
     const rounds = new Map();
-    function remaining(scope, items) {
-      if (!items.length) throw new Error('没有可抽取的学生');
-      let round = rounds.get(scope);
-      if (!round) { round = { drawn: new Set(), number: 1 }; rounds.set(scope, round); }
-      const ids = new Set(items.map(item => item.id));
-      round.drawn.forEach(id => { if (!ids.has(id)) round.drawn.delete(id); });
-      return items.filter(item => !round.drawn.has(item.id));
+    function load(scope) {
+      if (!rounds.has(scope)) rounds.set(scope, storage?.load(scope) || {});
+      return rounds.get(scope);
     }
     return {
       // Animation previews must not consume a student or start a new round.
       preview(scope, items) {
-        const pool = remaining(scope, items);
+        if (!items.length) throw new Error('没有可抽取的学生');
+        const drawn = new Set(load(scope).drawn || []);
+        const pool = items.filter(item => !drawn.has(item.id));
         return pool.length ? pool : items;
       },
       draw(scope, items) {
-        let pool = remaining(scope, items);
-        const round = rounds.get(scope);
-        if (!pool.length) { round.drawn.clear(); round.number++; pool = items; }
-        const candidate = pool[Math.floor(random() * pool.length)];
-        round.drawn.add(candidate.id);
-        return { candidate, round: round.number, remaining: pool.length - 1, total: items.length };
+        const { state, ...outcome } = nextDraw(items, load(scope), random);
+        rounds.set(scope, state);
+        storage?.save(scope, state);
+        return outcome;
       }
     };
   }
-  const api = { parse, candidates, createRoundDraw };
+  const api = { parse, candidates, nextDraw, createRoundDraw };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.StudentRoster = api;
 })(typeof window === 'undefined' ? globalThis : window);
