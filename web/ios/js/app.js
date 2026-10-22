@@ -1,7 +1,10 @@
 import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261015-video';
 let embeddedVideoControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
-import { loadPageMapping, pageMapping, slidePage, slideCount, firstState } from './coursewarePages.mjs';
+import { loadPageMapping, pageMapping, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';
+import { createOrientationLock, layoutPoint, layoutRect } from './orientation.mjs?v=20261022-reader';
+import { createDocumentPreview } from './documentPreview.mjs?v=20261022-reader';
+import { createQuickPagePicker } from './quickPage.mjs?v=20261022-reader';
 // iPhone 网页版教师端主流程。
 // 界面状态机与 Android MainActivity 一致：
 //   auth -> connect -> menu -> (live | coursewareSource -> coursewareList -> coursewarePlay)
@@ -28,15 +31,21 @@ import { MediaPipeline } from './pipeline.js?v=20260920a';
 import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
 import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261012-ios3';
 import { mediaKind, prepareImageFile, ensureMediaUploaded } from './mediaFiles.mjs?v=20261012-ios3';
-import { AnnotationBoard } from './annotation.js?v=20261014-file-notes';
+import { AnnotationBoard } from './annotation.js?v=20261022-reader';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261012-ios3';
-import { ListPreviews, playbackProgress } from './listPreviews.mjs?v=20261012-ios3';
-import { createCoursewareLinks } from './coursewareLinks.mjs?v=20261015-links';
+import { ListPreviews, playbackProgress } from './listPreviews.mjs?v=20261022-reader';
+import { createCoursewareLinks } from './coursewareLinks.mjs?v=20261022-reader';
 
 let mediaListPreviews = null;
 let coursewareListPreviews = null;
 let coursewareLinkControls = null;
+let orientationLock = null;
+let documentPreview = null;
+let quickPagePicker = null;
 function showView(name) {
+  documentPreview?.close();
+  quickPagePicker?.close();
+  orientationLock?.setConnected(state.joined && !['Network', 'Auth', 'Connect'].includes(name));
   if (name !== 'MediaQueue') { mediaListPreviews?.destroy(); mediaListPreviews = null; }
   if (name !== 'CoursewareList') { coursewareListPreviews?.destroy(); coursewareListPreviews = null; }
   showBaseView(name);
@@ -816,8 +825,7 @@ function bindLiveGestures() {
   const pointsOf = (event) =>
     Array.from(event.touches || []).map((touch) => ({
       id: touch.identifier,
-      x: touch.clientX,
-      y: touch.clientY
+      ...layoutPoint(touch)
     }));
 
   const distanceOf = (points) => {
@@ -864,7 +872,7 @@ function bindLiveGestures() {
     if (!moved && Math.hypot(dx, dy) < 6) return;
     moved = true;
 
-    const rect = stage.getBoundingClientRect();
+    const rect = layoutRect(stage);
     state.pipeline?.panBy(dx / rect.width, dy / rect.height);
     // 始终跟随手指，避免到达边界后位移量累积
     lastSingle = { x: points[0].x, y: points[0].y };
@@ -909,9 +917,10 @@ function bindLiveGestures() {
 function handleTap(touch) {
   if (state.pipeline?.sourceKind !== 'camera') return;
   const stage = $('liveStage');
-  const rect = stage.getBoundingClientRect();
-  const x = (touch.clientX - rect.left) / rect.width;
-  const y = (touch.clientY - rect.top) / rect.height;
+  const rect = layoutRect(stage);
+  const point = layoutPoint(touch);
+  const x = (point.x - rect.left) / rect.width;
+  const y = (point.y - rect.top) / rect.height;
 
   if (state.pipeline.locked || state.pipeline.zoom > 1.02) {
     // 放大状态下单击用于复位视图，避免误触发对焦
@@ -920,7 +929,7 @@ function handleTap(touch) {
     return;
   }
 
-  showFocusRing(touch.clientX - rect.left, touch.clientY - rect.top);
+  showFocusRing(point.x - rect.left, point.y - rect.top);
   state.pipeline.focusAt(x, y).then((ok) => {
     if (ok) setLiveMessage('已对焦');
     setTimeout(() => {
@@ -1124,8 +1133,8 @@ function updateCoursewareViewportOverlay() {
   const surface = coursewareSurface();
   if (!remote || !surface || surface.hidden || state.screen !== 'CoursewarePlay' || state.cwPdf.rendering) return;
   const stage = coursewareStage();
-  const stageRect = stage.getBoundingClientRect();
-  const content = surface.getBoundingClientRect();
+  const stageRect = layoutRect(stage);
+  const content = layoutRect(surface);
   if (!content.width || !content.height || !stage.clientWidth || !stage.clientHeight) return;
   const originX = stageRect.left + stage.clientLeft;
   const originY = stageRect.top + stage.clientTop;
@@ -1209,7 +1218,7 @@ function updateMediaZoomStatus() {
  */
 function currentMediaGeometry(item) {
   const img = $('mediaPreview');
-  const box = $('mediaPreviewBox').getBoundingClientRect();
+  const box = layoutRect($('mediaPreviewBox'));
   return mediaPreviewGeometry(img.offsetWidth, img.offsetHeight, box.width, box.height,
     img.naturalWidth, img.naturalHeight, item.rotation || 0);
 }
@@ -1242,7 +1251,7 @@ function bindMediaGestures() {
 
   const pointsOf = (event) => {
     const list = event.touches ? Array.from(event.touches) : [];
-    return list.map((p) => ({ x: p.clientX, y: p.clientY }));
+    return list.map(layoutPoint);
   };
   const distOf = (pts) => Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
   const centerOf = (pts) => ({
@@ -1303,7 +1312,7 @@ function bindMediaGestures() {
 
     // 一、点动切换：抬手立即切（等双击判定窗口会明显发懒）
     if (!gesture.moved && Date.now() - gesture.startedAt <= CW_TAP_MAX_DURATION_MS) {
-      const box = stage.getBoundingClientRect();
+      const box = layoutRect(stage);
       switchMediaBy(gesture.start.x < box.left + box.width / 2 ? -1 : 1);
       return;
     }
@@ -1339,7 +1348,7 @@ function bindMediaGestures() {
     trackPaging(pts);
     if (pts.length >= 2) {
       pinchActive = true;
-      const box = stage.getBoundingClientRect();
+      const box = layoutRect(stage);
       const current = distOf(pts);
       if (current > 0 && lastDist > 0) {
         // 两指间距明显变化 → 这一轮算"捏合缩放"，不再当成点动 / 滑动切换
@@ -1362,7 +1371,7 @@ function bindMediaGestures() {
     if (pts.length === 1 && lastSingle) {
       const dx = pts[0].x - lastSingle.x;
       const dy = pts[0].y - lastSingle.y;
-      const box = stage.getBoundingClientRect();
+      const box = layoutRect(stage);
       if (box.width && box.height) panByMedia(dx, dy);
       lastSingle = { x: pts[0].x, y: pts[0].y };
       event.preventDefault();
@@ -2262,7 +2271,7 @@ function coursewareStage() {
 function coursewareStageSize() {
   const stage = coursewareStage();
   if (!stage) return { width: 0, height: 0 };
-  const rect = stage.getBoundingClientRect();
+  const rect = layoutRect(stage);
   return { width: rect.width, height: rect.height };
 }
 
@@ -2306,7 +2315,8 @@ const CW_FIT_TABLET_MAX_WIDTH_LOSS = 0.03; // 平板舞台与课件比例接近�
 
 /** 是否手机横屏布局（与 style.css 里 (orientation: landscape) and (max-height: 30rem) 对齐） */
 function coursewarePhoneLayout() {
-  return window.matchMedia('(orientation: landscape) and (max-height: 30rem)').matches;
+  const root = $('orientationRoot');
+  return root.clientWidth > root.clientHeight && root.clientHeight <= 480;
 }
 
 /**
@@ -2608,11 +2618,11 @@ function bindCoursewareGestures() {
   let pinchStartSpan = 0;
   let pinchStartCenter = null;
 
-  const pointsOf = (event) => Array.from(event.touches || []).map((p) => ({ x: p.clientX, y: p.clientY }));
+  const pointsOf = (event) => Array.from(event.touches || []).map(layoutPoint);
   const distOf = (pts) => Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
   const centerOf = (pts) => ({ x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 });
   const focusOf = (point) => {
-    const rect = stage.getBoundingClientRect();
+    const rect = layoutRect(stage);
     return {
       x: point.x - (rect.left + rect.width / 2),
       y: point.y - (rect.top + rect.height / 2)
@@ -2674,7 +2684,7 @@ function bindCoursewareGestures() {
 
     // 一、点动翻页：抬手立即翻（要等双击判定窗口的话，每次翻页都会慢半拍）
     if (!gesture.moved && Date.now() - gesture.startedAt <= CW_TAP_MAX_DURATION_MS) {
-      const rect = stage.getBoundingClientRect();
+      const rect = layoutRect(stage);
       const previous = gesture.start.x < rect.left + rect.width / 2;
       navigateCourseware(previous ? -1 : 1);
       return;
@@ -2773,11 +2783,11 @@ function bindCoursewareGestures() {
   // 桌面 / 触控板调试用：滚轮缩放
   stage.addEventListener('wheel', (event) => {
     if (!coursewarePreviewReady()) return;
-    const rect = stage.getBoundingClientRect();
+    const rect = layoutRect(stage);
     applyCoursewareGesture({
       factor: event.deltaY < 0 ? 1.08 : 1 / 1.08,
-      focusX: event.clientX - (rect.left + rect.width / 2),
-      focusY: event.clientY - (rect.top + rect.height / 2)
+      focusX: layoutPoint(event).x - (rect.left + rect.width / 2),
+      focusY: layoutPoint(event).y - (rect.top + rect.height / 2)
     });
     notifyCoursewareViewport(true);
     event.preventDefault();
@@ -2840,7 +2850,8 @@ function renderCoursewareList(items, forManage) {
     main.querySelector('.cw-item-name').textContent = item.title || item.fileName || '未命名课件';
     main.querySelector('.cw-item-meta').textContent =
       `${formatBytes(item.size)} · ${formatDate(item.createdAt)}`;
-    main.prepend(coursewareListPreviews.add(item, cwTypeText));
+    const thumbnail = coursewareListPreviews.add(item, cwTypeText, item.linkUrl ? null :
+      () => documentPreview.open(item));
     const progress = /\.pdf(?:[?#]|$)/i.test(item.url || '') ? playbackProgress(item) : null;
     if (progress) {
       main.classList.add('has-playback-progress');
@@ -2862,6 +2873,7 @@ function renderCoursewareList(items, forManage) {
     del.textContent = '删除';
     del.addEventListener('click', () => confirmDeleteCourseware(item));
 
+    row.appendChild(thumbnail);
     row.appendChild(main);
     row.appendChild(del);
     body.appendChild(row);
@@ -2985,7 +2997,6 @@ function updateCoursewareStatus() {
   // 滚动折算出来的，一次捏合就从"第 1 / 1 屏"变成"第 1 / 5 屏"，文字一长就把底部横条挤到
   // 第二行（实测 iPad mini 在 1 行 / 2 行之间跳、整屏跟着上下移），放大倍数在画面上也看得到。
   $('cwPlayStatus').textContent = `第 ${slidePage(cw)} / ${slideCount(cw)} 页`;
-  $('cwPageInput').placeholder = `1-${slideCount(cw)}`;
 }
 
 function handleCoursewareState(message) {
@@ -3096,24 +3107,6 @@ function jumpToCoursewarePage(target, { atBottom = false } = {}) {
   updateCoursewareStatus();
 }
 
-function gotoCoursewarePage() {
-  const raw = $('cwPageInput').value.trim();
-  const page = Number(raw);
-  if (!Number.isFinite(page) || page < 1) {
-    toast('请输入有效页码', { warn: true });
-    return;
-  }
-  if (!state.joined || !state.courseware) return;
-  // 用户输入的是原始幻灯片页码；渲染和同步继续使用状态编号。
-  const knownTotal = slideCount(state.courseware);
-  const target = knownTotal > 0 ? clamp(Math.floor(page), 1, knownTotal) : Math.floor(page);
-  const physical = firstState(state.courseware, target);
-  if (!physical) { toast('该页是隐藏幻灯片，无法播放', { warn: true }); return; }
-  jumpToCoursewarePage(physical);
-  $('cwPageInput').value = '';
-  $('cwPageInput').blur(); // 收起键盘，避免键盘压着界面、也免得 iOS 把页面滚走
-}
-
 function stopCoursewareSignals() {
   const stopSent = state.signaling?.sendStop() === true;
   const closeSent = state.signaling?.sendCoursewareClose() === true;
@@ -3181,6 +3174,7 @@ function bindPageLongPress(buttonId, delta) {
  * 万一某个浏览器确实派发了音量键事件，也按安卓的规则处理（音量+ 上一页、音量- 下一页）。
  */
 function handleCoursewarePagingKey(event) {
+  if (document.querySelector('.document-preview, .quick-page-modal')) return;
   if (state.screen !== 'CoursewarePlay' || !state.courseware || !state.joined) return;
   if (event.ctrlKey || event.metaKey || event.altKey) return;
   // 正在输入页码 / 密码时不抢按键
@@ -3249,12 +3243,35 @@ function pinDocumentSoon() {
 }
 
 function bindStaticEvents() {
+  orientationLock = createOrientationLock({ root: $('orientationRoot'),
+    read: () => storage.get('screen_orientation', 'auto'),
+    save: value => storage.set('screen_orientation', value),
+    onChange: () => {
+      requestAnimationFrame(() => {
+        if (state.screen === 'CoursewarePlay') refitCoursewareViewport();
+        state.cwBoard?.invalidate(); state.mediaBoard?.invalidate();
+      });
+    }
+  });
+  orientationLock.update();
+  document.querySelectorAll('[data-screen-orientation]').forEach(button => {
+    button.addEventListener('click', () => orientationLock.select(button.dataset.screenOrientation));
+  });
+  documentPreview = createDocumentPreview($('orientationRoot'));
+  quickPagePicker = createQuickPagePicker({ root: $('orientationRoot'),
+    getCourseware: () => state.courseware,
+    getPdf: () => state.cwPdf.url === state.courseware?.url ? state.cwPdf.doc : null,
+    isConnected: () => state.joined,
+    onSelect: page => jumpToCoursewarePage(page),
+    onUnavailable: () => toast('课件预览加载完成后可快速翻页')
+  });
   embeddedVideoControls = createEmbeddedVideos({
     container: document.querySelector('.cw-footer .classroom-actions'), remote: true,
     getContext: () => state.screen === 'CoursewarePlay' && state.courseware && !state.coursewareSuspended ? { url: state.courseware.url, page: state.courseware.page } : null,
     send: payload => state.signaling?.send(payload) ?? false
   });
   coursewareLinkControls = createCoursewareLinks({
+    getRect: layoutRect,
     container: $('cwLinkOverlay'),
     getSurface: coursewareSurface,
     getDocument: () => state.cwPdf.doc,
@@ -3421,7 +3438,7 @@ function bindStaticEvents() {
 
   bindPageLongPress('cwPrevPage', -1);
   bindPageLongPress('cwNextPage', 1);
-  $('cwGotoPage').addEventListener('click', () => gotoCoursewarePage());
+  $('cwQuickPage').addEventListener('click', () => quickPagePicker.open());
   $('cwCloseButton').addEventListener('click', () => stopCourseware());
 
   bindLiveGestures();

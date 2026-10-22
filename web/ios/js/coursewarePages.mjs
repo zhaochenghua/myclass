@@ -19,6 +19,16 @@ export function slideCount(cw) { return cw?.mapping?.slideCount || cw?.pageCount
 export function firstState(cw, slide) {
   return cw?.mapping ? cw.mapping.statePages.indexOf(slide) + 1 : slide;
 }
+export function slideEntries(mapping, count) {
+  const entries = [];
+  for (let index = 0; index < count; index++) {
+    const slide = mapping?.statePages[index] || index + 1;
+    const previous = entries[entries.length - 1];
+    if (previous?.slide === slide) previous.last = index + 1;
+    else entries.push({ slide, first: index + 1, last: index + 1 });
+  }
+  return entries;
+}
 export async function loadPageMapping(url, count) {
   // AbortSignal.timeout() needs Chrome 103+ / Safari 16.4+. Older classroom browsers
   // and iPads would otherwise throw here, be swallowed by the catch below, and

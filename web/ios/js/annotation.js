@@ -10,6 +10,8 @@
 // 渲染策略：已完成笔迹画在离屏 base 画布上，可见画布每帧只叠加"进行中的笔画"，
 // 避免每次手指移动都全量重绘（对齐 Android 的离屏层 + 增量追加思路）。
 
+import { layoutPoint, layoutRect } from './orientation.mjs?v=20261022-reader';
+
 export const ANNOTATION_COLORS = ['#E87500', '#D00000', '#0057B8', '#00843D', '#FFFFFF'];
 export const DEFAULT_COLOR = '#D00000';
 export const PEN_WIDTH = 4;
@@ -294,7 +296,7 @@ export class AnnotationBoard {
   }
 
   render() {
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = layoutRect(this.canvas);
     const dpr = window.devicePixelRatio || 1;
     if (rect.width <= 0 || rect.height <= 0) return;
 
@@ -345,9 +347,9 @@ export class AnnotationBoard {
   #contentRect() {
     const surface = this.getSurface();
     if (!surface) return null;
-    const content = surface.getBoundingClientRect();
+    const content = layoutRect(surface);
     if (content.width <= 0 || content.height <= 0) return null;
-    const canvas = this.canvas.getBoundingClientRect();
+    const canvas = layoutRect(this.canvas);
     return {
       left: content.left - canvas.left,
       top: content.top - canvas.top,
@@ -496,10 +498,11 @@ export class AnnotationBoard {
   #toNormalized(clientX, clientY) {
     const surface = this.getSurface();
     if (!surface) return null;
-    const rect = surface.getBoundingClientRect();
+    const rect = layoutRect(surface);
     if (rect.width <= 0 || rect.height <= 0) return null;
-    const x = (clientX - rect.left) / rect.width;
-    const y = (clientY - rect.top) / rect.height;
+    const point = layoutPoint({ x: clientX, y: clientY });
+    const x = (point.x - rect.left) / rect.width;
+    const y = (point.y - rect.top) / rect.height;
     if (x < 0 || x > 1 || y < 0 || y > 1) return null;
     return { x, y };
   }

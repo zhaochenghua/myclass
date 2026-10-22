@@ -17,7 +17,8 @@ function pageTarget(annotation) {
  * The overlay follows the rendered surface's bounding rectangle, including
  * the zoom/pan transform used by both the large-screen and iOS viewers.
  */
-export function createCoursewareLinks({ container, getSurface, getDocument, onExternal, onInternal }) {
+export function createCoursewareLinks({ container, getSurface, getDocument, onExternal, onInternal,
+  getRect = element => element.getBoundingClientRect() }) {
   let entries = [];
   let generation = 0;
   let interactive = true;
@@ -36,8 +37,8 @@ export function createCoursewareLinks({ container, getSurface, getDocument, onEx
       return;
     }
     const host = container.parentElement;
-    const surfaceRect = surface.getBoundingClientRect();
-    const hostRect = host?.getBoundingClientRect();
+    const surfaceRect = getRect(surface);
+    const hostRect = host && getRect(host);
     if (!hostRect || surfaceRect.width <= 0 || surfaceRect.height <= 0) {
       container.hidden = true;
       return;

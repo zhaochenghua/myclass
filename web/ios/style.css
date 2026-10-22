@@ -94,11 +94,20 @@ body::before {
   object-fit: contain;
 }
 
+#orientationRoot {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: top left;
+  container: app / size;
+  overflow: hidden;
+}
+
 .app {
   position: relative;
   width: 100%;
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -508,8 +517,9 @@ input::placeholder {
   opacity: 0.7;
 }
 
-.file-thumbnail { display: flex; align-items: center; justify-content: center; flex: 0 0 60px; width: 60px; height: 60px; overflow: hidden; border-radius: 7px; background: #203238; color: var(--muted); font-size: 0.7rem; }
-.file-thumbnail img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.file-thumbnail { display: flex; align-items: center; justify-content: center; flex: 0 0 96px; width: 96px; height: 54px; padding: 0; border: 0; overflow: hidden; border-radius: 6px; background: #203238; color: var(--muted); font-size: 0.7rem; }
+button.file-thumbnail { cursor: pointer; }
+.file-thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .cw-item-main.has-playback-progress { border-radius: 7px; background: linear-gradient(to right, rgba(101,240,200,0.20) var(--playback-progress), transparent var(--playback-progress)); }
 .cw-item-progress-label { display: block; margin-top: 0.25rem; color: var(--accent); font-size: 0.72rem; font-weight: 400; }
 .cw-item-progress-label[hidden] { display: none; }
@@ -967,7 +977,7 @@ input::placeholder {
      * 列表页：列表占满左侧，按钮收进右侧竖栏，列表本身在横屏下改双列；
      * 摄像头直播页：工具栏从底部移到右侧竖栏（对应安卓的 dp(86) 侧栏）。
    ================================================================== */
-@media (orientation: landscape) {
+@container app (orientation: landscape) {
   /* ---- 表单 / 菜单类：单列 -> 左右两栏 ---- */
   .panel {
     /* 两栏：左＝标题与状态，右＝输入与按钮（对应安卓横屏的 landscapeRoot 左右等分） */
@@ -1183,7 +1193,7 @@ input::placeholder {
    40px，画笔模式下标注工具排不下时自动折成两行（约 86px），课件仍整页可见。
    手机横屏不走这一套，见文件末尾 (max-height: 30rem) 块里的窄竖栏方案。
    ================================================================== */
-@media (orientation: landscape) and (min-width: 60rem) {
+@container app (orientation: landscape) and (min-width: 60rem) {
   #viewCoursewarePlay {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -1435,7 +1445,7 @@ input::placeholder {
    底部多出一块黑"。这种宽度下把画笔模式的横条高度钉成两行最稳。
    更宽的 iPad（mini 1133 / 10.9" 1180 起）内容本来就放得下一行，不加锁。
    ================================================================== */
-@media (orientation: landscape) and (min-width: 60rem) and (max-width: 70rem) {
+@container app (orientation: landscape) and (min-width: 60rem) and (max-width: 70rem) {
   #viewCoursewarePlay:has(#cwAnnotationBar:not([hidden])) > .cw-side {
     min-height: 5.4rem;
   }
@@ -1462,14 +1472,14 @@ input::placeholder {
 #updateDialog .classroom-actions { flex-wrap: wrap; }
 #updateDialog .classroom-actions > button { flex: 1 1 7.5rem; }
 
-@media (orientation: landscape) {
+@container app (orientation: landscape) {
   .classroom-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
   .live-bottom { justify-content: flex-start; overflow-y: auto; }
   .live-bottom .classroom-actions { flex-direction: column; }
 }
 
 /* 矮横屏（iPhone 横过来高度约 24rem）：进一步压缩纵向占用 */
-@media (orientation: landscape) and (max-height: 30rem) {
+@container app (orientation: landscape) and (max-height: 30rem) {
   .view {
     padding-top: calc(var(--safe-top) + 0.5rem);
     padding-bottom: calc(var(--safe-bottom) + 0.5rem);
@@ -1686,6 +1696,45 @@ input::placeholder {
     display: none;
   }
 }
+
+.orientation-selector { display: flex; width: 100%; gap: 4px; }
+.orientation-selector button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 6px 2px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 13px; }
+.orientation-selector button[aria-pressed="true"] { background: var(--accent); color: #04140f; }
+
+@container app (orientation: portrait) {
+  #viewCoursewarePlay { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; padding: calc(var(--safe-top) + 8px) calc(var(--safe-right) + 12px) calc(var(--safe-bottom) + 8px) calc(var(--safe-left) + 12px); }
+  #viewCoursewarePlay > .list-header { min-width: 0; }
+  #viewCoursewarePlay .list-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #viewCoursewarePlay > .cw-stage { min-width: 0; margin: 6px 0; }
+  #viewCoursewarePlay > .cw-side { flex-shrink: 0; max-height: 52cqh; overflow-y: auto; }
+  #viewCoursewarePlay .cw-footer { gap: 6px; padding-top: 4px; }
+  #viewCoursewarePlay .page-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  #viewCoursewarePlay .page-row .btn, #viewCoursewarePlay .cw-footer > .btn { min-width: 0; min-height: 40px; padding: 6px 8px; font-size: 14px; }
+  #viewCoursewarePlay .classroom-actions { flex-wrap: wrap; gap: 6px; }
+  #viewCoursewarePlay .classroom-actions > button { min-width: 0; min-height: 36px; padding: 4px 8px; }
+  #viewCoursewarePlay .subtitle { margin: 0; }
+  #viewCoursewarePlay .annotation-bar { padding: 2px 0; gap: 4px; }
+  #viewCoursewarePlay .annotation-actions .tool { min-height: 36px; padding: 4px 8px; }
+}
+
+.document-preview { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left); background: #edf0f3; color: #18232b; }
+.document-preview header { display: flex; align-items: center; flex: 0 0 52px; gap: 8px; padding: 4px 8px; background: #fff; }
+.document-preview h2 { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 16px; margin: 0; }
+.document-preview .pill, .preview-status { flex: 0 0 auto; padding: 6px 10px; border: 0; background: transparent; color: #18232b; font: inherit; min-height: 40px; }
+.preview-status { font-size: 13px; }
+.document-pages { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+.document-page { position: relative; width: 100%; margin-bottom: 3px; background: #fff; overflow: hidden; }
+.document-page canvas { display: block; width: 100%; height: 100%; }
+.document-page button { position: absolute; inset: 40% 10% auto; padding: 12px; border: 1px solid #b6c1c8; border-radius: 4px; background: #fff; color: #18232b; }
+.document-pages > img { display: block; width: 100%; height: auto; }
+.document-pages > video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.quick-page-modal { position: absolute; inset: 0; z-index: 65; display: flex; align-items: center; justify-content: center; padding: calc(var(--safe-top) + 8px) calc(var(--safe-right) + 8px) calc(var(--safe-bottom) + 8px) calc(var(--safe-left) + 8px); background: rgba(0,0,0,0.45); }
+.quick-page-panel { display: flex; flex-direction: column; gap: 8px; width: min(720px, 100%); height: 78%; max-height: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: #1b2736; }
+.quick-page-label { flex: 0 0 auto; margin: 0; text-align: center; font-size: 14px; }
+.quick-page-preview { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; overflow: hidden; background: #0f1620; }
+.quick-page-preview canvas { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+.quick-page-panel input { flex: 0 0 44px; width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; appearance: auto; -webkit-appearance: auto; accent-color: var(--accent); touch-action: none; }
+.quick-page-cancel { align-self: center; min-height: 36px; }
 
 .clipboard-card { width: min(560px, 100%); }
 .clipboard-card label { display:block; margin:12px 0 6px; font-weight:600; }

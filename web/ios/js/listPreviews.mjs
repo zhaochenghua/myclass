@@ -1,5 +1,7 @@
 import { mediaKind } from './mediaFiles.mjs?v=20261012-ios3';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261012-ios3';
+import { loadPageMapping, slideEntries } from './coursewarePages.mjs?v=20261022-reader';
+import { layoutRect } from './orientation.mjs?v=20261022-reader';
 
 export function playbackProgress(item) {
   const saved = item?.playbackProgress;
@@ -55,7 +57,10 @@ async function thumbnail(item, signal) {
     if (isPdf) {
       pdf = await openPdfDocument(url, { signal });
       if (signal.aborted) throw new Error('cancelled');
-      await renderPdfPage(pdf, playbackProgress(item)?.physicalPage || 1, canvas, 180);
+      const mapping = await loadPageMapping(url, pdf.numPages);
+      const savedPage = playbackProgress(item)?.physicalPage || 1;
+      const page = slideEntries(mapping, pdf.numPages).find(page => page.last >= savedPage);
+      await renderPdfPage(pdf, page?.last || 1, canvas, 240);
     } else {
       media = kind === 'image' ? new Image() : document.createElement('video');
       if (kind === 'video') {
@@ -96,15 +101,19 @@ export class ListPreviews {
       this.pump();
     }, { root, rootMargin: '100px' }) : null;
     this.fallback = () => {
-      const box = root.getBoundingClientRect();
-      for (const [node, state] of this.entries) { const rect = node.getBoundingClientRect(); state.visible = rect.bottom >= box.top && rect.top <= box.bottom; }
+      const box = layoutRect(root);
+      for (const [node, state] of this.entries) { const rect = layoutRect(node); state.visible = rect.bottom >= box.top && rect.top <= box.bottom; }
       this.pump();
     };
     if (!this.observer) root.addEventListener('scroll', this.fallback, { passive: true });
   }
-  add(item, label = '文件') {
-    const node = document.createElement('span'); node.className = 'file-thumbnail';
-    node.textContent = label; node.setAttribute('aria-hidden', 'true');
+  add(item, label = '文件', onPreview = null) {
+    const node = document.createElement(onPreview ? 'button' : 'span'); node.className = 'file-thumbnail';
+    node.textContent = label;
+    if (onPreview) {
+      node.type = 'button'; node.setAttribute('aria-label', `预览：${item.title || item.fileName || label}`);
+      node.addEventListener('click', onPreview);
+    } else node.setAttribute('aria-hidden', 'true');
     const state = { item, visible: false, done: false, controller: null, url: null };
     this.entries.set(node, state);
     this.observer?.observe(node);
