@@ -27,6 +27,8 @@ export class SignalingClient {
     this.socket = null;
     this.closedByUser = false;
     this.reconnectTimer = null;
+    this.probeTimer = null;
+    this.probeId = 0;
     this.joinPayload = null; // { code, token } —— 重连后自动重新加入
     this.joined = false;
   }
@@ -40,6 +42,8 @@ export class SignalingClient {
     this.closedByUser = true;
     this.joined = false;
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.probeTimer);
+    this.probeTimer = null;
     if (this.socket) {
       this.socket.onopen = null;
       this.socket.onmessage = null;
@@ -66,6 +70,31 @@ export class SignalingClient {
 
   isOpen() {
     return this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  // Safari can retain an OPEN socket after its network connection was suspended.
+  resume() {
+    if (this.closedByUser || !this.joinPayload || this.probeTimer) return;
+    if (!this.isOpen()) {
+      clearTimeout(this.reconnectTimer);
+      this.#open();
+      return;
+    }
+    const socket = this.socket;
+    const at = ++this.probeId;
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      if (this.socket !== socket) return;
+      socket.onclose = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      try { socket.close(); } catch { /* ignore */ }
+      this.socket = null;
+      this.joined = false;
+      this.handlers.onDisconnected?.();
+      this.#open();
+    }, 4000);
+    this.send({ type: 'client.ping', at });
   }
 
   send(payload) {
@@ -208,6 +237,7 @@ export class SignalingClient {
     this.socket = socket;
 
     socket.onopen = () => {
+      if (this.socket !== socket) return;
       this.handlers.onOpen?.();
       if (this.joinPayload) {
         this.#sendJoin();
@@ -215,6 +245,7 @@ export class SignalingClient {
     };
 
     socket.onmessage = (event) => {
+      if (this.socket !== socket) return;
       let message = null;
       try {
         message = JSON.parse(event.data);
@@ -224,6 +255,15 @@ export class SignalingClient {
       if (!message || typeof message.type !== 'string') return;
 
       switch (message.type) {
+        case 'server.pong':
+          if (message.at === this.probeId) {
+            clearTimeout(this.probeTimer);
+            this.probeTimer = null;
+          }
+          break;
+        case 'viewer.courseware.viewport':
+          this.handlers.onViewerCoursewareViewport?.(message);
+          break;
         case 'student.selection.state':
           this.handlers.onStudentSelection?.(message);
           break;
@@ -293,10 +333,14 @@ export class SignalingClient {
     };
 
     socket.onerror = () => {
+      if (this.socket !== socket) return;
       this.handlers.onSignalError?.('信令连接异常');
     };
 
     socket.onclose = () => {
+      if (this.socket !== socket) return;
+      clearTimeout(this.probeTimer);
+      this.probeTimer = null;
       this.joined = false;
       this.socket = null;
       if (this.closedByUser) return;

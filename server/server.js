@@ -449,11 +449,23 @@ app.get(`${PATH_PREFIX}/api/admin/usage`, requireAuth, requireAdmin, async (req,
     const users = await readUsers();
     const report = await usageStore.report({ from, to, users });
     const rooms = [...roomManager.rooms.values()];
+    const usersById = new Map(users.map(user => [user.id, user]));
+    const teachers = rooms.filter(room => room.teacherSocket?.readyState === 1).map(room => {
+      const user = usersById.get(room.teacherInfo?.id);
+      return {
+        id: room.teacherInfo?.id || null,
+        username: user?.username || room.teacherInfo?.username || '未登录设备',
+        role: user ? (user.role || (user.username === 'admin' ? 'admin' : 'user')) :
+          room.teacherInfo?.id ? 'deleted' : 'anonymous',
+        roomCode: room.code,
+        viewerOnline: room.viewerSocket?.readyState === 1
+      };
+    }).sort((a, b) => a.username.localeCompare(b.username, 'zh-CN') || a.roomCode.localeCompare(b.roomCode));
     report.online = {
       classrooms: rooms.filter(room => room.viewerSocket?.readyState === 1).length,
-      teacherDevices: rooms.filter(room => room.teacherSocket?.readyState === 1).length,
-      users: new Set(rooms.filter(room => room.teacherSocket?.readyState === 1 && room.teacherInfo?.id)
-        .map(room => room.teacherInfo.id)).size
+      teacherDevices: teachers.length,
+      users: new Set(teachers.filter(teacher => teacher.id).map(teacher => teacher.id)).size,
+      teachers
     };
     res.setHeader('Cache-Control', 'no-store');
     res.json(report);

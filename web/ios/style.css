@@ -706,6 +706,15 @@ input::placeholder {
   pointer-events: none;
 }
 
+.cw-viewer-viewport {
+  position: absolute;
+  box-sizing: border-box;
+  z-index: 4;
+  border: 2px solid #ffc107;
+  background: rgba(255, 193, 7, 0.165);
+  pointer-events: none;
+}
+
 .courseware-link-hit {
   position: absolute;
   display: block;

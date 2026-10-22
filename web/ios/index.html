@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20261015-courseware-links" />
+    <link rel="stylesheet" href="./style.css?v=20261022-shared-viewport" />
   </head>
   <body>
     <!-- 采集用的隐藏 video / image 容器（不能 display:none，否则 iOS 会停止解码） -->
@@ -94,7 +94,6 @@
               autocomplete="off"
               placeholder="----"
             />
-            <button class="btn btn-ghost" data-clipboard-link type="button">剪贴板链接</button>
             <button class="btn btn-primary" id="connectButton" type="button">连接</button>
             <div class="split-row">
               <button class="btn btn-ghost" id="manageCoursewareButton" type="button">
@@ -294,6 +293,7 @@
           <div class="courseware-link-overlay" id="cwLinkOverlay" hidden aria-label="课件链接"></div>
           <img class="cw-page-image" id="cwPageImage" alt="" hidden />
           <canvas class="annotation-canvas" id="cwAnnotationCanvas" hidden></canvas>
+          <div class="cw-viewer-viewport" id="cwViewerViewport" hidden aria-hidden="true"></div>
           <p class="cw-stage-hint" id="cwStageHint">正在打开课件...</p>
         </div>
 
@@ -407,6 +407,6 @@
 
     <div class="toast" id="toast" hidden></div>
 
-    <script type="module" src="./js/app.js?v=20261015-courseware-links"></script>
+    <script type="module" src="./js/app.js?v=20261022-shared-viewport"></script>
   </body>
 </html>

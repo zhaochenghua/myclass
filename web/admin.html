@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管理后台 - 上课投屏平台</title>
   <link rel="stylesheet" href="./style.css">
-  <link rel="stylesheet" href="./admin.css?v=20261020-fonts">
+  <link rel="stylesheet" href="./admin.css?v=20261022-online-teachers">
 </head>
 <body>
   <main class="admin-page">
@@ -76,6 +76,14 @@
         </form>
         <p id="usageStatus" class="class-help" role="status" aria-live="polite"></p>
         <div id="usageSummary" class="usage-summary"></div>
+        <h3>当前在线教师</h3>
+        <p id="onlineTeachersStatus" class="class-help" role="status" aria-live="polite"></p>
+        <div class="table-scroll">
+          <table class="data-table online-teachers-table" aria-label="当前在线教师">
+            <thead><tr><th>账号</th><th>角色</th><th>连接码</th><th>大屏状态</th></tr></thead>
+            <tbody id="onlineTeachersBody"></tbody>
+          </table>
+        </div>
         <h3>每日使用趋势</h3>
         <p class="class-help">按北京时间统计；每行展示当天活跃账号数，以及课件、图片、视频和链接的投屏打开次数。</p>
         <div id="usageTrend" class="usage-trend" aria-label="每日使用趋势"></div>
@@ -289,6 +297,6 @@
   </main>
 
   <script src="./studentRoster.js?v=20260919a"></script>
-  <script src="./admin.js?v=20261020-fonts"></script>
+  <script src="./admin.js?v=20261022-online-teachers"></script>
 </body>
 </html>

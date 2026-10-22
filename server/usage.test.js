@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { once } = require('node:events');
+const WebSocket = require('ws');
 const { createUsageStore, chinaDay, dateRange } = require('./usageStore');
 const { RoomManager } = require('./roomManager');
 const { startTestServer } = require('./testSupport');
@@ -102,7 +104,78 @@ test('statistics API is admin-only and counts successful logins/uploads without 
   assert.equal(data.users.find(user => user.id === 'bob').activeDays, 0);
   assert.equal(data.users.some(user => user.token || user.passwordHash), false);
   assert.equal(data.to, chinaDay(Date.now()));
-  assert.deepEqual(data.online, { classrooms: 0, teacherDevices: 0, users: 0 });
+  assert.deepEqual(data.online, { classrooms: 0, teacherDevices: 0, users: 0, teachers: [] });
   assert.equal((await (await server.api('/admin/usage', 'admin')).json()).totals.logins, 1);
   assert.equal((await server.api('/admin/usage?from=bad&to=2026-10-12', 'admin')).status, 400);
+});
+
+test('online teacher names are admin-only live connections, deduplicated by account and contain no credentials', async t => {
+  const server = await startTestServer();
+  const sockets = [];
+  t.after(async () => { sockets.forEach(socket => socket.terminate()); await server.close(); });
+  const file = path.join(server.directory, 'server/data/users.json');
+  const users = JSON.parse(await fs.readFile(file, 'utf8'));
+  users.push({ id: 'admin-test', username: 'admin_test', role: 'admin', token: 'admin-test-token' });
+  await fs.writeFile(file, JSON.stringify(users));
+  async function connect() {
+    const socket = new WebSocket(server.base.replace('http:', 'ws:') + '/ws');
+    sockets.push(socket);
+    await once(socket, 'open');
+    return socket;
+  }
+  function message(socket, type) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { socket.off('message', receive); reject(Error('Waiting for ' + type)); }, 3000);
+      function receive(raw) {
+        const value = JSON.parse(raw);
+        if (value.type !== type) return;
+        clearTimeout(timer); socket.off('message', receive); resolve(value);
+      }
+      socket.on('message', receive);
+    });
+  }
+  async function classroom(token) {
+    const viewer = await connect();
+    const created = message(viewer, 'room.created');
+    viewer.send(JSON.stringify({ type: 'viewer.join' }));
+    const room = await created;
+    const teacher = await connect();
+    const accepted = message(teacher, 'join.accepted');
+    teacher.send(JSON.stringify({ type: 'teacher.join', code: room.code, ...(token ? { token } : {}) }));
+    await accepted;
+    return { viewer, teacher, code: room.code, recoveryKey: room.recoveryKey };
+  }
+  const first = await classroom('alice-test-token');
+  const second = await classroom('alice-test-token');
+  const anonymous = await classroom();
+  assert.equal((await server.api('/admin/usage')).status, 403);
+  const report = async () => (await (await server.api('/admin/usage?from=2026-01-01&to=2026-01-01', 'admin')).json()).online;
+  let online = await report();
+  assert.equal(online.users, 1);
+  assert.equal(online.teacherDevices, 3);
+  assert.equal(online.classrooms, 3);
+  assert.equal(online.teachers.filter(row => row.username === 'alice_test').length, 2);
+  assert.deepEqual(online.teachers.find(row => row.roomCode === anonymous.code), {
+    id: null, username: '未登录设备', role: 'anonymous', roomCode: anonymous.code, viewerOnline: true
+  });
+  const serialized = JSON.stringify(online);
+  assert.equal(serialized.includes('alice-test-token'), false);
+  assert.equal(serialized.includes(first.recoveryKey), false);
+  const offline = message(first.teacher, 'viewer.reconnecting');
+  first.viewer.close();
+  await offline;
+  online = await report();
+  assert.equal(online.teachers.find(row => row.roomCode === first.code).viewerOnline, false);
+  assert.equal(online.teacherDevices, 3);
+  const disconnected = message(second.viewer, 'teacher.offline');
+  second.teacher.close();
+  await disconnected;
+  online = await report();
+  assert.equal(online.teacherDevices, 2);
+  assert.equal(online.users, 1);
+  assert.equal(online.teachers.some(row => row.roomCode === second.code), false);
+  const renamed = JSON.parse(await fs.readFile(file, 'utf8'));
+  renamed.find(user => user.id === 'alice').username = 'AliceRenamed';
+  await fs.writeFile(file, JSON.stringify(renamed));
+  assert.equal((await report()).teachers.find(row => row.roomCode === first.code).username, 'AliceRenamed');
 });

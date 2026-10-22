@@ -44,6 +44,8 @@ function showLogin() {
   $('#usageTableBody').replaceChildren();
   $('#usageSummary').replaceChildren();
   $('#usageTrend').replaceChildren();
+  $('#onlineTeachersBody').replaceChildren();
+  $('#onlineTeachersStatus').textContent = '';
   resetClassEditor();
   $('#loginPanel').hidden = false;
   $('#mainPanel').hidden = true;
@@ -403,11 +405,14 @@ async function loadUsage() {
   $('#usageTableBody').replaceChildren();
   $('#usageStatus').classList.remove('usage-error');
   $('#usageStatus').textContent = '正在加载使用统计…';
+  $('#onlineTeachersBody').replaceChildren();
+  $('#onlineTeachersStatus').textContent = '正在查询在线教师...';
   try {
     const data = await apiGet(`/admin/usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
     if (request !== usageRequest || currentUser?.role !== 'admin') return;
     if (data.error || !data.totals) throw new Error(data.error || '统计数据加载失败');
     usageData = data;
+    renderOnlineTeachers(data);
     const t = data.totals;
     const cards = [
       ['活跃账号 / 注册账号', `${t.activeUsers} / ${t.registeredUsers}`],
@@ -439,6 +444,35 @@ async function loadUsage() {
     if (request !== usageRequest) return;
     $('#usageStatus').textContent = `加载失败：${error.message}`;
     $('#usageStatus').classList.add('usage-error');
+    $('#onlineTeachersStatus').textContent = '在线状态查询失败';
+  }
+}
+function renderOnlineTeachers(data) {
+  const body = $('#onlineTeachersBody');
+  body.replaceChildren();
+  const teachers = data.online?.teachers;
+  if (!Array.isArray(teachers)) {
+    $('#onlineTeachersStatus').textContent = '服务器尚未提供在线教师名单';
+    return;
+  }
+  $('#onlineTeachersStatus').textContent = `${data.online.users} 个账号 · ${data.online.teacherDevices} 台教师设备 · 刷新于 ${usageTime(data.generatedAt)}`;
+  if (!teachers.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 4;
+    cell.textContent = '当前无教师设备在线';
+    row.append(cell); body.append(row);
+    return;
+  }
+  for (const teacher of teachers) {
+    const row = document.createElement('tr');
+    for (const value of [teacher.username, usageRoles[teacher.role] || teacher.role, teacher.roomCode,
+      teacher.viewerOnline ? '已连接' : '断线重连中']) {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+    }
+    body.append(row);
   }
 }
 function filteredUsageUsers() {

@@ -252,3 +252,28 @@ test('progress persistence uses the authenticated teacher and rejects stale view
   await f.viewer.take('server.pong');
   assert.equal(saved.length,1);
 });
+
+test('the shared range report never overwrites the teacher zoom and works after a legacy-shaped rejoin', async t => {
+  const f = await fixture(t);
+  f.send({ type: 'courseware.open', url: '/zoom.pdf', page: 1 });
+  const opened = await f.viewer.take('courseware.open');
+  const zoom = { type: 'courseware.image.viewport', scale: 1.5,
+    centerX: 0.2, centerY: 0.4, rotation: 0, page: 1, progress: true };
+  f.send(zoom);
+  await f.viewer.take(zoom.type);
+  const report = { type: 'viewer.courseware.viewport', url: opened.url, page: 1,
+    presentationRevision: opened.presentationRevision, width: 1600, height: 900,
+    left: 0.2, top: 0.3, right: 0.6, bottom: 0.5 };
+  f.viewer.sendJson(report);
+  assert.deepEqual(await f.teacher.take(report.type), report);
+  const room = f.manager.rooms.get(f.room.code);
+  assert.equal(room.presentation.snapshot().viewport.scale, zoom.scale);
+  f.teacher.close();
+  await f.viewer.take('teacher.offline');
+  const next = await f.connect();
+  next.sendJson({ type: 'teacher.join', code: f.room.code, supportsStudentSelection: true });
+  await next.take('join.accepted');
+  f.viewer.sendJson(report);
+  assert.deepEqual(await next.take(report.type), report);
+  assert.equal(room.presentation.snapshot().viewport.scale, zoom.scale);
+});

@@ -25,6 +25,8 @@
 .usage-notes { color: var(--muted); margin-top: 1.5rem; line-height: 1.8; }
 .usage-notes summary { cursor: pointer; }
 .usage-error { color: #ff9b9b; }
+.table-scroll .data-table.online-teachers-table { min-width: 0; table-layout: fixed; }
+.online-teachers-table th, .online-teachers-table td { white-space: normal; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .usage-day { grid-template-columns: 86px minmax(20px,1fr) 135px; gap: 0.4rem; font-size: 0.8rem; } .usage-search input { max-width: 160px; } }
 .class-management { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 2rem; }
 .class-create-form, #classEditor { display: flex; flex-direction: column; gap: 0.8rem; }

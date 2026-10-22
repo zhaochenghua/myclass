@@ -21,7 +21,7 @@ import {
   isStandalone,
   isIos
 } from './util.js?v=20260919f';
-import { SignalingClient, resolveWebSocketUrl } from './signaling.js?v=20261014-file-notes';
+import { SignalingClient, resolveWebSocketUrl } from './signaling.js?v=20261022-shared-viewport';
 import { createClassroom } from './classroom.js?v=20260919f';
 import { LivePublisher } from './publisher.js';
 import { MediaPipeline } from './pipeline.js?v=20260920a';
@@ -92,6 +92,7 @@ const state = {
   uploadAbort: null,
   lastHiddenAt: 0
 };
+let viewerCoursewareViewport = null;
 
 // ---------------------------------------------------------------- 引导
 const classroom = createClassroom(state);
@@ -346,6 +347,10 @@ function showConnect() {
 }
 
 function showMenu() {
+  if (!state.joined) {
+    showConnect();
+    return;
+  }
   state.screen = 'Menu';
   showView('Menu');
   const version = state.config?.iosVersion || state.config?.apkVersion || '';
@@ -437,10 +442,12 @@ function ensureSignaling() {
       onViewerCoursewareOpen: handleViewerCoursewareOpen,
       onViewerCoursewareClose: handleViewerCoursewareClose,
       onViewerAnnotation: handleViewerAnnotation,
+      onViewerCoursewareViewport: handleViewerCoursewareViewport,
       onAnnotationsSnapshot: restoreFileAnnotations,
       onEmbeddedVideo: message => embeddedVideoControls?.receive(message),
       onSignalError: (message) => toast(message, { warn: true }),
       onDisconnected: () => {
+        if (state.screen === 'Live' && state.liveActive) state.resumeLiveAfterJoin = true;
         if (state.joined) $('connectHint').textContent = '连接已断开，正在重新连接...';
         state.joined = false;
       }
@@ -466,12 +473,17 @@ function handleJoinAccepted() {
     return;
   }
 
-  if (state.resumeLiveAfterJoin) {
-    state.resumeLiveAfterJoin = false;
-    if (state.screen === 'Live' || state.liveMode === 'image') {
-      restartLive();
-      return;
-    }
+  if (state.screen === 'Live') {
+    if (document.visibilityState !== 'hidden') handleResume({ force: true });
+    return;
+  }
+
+  if (state.screen === 'CoursewarePlay' && state.courseware && !state.coursewareSuspended) {
+    const cw = state.courseware;
+    state.signaling?.sendCoursewareOpen({ url: cw.url, title: cw.title,
+      page: cw.page || 1, screen: cw.screen || 1, linkUrl: cw.linkUrl });
+    notifyCoursewareViewport(true);
+    return;
   }
 
   // 图片视频投屏中断线重连：重新把当前文件推给大屏（视频不重发 open，避免从头播放）
@@ -593,6 +605,7 @@ async function restartLive() {
 }
 
 function stopLive({ notify = true } = {}) {
+  state.resumeLiveAfterJoin = false;
   state.publisher?.stop();
   state.publisher = null;
   if (state.liveActive) {
@@ -1082,6 +1095,54 @@ function sendMediaViewport() {
     centerY: 0.5 + (item.panY || 0),
     rotation: item.rotation || 0
   });
+}
+
+function handleViewerCoursewareViewport(message) {
+  const width = Number(message.width);
+  const height = Number(message.height);
+  const bounds = ['left', 'top', 'right', 'bottom'].map(key => Number(message[key]));
+  if (![width, height].every(value => Number.isFinite(value) && value > 0 && value <= 100000) ||
+      !bounds.every(value => Number.isFinite(value) && value >= 0 && value <= 1) ||
+      bounds[0] >= bounds[2] || bounds[1] >= bounds[3]) return;
+  const cw = state.courseware;
+  if (!cw || state.coursewareSuspended || message.url !== cw.url || Number(message.page) !== cw.page) return;
+  viewerCoursewareViewport = { url: cw.url, page: cw.page, aspect: height / width,
+    left: bounds[0], top: bounds[1], right: bounds[2], bottom: bounds[3] };
+  updateCoursewareViewportOverlay();
+}
+
+function currentViewerCoursewareViewport() {
+  const remote = viewerCoursewareViewport;
+  const cw = state.courseware;
+  return cw && !state.coursewareSuspended && remote?.url === cw.url && remote.page === cw.page ? remote : null;
+}
+
+function updateCoursewareViewportOverlay() {
+  const overlay = $('cwViewerViewport');
+  overlay.hidden = true;
+  const remote = currentViewerCoursewareViewport();
+  const surface = coursewareSurface();
+  if (!remote || !surface || surface.hidden || state.screen !== 'CoursewarePlay' || state.cwPdf.rendering) return;
+  const stage = coursewareStage();
+  const stageRect = stage.getBoundingClientRect();
+  const content = surface.getBoundingClientRect();
+  if (!content.width || !content.height || !stage.clientWidth || !stage.clientHeight) return;
+  const originX = stageRect.left + stage.clientLeft;
+  const originY = stageRect.top + stage.clientTop;
+  const phoneWidth = Math.max(0, clamp((originX + stage.clientWidth - content.left) / content.width, 0, 1) -
+    clamp((originX - content.left) / content.width, 0, 1));
+  const phoneHeight = Math.max(0, clamp((originY + stage.clientHeight - content.top) / content.height, 0, 1) -
+    clamp((originY - content.top) / content.height, 0, 1));
+  const remoteWidth = remote.right - remote.left;
+  const remoteHeight = remote.bottom - remote.top;
+  // Match Android MainActivity.refreshCoursewareViewportOverlay visibility thresholds.
+  if (phoneWidth - remoteWidth <= 0.08 && phoneHeight - remoteHeight <= 0.08 &&
+      phoneWidth * phoneHeight <= remoteWidth * remoteHeight * 1.12) return;
+  overlay.style.left = `${content.left - originX + remote.left * content.width}px`;
+  overlay.style.top = `${content.top - originY + remote.top * content.height}px`;
+  overlay.style.width = `${remoteWidth * content.width}px`;
+  overlay.style.height = `${remoteHeight * content.height}px`;
+  overlay.hidden = false;
 }
 
 const MAX_MEDIA_ZOOM = 8;
@@ -1754,6 +1815,7 @@ function resumeMediaCast() {
       screen: 1
     });
   }
+  if (item.kind === 'image') sendMediaViewport();
   if (state.screen === 'MediaCast' || state.screen === 'MediaQueue') {
     state.screen = 'MediaCast';
     showView('MediaCast');
@@ -2093,6 +2155,7 @@ async function renderCoursewarePage(page, { atBottom = false } = {}) {
     return;
   }
   state.cwPdf.rendering = true;
+  updateCoursewareViewportOverlay();
   try {
     const canvas = $('cwPageCanvas');
     await renderPdfPage(doc, target, canvas);
@@ -2112,6 +2175,7 @@ async function renderCoursewarePage(page, { atBottom = false } = {}) {
     $('cwStageHint').textContent = `第 ${target} 页渲染失败`;
   } finally {
     state.cwPdf.rendering = false;
+    updateCoursewareViewportOverlay();
     const pending = state.cwPdf.pendingPage;
     state.cwPdf.pendingPage = 0;
     if (pending && pending !== target) await renderCoursewarePage(pending, { atBottom });
@@ -2307,6 +2371,7 @@ function applyCoursewareView({ notify = true, force = false } = {}) {
   // 显示矩形变化后按新矩形重画笔迹（笔迹坐标以内容显示矩形为基准）
   state.cwBoard?.invalidate();
   coursewareLinkControls?.update();
+  updateCoursewareViewportOverlay();
   updateCoursewareStatus();
   if (notify) notifyCoursewareViewport(force);
 }
@@ -2359,6 +2424,8 @@ function applyCoursewareGesture({ factor = 1, focusX = 0, focusY = 0, dx = 0, dy
 
 /** 清空视口状态与残留 transform / 比例（关闭课件、释放本地预览时用） */
 function resetCwViewState() {
+  viewerCoursewareViewport = null;
+  $('cwViewerViewport').hidden = true;
   const view = state.cwView;
   view.scale = 1;
   view.translateX = 0;
@@ -2444,9 +2511,11 @@ function requestCoursewareScreenStep(direction) {
   const atTop = view.translateY >= maxY - 0.5;
   if (direction > 0 && atBottom) return true;
   if (direction < 0 && atTop) return true;
+  const step = viewHeight * CW_SCREEN_STEP_RATIO;
+  if (2 * maxY <= step) return true;
 
   view.translateY = clamp(
-    view.translateY - direction * viewHeight * CW_SCREEN_STEP_RATIO,
+    view.translateY - direction * step,
     -maxY,
     maxY
   );
@@ -2465,7 +2534,8 @@ function stepCoursewareBigScreen(direction) {
   if (!natural.width || !natural.height) return true;
 
   const pageAspectHOverW = natural.height / natural.width;
-  const bigMaxYRatio = (pageAspectHOverW - BIG_SCREEN_H_OVER_W) / 2;
+  const bigScreenAspect = currentViewerCoursewareViewport()?.aspect || BIG_SCREEN_H_OVER_W;
+  const bigMaxYRatio = (pageAspectHOverW - bigScreenAspect) / 2;
   if (bigMaxYRatio <= 0) {
     // 大屏也是整页
     view.bigScrollActive = false;
@@ -2487,11 +2557,38 @@ function stepCoursewareBigScreen(direction) {
     view.bigProgressY = 0;
     return true;
   }
-  const stepRatio = (BIG_SCREEN_H_OVER_W * CW_SCREEN_STEP_RATIO) / (2 * bigMaxYRatio);
+  const stepRatio = (bigScreenAspect * CW_SCREEN_STEP_RATIO) / (2 * bigMaxYRatio);
+  if (stepRatio >= 1) {
+    view.bigScrollActive = false;
+    view.bigProgressY = 0;
+    return true;
+  }
   view.bigProgressY = clamp(view.bigProgressY + direction * stepRatio, 0, 1);
   notifyCoursewareViewport(true);
   updateCoursewareStatus();
   return false;
+}
+
+function dragCoursewareViewerViewport(distanceY, adoptReportedPosition) {
+  const remote = currentViewerCoursewareViewport();
+  const view = state.cwView;
+  const base = coursewareBaseSize();
+  const stage = coursewareStageSize();
+  if (!remote || !base.height || base.height * view.scale > stage.height + 1) return false;
+  const visibleFraction = remote.bottom - remote.top;
+  if (visibleFraction >= 0.999) return false;
+  const travel = base.height * view.scale * (1 - visibleFraction);
+  if (travel <= 1) return false;
+  // Adopt the latest screen position only when a real drag starts, as Android does.
+  if (adoptReportedPosition) {
+    view.bigProgressY = remote.bottom >= 0.999 ? 1 : remote.top <= 0.001 ? 0 :
+      clamp(remote.top / (1 - visibleFraction), 0, 1);
+  }
+  view.bigScrollActive = true;
+  view.bigProgressY = clamp(view.bigProgressY + distanceY / travel, 0, 1);
+  notifyCoursewareViewport();
+  updateCoursewareStatus();
+  return true;
 }
 
 /**
@@ -2505,6 +2602,7 @@ function bindCoursewareGestures() {
   let lastCenter = null;
   let lastSpan = 0;
   let lastSingle = null;
+  let viewerDragStarted = false;
   // 两指手势的模式（见 touchmove）：null = 还没分清 | 'pinch' = 捏合缩放 | 'pan' = 平移 / 滑动
   let pinchMode = null;
   let pinchStartSpan = 0;
@@ -2593,6 +2691,7 @@ function bindCoursewareGestures() {
     if (!coursewarePreviewReady()) return;
     const pts = pointsOf(event);
     beginPaging(pts);
+    viewerDragStarted = false;
     if (pts.length >= 2) {
       // 第二根手指落下：先结束当前笔画，再进入双指缩放 / 平移（与安卓一致）
       state.cwBoard?.endActiveStroke(true);
@@ -2646,7 +2745,10 @@ function bindCoursewareGestures() {
     // 画笔模式：单指留给绘制，缩放 / 平移靠双指（不必来回切模式）
     if (state.cwBoard?.penMode) return;
     if (pts.length === 1 && lastSingle) {
-      applyCoursewareGesture({ dx: pts[0].x - lastSingle.x, dy: pts[0].y - lastSingle.y });
+      if (paging && !paging.moved) return;
+      const dy = pts[0].y - lastSingle.y;
+      if (dragCoursewareViewerViewport(-dy, !viewerDragStarted)) viewerDragStarted = true;
+      else applyCoursewareGesture({ dx: pts[0].x - lastSingle.x, dy });
       lastSingle = { x: pts[0].x, y: pts[0].y };
       event.preventDefault();
     }
@@ -3370,6 +3472,8 @@ function bindStaticEvents() {
     if (state.screen === 'Network') connectCampus();
     else handleResume();
   });
+  window.addEventListener('pageshow', event => { if (event.persisted) handleResume(); });
+  window.addEventListener('online', () => state.signaling?.resume());
 
   document.addEventListener('gesturestart', (event) => event.preventDefault());
 }
@@ -3411,9 +3515,22 @@ async function handleOrientationChange() {
 }
 
 /** 从后台回到前台：恢复摄像头与推流（iOS 切后台会释放摄像头） */
-async function handleResume() {
-  if (state.screen !== 'Live' || state.liveMode !== 'camera') return;
-  if (Date.now() - state.lastHiddenAt < 800) return;
+let resumeTask = null;
+function handleResume({ force = false } = {}) {
+  state.signaling?.resume();
+  if (!state.joined || state.screen !== 'Live' || document.visibilityState === 'hidden') return;
+  if (resumeTask) return resumeTask;
+  resumeTask = resumeLive({ force }).finally(() => { resumeTask = null; });
+  return resumeTask;
+}
+
+async function resumeLive({ force }) {
+  if (!force && Date.now() - state.lastHiddenAt < 800) return;
+  const shouldPublish = state.liveActive || state.resumeLiveAfterJoin;
+  if (state.liveMode === 'image') {
+    if (shouldPublish) await restartLive();
+    return;
+  }
 
   // 后台期间方向可能已变化，先同步（类别变化时内部会重建流并上报）
   if (orientationCategory() !== lastOrientationCategory) {
@@ -3421,7 +3538,7 @@ async function handleResume() {
   }
 
   const track = state.pipeline?.cameraStream?.getVideoTracks?.()[0];
-  if (!track || track.readyState === 'ended') {
+  if (!track || track.readyState === 'ended' || track.muted) {
     setLiveMessage('正在恢复摄像头...');
     try {
       await state.pipeline.openCamera({
@@ -3431,7 +3548,8 @@ async function handleResume() {
         fps: CAMERA_FPS,
         preserveLockedFrame: true
       });
-      if (state.liveActive) await restartLive();
+      if (shouldPublish && state.joined && state.screen === 'Live') await restartLive();
+      delete $('liveStatus').dataset.userMessage;
       updateLiveStatus();
     } catch {
       setLiveMessage('摄像头恢复失败，请返回重试');
@@ -3439,9 +3557,9 @@ async function handleResume() {
     return;
   }
 
-  if (state.liveActive) {
+  if (shouldPublish) {
     const iceState = state.publisher?.iceConnectionState || '';
-    if (iceState === 'failed' || iceState === 'disconnected' || iceState === 'closed') {
+    if (force || state.resumeLiveAfterJoin || iceState === 'failed' || iceState === 'disconnected' || iceState === 'closed') {
       await restartLive();
     }
   }
