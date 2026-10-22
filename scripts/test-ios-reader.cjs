@@ -87,7 +87,10 @@ function pdfFixture() {
       await phone.evaluate(item => probe.openCourseware(item), item);
       await phone.waitForFunction(() => probe.state.cwPdf.doc && !probe.state.cwPdf.rendering && probe.state.cwBoard.enabled);
       await viewer.waitForFunction(() => state.courseware?.displayedPage === 1);
+      // 「清空」与安卓一致：手势模式下也常驻，只在没有笔迹时置灰
+      assert.equal(await phone.locator('#cwClearButton').isVisible(), true, 'clear button visible in hand mode');
       await phone.locator('#cwPenButton').click();
+      assert.equal(await phone.locator('#cwClearButton').isVisible(), true, 'clear button visible in pen mode');
       const bounds = await phone.evaluate(() => {
         const root = document.getElementById('orientationRoot');
         const side = document.querySelector('#viewCoursewarePlay > .cw-side');
@@ -143,6 +146,12 @@ function pdfFixture() {
       await phone.mouse.move(target.x,target.y); await phone.mouse.down(); await phone.mouse.move(target.x+18,target.y+18,{steps:4}); await phone.mouse.up();
       const point = await phone.evaluate(() => sent.find(message => message.type === 'courseware.annotation' && message.action === 'begin')?.points[0]);
       assert.ok(point && Math.abs(point.x-target.nx)<0.01 && Math.abs(point.y-target.ny)<0.01, JSON.stringify({point,target}));
+      // 手势模式下「清空」也要能用：切到手势后按钮应可用，点一下真的清掉笔迹
+      await phone.locator('#cwPenButton').click();
+      await phone.waitForFunction(() => probe.state.cwBoard.penMode === false);
+      assert.equal(await phone.locator('#cwClearButton').isEnabled(), true, 'clear button usable in hand mode after strokes');
+      await phone.locator('#cwClearButton').click();
+      await phone.waitForFunction(() => probe.state.cwBoard.count === 0);
       await phone.locator('#cwQuickPage').click();
       await phone.waitForFunction(() => document.querySelector('.quick-page-preview canvas')?.width > 0);
       const before = await phone.evaluate(() => sent.filter(message => message.type === 'courseware.page').length);
