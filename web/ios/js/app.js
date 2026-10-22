@@ -1,4 +1,4 @@
-import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261023-bigplayer';
+import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261022-ink';
 let embeddedVideoControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';

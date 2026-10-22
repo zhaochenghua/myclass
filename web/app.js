@@ -7,7 +7,7 @@ const coursewareLinkControls = import('./ios/js/coursewareLinks.mjs?v=20261015-l
   onExternal: url => window.open(url, '_blank', 'noopener,noreferrer'),
   onInternal: page => showCoursewarePage(page)
 })).catch(() => ({ clear() {}, render() {}, update() {}, setInteractive() {} }));
-const embeddedVideos = import('./ios/js/embeddedVideos.mjs?v=20261023-bigplayer').then(({ createEmbeddedVideos }) => createEmbeddedVideos({
+const embeddedVideos = import('./ios/js/embeddedVideos.mjs?v=20261015-video').then(({ createEmbeddedVideos }) => createEmbeddedVideos({
   container: document.getElementById('annotationToolbar'),
   // 内嵌视频只有 PDF 课件才有（图片/视频/压缩包都不存在 .metadata 接口），
   // 否则大屏在投屏图片时也会冒出"视频信息"按钮。
