@@ -2,7 +2,7 @@ import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261015-video';
 let embeddedVideoControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';
-import { createOrientationLock, layoutPoint, layoutRect } from './orientation.mjs?v=20261022-reader';
+import { layoutPoint, layoutRect } from './orientation.mjs?v=20261022-reader';
 import { createDocumentPreview } from './documentPreview.mjs?v=20261022-reader';
 import { createQuickPagePicker } from './quickPage.mjs?v=20261022-reader';
 // iPhone 网页版教师端主流程。
@@ -39,13 +39,11 @@ import { createCoursewareLinks } from './coursewareLinks.mjs?v=20261022-reader';
 let mediaListPreviews = null;
 let coursewareListPreviews = null;
 let coursewareLinkControls = null;
-let orientationLock = null;
 let documentPreview = null;
 let quickPagePicker = null;
 function showView(name) {
   documentPreview?.close();
   quickPagePicker?.close();
-  orientationLock?.setConnected(state.joined && !['Network', 'Auth', 'Connect'].includes(name));
   if (name !== 'MediaQueue') { mediaListPreviews?.destroy(); mediaListPreviews = null; }
   if (name !== 'CoursewareList') { coursewareListPreviews?.destroy(); coursewareListPreviews = null; }
   showBaseView(name);
@@ -2319,8 +2317,7 @@ const CW_FIT_TABLET_MAX_WIDTH_LOSS = 0.03; // 平板舞台与课件比例接近�
 
 /** 是否手机横屏布局（与 style.css 里 (orientation: landscape) and (max-height: 30rem) 对齐） */
 function coursewarePhoneLayout() {
-  const root = $('orientationRoot');
-  return root.clientWidth > root.clientHeight && root.clientHeight <= 480;
+  return window.innerWidth > window.innerHeight && window.innerHeight <= 480;
 }
 
 /**
@@ -2865,7 +2862,7 @@ function renderCoursewareList(items, forManage) {
 
     main.addEventListener('click', () => {
       if (forManage) {
-        toast('连接教室后可在功能菜单中打开课件');
+        documentPreview.open(item);
         return;
       }
       openCourseware(item);
@@ -3247,20 +3244,6 @@ function pinDocumentSoon() {
 }
 
 function bindStaticEvents() {
-  orientationLock = createOrientationLock({ root: $('orientationRoot'),
-    read: () => storage.get('screen_orientation', 'auto'),
-    save: value => storage.set('screen_orientation', value),
-    onChange: () => {
-      requestAnimationFrame(() => {
-        if (state.screen === 'CoursewarePlay') refitCoursewareViewport();
-        state.cwBoard?.invalidate(); state.mediaBoard?.invalidate();
-      });
-    }
-  });
-  orientationLock.update();
-  document.querySelectorAll('[data-screen-orientation]').forEach(button => {
-    button.addEventListener('click', () => orientationLock.select(button.dataset.screenOrientation));
-  });
   documentPreview = createDocumentPreview($('orientationRoot'));
   quickPagePicker = createQuickPagePicker({ root: $('orientationRoot'),
     getCourseware: () => state.courseware,
@@ -3313,7 +3296,6 @@ function bindStaticEvents() {
   $('menuMedia').addEventListener('click', () => showMediaSource());
   $('menuCourseware').addEventListener('click', () => showCoursewareSource());
   $('menuDisconnect').addEventListener('click', () => disconnectAndBack());
-  $('menuUpdate').addEventListener('click', () => manualCheckUpdate());
   $('updateLater').addEventListener('click', () => dismissUpdateDialog());
   $('updateReload').addEventListener('click', () => applyUpdate({ clearCache: false }));
   $('updateClear').addEventListener('click', () => applyUpdate({ clearCache: true }));
@@ -3621,8 +3603,7 @@ async function dropLegacyServiceWorker() {
 // 本机“上次运行的版本号”。与服务端 /api/config 的 iosVersion 不一致，说明服务器已升级。
 const VERSION_STORAGE_KEY = 'seenVersion';
 // 老师在更新提示里点过“稍后”的版本号。只放内存里的标记会随页面重载丢失，
-// 于是同一版本每次打开都再弹一次；存下来后同一个版本只提示一次，
-// 菜单里的“检查更新”仍可随时手动查看（它走 force）。
+// 于是同一版本每次打开都再弹一次；存下来后同一个版本只提示一次。
 const DISMISSED_VERSION_KEY = 'dismissedVersion';
 let updatePromptDismissed = false;
 
@@ -3665,24 +3646,6 @@ function cleanCacheBustParam() {
   } catch {
     /* 忽略：个别 WebView 不允许 replaceState，留着参数也不影响使用 */
   }
-}
-
-/** 菜单里的“检查更新”：主动拉取服务端版本对比，并始终给出清缓存入口 */
-async function manualCheckUpdate() {
-  try {
-    const response = await campusFetch('../api/config', { cache: 'no-store' });
-    if (response.ok) state.config = await response.json();
-  } catch {
-    /* 拉取失败则沿用已有配置 */
-  }
-  const latest = serverVersion();
-  if (!latest) {
-    toast('无法获取服务器版本，请检查网络', { warn: true });
-    return;
-  }
-  const seen = seenVersion() || latest;
-  updatePromptDismissed = false;
-  showUpdateDialog(seen, latest, { force: true });
 }
 
 function showUpdateDialog(current, latest, options = {}) {

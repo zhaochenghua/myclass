@@ -95,11 +95,9 @@ body::before {
 }
 
 #orientationRoot {
-  position: absolute;
-  inset: 0 auto auto 0;
+  position: relative;
   width: 100%;
   height: 100%;
-  transform-origin: top left;
   container: app / size;
   overflow: hidden;
 }
@@ -1718,10 +1716,6 @@ button[data-tool-icon]::before {
   #viewCoursewarePlay .annotation-actions .tool { flex-basis: 3rem; }
   #viewCoursewarePlay button[data-tool-icon]::before { width: 14px; height: 14px; margin-right: 2px; }
 }
-
-.orientation-selector { display: flex; width: 100%; gap: 4px; }
-.orientation-selector button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 6px 2px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 13px; }
-.orientation-selector button[aria-pressed="true"] { background: var(--accent); color: #04140f; }
 
 @container app (orientation: portrait) {
   #viewCoursewarePlay { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; padding: calc(var(--safe-top) + 8px) calc(var(--safe-right) + 12px) calc(var(--safe-bottom) + 8px) calc(var(--safe-left) + 12px); }

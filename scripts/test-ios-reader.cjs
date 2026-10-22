@@ -48,7 +48,7 @@ function pdfFixture() {
       await context.route('**/reader.pdf.metadata*', route => route.fulfill({json:{conversion:{slideCount:5,statePages:[1,1,3,4,4,5]},videos:[]}}));
       await context.route('**/api/courseware', route => route.fulfill({json:{items:[item]}}));
       const source = await fs.readFile(path.join(__dirname, '../web/ios/js/app.js'), 'utf8');
-      await context.route('**/ios/js/app.js?*', route => route.fulfill({contentType:'application/javascript',body:source + '\nwindow.probe = {state,openCourseware,connectToRoom,showMenu,orientationLock,layoutRect,layoutPoint};'}));
+      await context.route('**/ios/js/app.js?*', route => route.fulfill({contentType:'application/javascript',body:source + '\nwindow.probe = {state,openCourseware,connectToRoom,showMenu,layoutRect,layoutPoint};'}));
       // Windows WebKit has no WebRTC; the classroom viewer runs in Edge while iOS uses WebKit.
       const viewerContext = viewerBrowser ? await viewerBrowser.newContext({serviceWorkers:'block'}) : context;
       if (viewerBrowser) {
@@ -62,12 +62,16 @@ function pdfFixture() {
       const code = await viewer.evaluate(() => state.roomCode);
       const phone = await context.newPage(); await phone.goto(server.base + '/ios/');
       await phone.waitForFunction(() => window.probe?.state.screen === 'Connect');
-      assert.equal(await phone.evaluate(() => document.getElementById('orientationRoot').dataset.orientation), viewport.width > viewport.height ? 'landscape' : 'portrait', 'disconnected ignores saved orientation');
+      assert.equal(await phone.evaluate(() => getComputedStyle(document.getElementById('orientationRoot')).transform), 'none', 'orientation follows system');
       await phone.locator('#manageCoursewareButton').click();
       const thumb = phone.locator('#cwListBody button.file-thumbnail'); await thumb.waitFor();
       const size = await thumb.boundingBox(); assert.ok(Math.abs(size.width/size.height - 16/9) < 0.01);
       await thumb.click();
-      await phone.waitForFunction(() => document.querySelectorAll('.document-page').length === 4 && document.querySelector('.document-page canvas').getAttribute('aria-label') === '第 1 页预览');
+      await phone.waitForFunction(() => document.querySelector('.document-preview'), null, { timeout: 5000 }).catch(async error => {
+        console.error('preview debug', await phone.evaluate(() => ({ screen: probe.state.screen, root: Boolean(document.getElementById('orientationRoot')), body: document.getElementById('cwListBody')?.innerHTML.slice(0, 500), errors: window.__errors })));
+        throw error;
+      });
+      await phone.waitForFunction(() => document.querySelectorAll('.document-page').length === 4 && document.querySelector('.document-page canvas[aria-label="第 1 页预览"]'));
       assert.equal(await phone.evaluate(() => probe.state.joined), false);
       const sample = await phone.locator('.document-page canvas').first().evaluate(canvas => Array.from(canvas.getContext('2d').getImageData(5,5,1,1).data));
       assert.ok(sample[1] > sample[0] * 3, 'continuous reader uses final animation state of slide 1');
@@ -80,20 +84,42 @@ function pdfFixture() {
         window.sent = []; const send = probe.state.signaling.send.bind(probe.state.signaling);
         probe.state.signaling.send = message => { sent.push(message); return send(message); };
       });
-      await phone.locator('[data-screen-orientation="portrait"]').click();
       await phone.evaluate(item => probe.openCourseware(item), item);
       await phone.waitForFunction(() => probe.state.cwPdf.doc && !probe.state.cwPdf.rendering && probe.state.cwBoard.enabled);
       await viewer.waitForFunction(() => state.courseware?.displayedPage === 1);
       await phone.locator('#cwPenButton').click();
       const bounds = await phone.evaluate(() => {
         const root = document.getElementById('orientationRoot');
+        const side = document.querySelector('#viewCoursewarePlay > .cw-side');
         const nodes = ['cwPrevPage','cwNextPage','cwQuickPage','cwResetView','cwCloseButton','cwClearButton'];
-        return {width:root.clientWidth,height:root.clientHeight,stage:probe.layoutRect(document.getElementById('cwStage')),buttons:nodes.map(id => ({id,...probe.layoutRect(document.getElementById(id))}))};
+        return {width:root.clientWidth,height:root.clientHeight,
+          // 与 style.css 的手机横屏块一致：竖栏收窄到 8rem，控件排不下时在竖栏内部滚动
+          landscapePhone:window.innerWidth>window.innerHeight&&window.innerHeight<=480,
+          stage:probe.layoutRect(document.getElementById('cwStage')),
+          side:{...probe.layoutRect(side),scrollHeight:side.scrollHeight,clientHeight:side.clientHeight},
+          buttons:nodes.map(id => ({id,...probe.layoutRect(document.getElementById(id))}))};
       });
       assert.ok(bounds.stage.height >= 80, JSON.stringify(bounds));
-      for (const button of bounds.buttons) assert.ok(button.left >= 0 && button.right <= bounds.width+1 && button.top >= 0 && button.bottom <= bounds.height+1, JSON.stringify(button));
+      for (const button of bounds.buttons) {
+        assert.ok(button.left >= 0 && button.right <= bounds.width+1, JSON.stringify(button));
+        const bottom = bounds.landscapePhone ? bounds.side.top + bounds.side.scrollHeight : bounds.height;
+        assert.ok(button.top >= 0 && button.bottom <= bottom+1, JSON.stringify(button));
+      }
+      if (bounds.landscapePhone) {
+        assert.ok(bounds.side.bottom <= bounds.height+1 && bounds.side.right <= bounds.width+1, JSON.stringify(bounds.side));
+        const reachable = await phone.evaluate(async () => {
+          const side = document.querySelector('#viewCoursewarePlay > .cw-side');
+          side.scrollTop = side.scrollHeight;
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          const root = document.getElementById('orientationRoot').getBoundingClientRect();
+          const button = document.getElementById('cwCloseButton').getBoundingClientRect();
+          side.scrollTop = 0;
+          return button.top >= root.top - 1 && button.bottom <= root.bottom + 1;
+        });
+        assert.ok(reachable, 'landscape phone can scroll to the close button');
+      }
       await phone.screenshot({path:path.join(output,`a4-portrait-pen-${viewport.width}.png`)});
-      // Draw a real pointer stroke in the rotated UI and check normalized wire coordinates.
+      // Draw a real pointer stroke in the current layout and check normalized wire coordinates.
       const target = await phone.evaluate(() => {
         const canvas = document.getElementById('cwPageCanvas'); const stage = document.getElementById('cwStage');
         const rect = canvas.getBoundingClientRect(), clip = stage.getBoundingClientRect();
@@ -125,19 +151,14 @@ function pdfFixture() {
       assert.equal(await phone.evaluate(() => sent.length),sentBeforePreview,'independent preview sends no classroom messages');
       assert.equal(await viewer.evaluate(() => state.courseware.displayedPage),4);
       await phone.locator('.document-preview .pill').click(); await phone.locator('#cwListBack').click();
-      await phone.locator('[data-screen-orientation="landscape"]').click();
       await phone.locator('#menuResumeCourseware').click();
       await phone.waitForFunction(() => !probe.state.cwPdf.rendering);
       await phone.waitForTimeout(200);
-      const landscape = await phone.evaluate(() => ({width:document.getElementById('orientationRoot').clientWidth,height:document.getElementById('orientationRoot').clientHeight}));
-      assert.ok(landscape.width>landscape.height);
       await phone.screenshot({path:path.join(output,`locked-landscape-${viewport.width}.png`)});
       await phone.setViewportSize({width:viewport.height,height:viewport.width});
-      await phone.waitForFunction(() => document.getElementById('orientationRoot').clientWidth > document.getElementById('orientationRoot').clientHeight);
       await phone.locator('#cwLeaveButton').click();
-      await phone.locator('[data-screen-orientation="auto"]').click();
       await phone.locator('#menuDisconnect').click();
-      assert.equal(await phone.evaluate(() => document.getElementById('orientationRoot').dataset.orientation),viewport.height > viewport.width ? 'landscape' : 'portrait');
+      assert.equal(await phone.evaluate(() => getComputedStyle(document.getElementById('orientationRoot')).transform), 'none');
       assert.deepEqual(errors,[]);
       await context.close();
       if (viewerBrowser) await viewerContext.close();
