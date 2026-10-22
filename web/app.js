@@ -3151,7 +3151,10 @@ function updateScreenEndButton() {
   const button = elements.screenEndButton;
   if (!button) return;
   const showing = state.presentationMode !== 'waiting';
-  button.hidden = !(showing && !state.teacherConnected);
+  // 「本页视频」按钮占着同一个位置：有内嵌视频时让给它，避免两个按钮挤在一起
+  const videoButton = elements.annotationToolbar?.querySelector('.embedded-launch');
+  const videoVisible = !!videoButton && !videoButton.hidden && !!videoButton.offsetParent;
+  button.hidden = !(showing && !state.teacherConnected) || videoVisible;
 }
 
 /** 手机端已断开，大屏自己结束投屏并回到首页（房间与连接码保留） */

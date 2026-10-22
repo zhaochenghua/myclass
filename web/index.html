@@ -195,11 +195,11 @@
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="annotationFullscreenButton" type="button">全屏</button>
           <button class="annotation-button blackboard-toggle-btn" id="blackboardToggleButton" type="button">黑板</button>
+          <!-- 手机端断开时大屏自己收尾：占用原"本页视频"按钮的位置（没有内嵌视频时这里本来是空的） -->
+          <button class="annotation-button screen-end-button" id="screenEndButton" type="button" hidden>结束投屏</button>
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
         <span class="relay-badge" id="relayBadge" hidden>中继模式</span>
-        <!-- 手机端已断开时，大屏自己收尾用：否则画面停在课件上没人能退出 -->
-        <button class="screen-end-button" id="screenEndButton" type="button" hidden>结束投屏</button>
       </section>
       <div id="studentRollDock" class="student-roll-dock"></div>
       <div class="roll-student-big" id="rollStudentBig" aria-hidden="true"><div class="roll-student-big-bg"></div><span class="roll-student-big-num">??</span><span class="roll-student-detail" id="rollStudentDetail"></span></div>
