@@ -33,7 +33,7 @@ function pdfFixture() {
   try {
     browser = process.env.MYCLASS_WEBKIT ? await webkit.launch({headless:true}) : await chromium.launch({channel:'msedge',headless:true});
     if (process.env.MYCLASS_WEBKIT) viewerBrowser = await chromium.launch({channel:'msedge',headless:true});
-    for (const viewport of [{width:390,height:844},{width:375,height:568},{width:768,height:1024},{width:844,height:390},{width:1180,height:820}]) {
+    for (const viewport of [{width:390,height:844},{width:375,height:568},{width:768,height:1024},{width:1024,height:768},{width:844,height:390},{width:1180,height:820}]) {
       const context = await browser.newContext({ viewport, hasTouch:true, serviceWorkers:'block' });
       const errors = [];
       context.on('page', page => page.on('pageerror', error => { errors.push(error.message); console.error('Browser:',error.message); }));
@@ -118,21 +118,17 @@ function pdfFixture() {
         });
         assert.ok(reachable, 'landscape phone can scroll to the close button');
       }
-      // 旧 Safari（iPadOS 15.x 等）不支持 @container，只会命中 style.css 里的兜底网格：
-      // 那套布局同样必须把翻页按钮留在屏幕内，否则底部会露出黑色舞台、按钮被挤出视口。
-      if (viewport.width === 768) {
-        const legacy = await phone.evaluate(async () => {
-          const style = document.createElement('style');
-          style.textContent = '#orientationRoot { container-type: normal !important; }';
-          document.head.append(style);
-          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-          const root = document.getElementById('orientationRoot').getBoundingClientRect();
-          const close = document.getElementById('cwCloseButton').getBoundingClientRect();
-          document.head.removeChild(style);
-          await new Promise(resolve => requestAnimationFrame(resolve));
-          return {inside:close.top >= root.top-1 && close.bottom <= root.bottom+1, closeBottom:Math.round(close.bottom), rootBottom:Math.round(root.bottom)};
+      // iPad 横屏（≥960px）：控件收在底部横条（标题在左、工具在右），课件独占整屏。
+      // 旧 Safari 不支持 @container 时曾经退化成竖排大按钮，这条断言防止再退回去。
+      if (viewport.width >= 960 && viewport.width > viewport.height) {
+        const wide = await phone.evaluate(() => {
+          const stage = document.getElementById('cwStage').getBoundingClientRect();
+          const header = document.querySelector('#viewCoursewarePlay > .list-header').getBoundingClientRect();
+          const side = document.querySelector('#viewCoursewarePlay > .cw-side').getBoundingClientRect();
+          return {headerBelowStage:header.top >= stage.bottom-1, sideRightOfHeader:side.left >= header.right-1,
+            stage:{top:Math.round(stage.top),bottom:Math.round(stage.bottom),width:Math.round(stage.width)}};
         });
-        assert.ok(legacy.inside, `container-query fallback keeps controls on screen ${JSON.stringify(legacy)}`);
+        assert.ok(wide.headerBelowStage && wide.sideRightOfHeader, `iPad landscape keeps controls in the bottom bar ${JSON.stringify(wide)}`);
       }
       await phone.screenshot({path:path.join(output,`a4-portrait-pen-${viewport.width}.png`)});
       // Draw a real pointer stroke in the current layout and check normalized wire coordinates.
