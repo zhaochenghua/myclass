@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20261022-reader" />
+    <link rel="stylesheet" href="./style.css?v=20261022-tool-icons" />
   </head>
   <body>
     <div id="orientationRoot">
@@ -222,15 +222,15 @@
               <button class="annotation-color" data-color="#FFFFFF" type="button" aria-label="白色"></button>
             </div>
             <div class="annotation-actions">
-              <button class="tool" id="mediaEraserButton" type="button">板擦</button>
-              <button class="tool" id="mediaUndoButton" type="button">撤销</button>
-              <button class="tool" id="mediaClearButton" type="button">清空</button>
+              <button class="tool" id="mediaEraserButton" data-tool-icon="eraser" type="button">板擦</button>
+              <button class="tool" id="mediaUndoButton" data-tool-icon="undo" type="button">撤销</button>
+              <button class="tool" id="mediaClearButton" data-tool-icon="clear" type="button">清空</button>
             </div>
           </div>
           <div class="media-row" id="mediaImageActions" hidden>
             <button class="btn btn-nav" id="mediaRotate" type="button">旋转90°</button>
             <button class="btn btn-nav" id="mediaResetView" type="button">复位视图</button>
-            <button class="btn btn-nav" id="mediaPenButton" type="button">画笔</button>
+            <button class="btn btn-nav" id="mediaPenButton" data-tool-icon="pen" type="button">画笔</button>
             <!-- 投屏过程中也能随手拍一张接在队列后面（与安卓端一致） -->
             <button class="btn btn-nav" id="mediaCameraButton" type="button">拍照</button>
           </div>
@@ -291,7 +291,7 @@
         <header class="list-header">
           <button class="pill" id="cwLeaveButton" type="button">菜单</button>
           <h2 class="list-title" id="cwPlayTitle">课件</h2>
-          <button class="pill" id="cwPenButton" type="button">画笔</button>
+          <button class="pill" id="cwPenButton" data-tool-icon="pen" type="button">画笔</button>
         </header>
 
         <div class="cw-stage" id="cwStage">
@@ -314,9 +314,9 @@
               <button class="annotation-color" data-color="#FFFFFF" type="button" aria-label="白色"></button>
             </div>
             <div class="annotation-actions">
-              <button class="tool" id="cwEraserButton" type="button">板擦</button>
-              <button class="tool" id="cwUndoButton" type="button">撤销</button>
-              <button class="tool" id="cwClearButton" type="button">清空</button>
+              <button class="tool" id="cwEraserButton" data-tool-icon="eraser" type="button">板擦</button>
+              <button class="tool" id="cwUndoButton" data-tool-icon="undo" type="button">撤销</button>
+              <button class="tool" id="cwClearButton" data-tool-icon="clear" type="button">清空</button>
             </div>
           </div>
 
@@ -405,6 +405,6 @@
     <div class="toast" id="toast" hidden></div>
     </div>
 
-    <script type="module" src="./js/app.js?v=20261022-reader"></script>
+    <script type="module" src="./js/app.js?v=20261022-tool-icons"></script>
   </body>
 </html>

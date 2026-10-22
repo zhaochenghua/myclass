@@ -1697,6 +1697,28 @@ button.file-thumbnail { cursor: pointer; }
   }
 }
 
+button[data-tool-icon] { white-space: nowrap; }
+button[data-tool-icon]::before {
+  content: "";
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  vertical-align: -3px;
+  background-color: currentColor;
+  -webkit-mask: var(--tool-icon) center / contain no-repeat;
+  mask: var(--tool-icon) center / contain no-repeat;
+}
+[data-tool-icon="pen"] { --tool-icon: url('./icons/tools/pen.svg'); }
+[data-tool-icon="hand"] { --tool-icon: url('./icons/tools/hand.svg'); }
+[data-tool-icon="eraser"] { --tool-icon: url('./icons/tools/eraser.svg'); }
+[data-tool-icon="undo"] { --tool-icon: url('./icons/tools/undo.svg'); }
+[data-tool-icon="clear"] { --tool-icon: url('./icons/tools/clear.svg'); }
+@container app (orientation: landscape) and (max-height: 30rem) {
+  #viewCoursewarePlay .annotation-actions .tool { flex-basis: 3rem; }
+  #viewCoursewarePlay button[data-tool-icon]::before { width: 14px; height: 14px; margin-right: 2px; }
+}
+
 .orientation-selector { display: flex; width: 100%; gap: 4px; }
 .orientation-selector button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 6px 2px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 13px; }
 .orientation-selector button[aria-pressed="true"] { background: var(--accent); color: #04140f; }

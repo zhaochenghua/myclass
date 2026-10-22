@@ -2015,7 +2015,9 @@ function setMediaPenMode(on) {
   syncAnnotationCanvas(MEDIA_BAR);
   $('mediaAnnotationBar').hidden = !on;
   const button = $('mediaPenButton');
-  button.textContent = on ? '退出画笔' : '画笔';
+  button.textContent = on ? '手势' : '画笔';
+  button.dataset.toolIcon = on ? 'hand' : 'pen';
+  button.setAttribute('aria-pressed', String(on));
   button.classList.toggle('is-active', on);
   if (on) board.render();
   refreshAnnotationBar(MEDIA_BAR);
@@ -2066,7 +2068,9 @@ function setCoursewarePenMode(on) {
   syncAnnotationCanvas(CW_BAR);
   $('cwAnnotationBar').hidden = !on;
   const button = $('cwPenButton');
-  button.textContent = on ? '退出画笔' : '画笔';
+  button.textContent = on ? '手势' : '画笔';
+  button.dataset.toolIcon = on ? 'hand' : 'pen';
+  button.setAttribute('aria-pressed', String(on));
   button.classList.toggle('is-active', on);
   if (on) board.render();
   refreshAnnotationBar(CW_BAR);
