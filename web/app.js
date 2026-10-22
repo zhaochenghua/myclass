@@ -430,7 +430,9 @@ async function bootstrap() {
         studentRoller?.setTeacher(data.token);
         state.syncedFromTeacher = false;
         state.directTeach = true;
-        elements.directTeachButton.hidden = true;
+        // 登录后保留「打开课件」按钮：课件关掉以后还要靠它再次打开，
+        // 隐藏掉就只剩"已登录"，没有入口了
+        elements.directTeachButton.hidden = false;
         elements.directTeachUser.textContent = `已登录：${data.username}`;
         elements.directTeachUser.hidden = false;
         elements.directTeachLogout.hidden = false;
