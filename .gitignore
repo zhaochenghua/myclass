@@ -33,6 +33,9 @@ windows/dist/
 windows/tools/
 windows/package-lock.json
 
+# 手写笔锋对比页（本地测试用，不纳入 git）
+web/pen-test/
+
 # 编辑器 / 工具配置
 .vscode/
 .claude/

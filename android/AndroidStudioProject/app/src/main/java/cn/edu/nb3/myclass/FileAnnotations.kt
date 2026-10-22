@@ -23,7 +23,16 @@ object FileAnnotations {
         return (0 until array.length()).mapNotNull { index ->
             val point = array.optJSONObject(index) ?: return@mapNotNull null
             val x = point.optDouble("x"); val y = point.optDouble("y")
-            if (!x.isFinite() || !y.isFinite()) null else AnnotationPoint(x.toFloat().coerceIn(0f, 1f), y.toFloat().coerceIn(0f, 1f))
+            if (!x.isFinite() || !y.isFinite()) {
+                null
+            } else {
+                AnnotationPoint(
+                    x.toFloat().coerceIn(0f, 1f),
+                    y.toFloat().coerceIn(0f, 1f),
+                    point.optInt("t", 0).coerceAtLeast(0),
+                    point.optDouble("p", 0.5).toFloat().coerceIn(0f, 1f)
+                )
+            }
         }
     }
 

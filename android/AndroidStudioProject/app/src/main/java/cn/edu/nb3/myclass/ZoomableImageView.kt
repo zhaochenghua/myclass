@@ -145,6 +145,10 @@ class ZoomableImageView(context: Context) : View(context) {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
     }
     private val strokePath = Path()
+    /** 速度笔锋的轮廓路径（可复用，避免每帧新建对象） */
+    private val inkPath = Path()
+    /** 当前笔画起笔时刻（uptimeMillis），用于给每个点算相对时间戳 */
+    private var strokeStartedAtMs = 0L
 
     /** 大屏端笔宽是 CSS 像素，手机端按 dp 呈现，避免高分屏上线条过细 */
     private val density = context.resources.displayMetrics.density
@@ -184,6 +188,14 @@ class ZoomableImageView(context: Context) : View(context) {
     private val pendingPoints = mutableListOf<AnnotationPoint>()
     private var strokeSeq = 0
     private var lastSyncAt = 0L
+
+    // ---- 手写笔防误触 ----
+    /** 当前这一笔是手写笔（含笔尾橡皮）画的：掌托 / 手指的额外触点一律不参与绘制与缩放 */
+    private var stylusInk = false
+    /** 手写笔抬笔后的屏蔽窗口：掌托边缘刚离开又落下时不会画出杂笔或触发翻页 */
+    private var stylusGuardUntil = 0L
+    /** 本次手势判定为掌托误触，整个手势直接丢弃 */
+    private var palmIgnored = false
 
     private var annotationBitmap: Bitmap? = null
     private val annotationCanvas = Canvas()
@@ -613,13 +625,13 @@ class ZoomableImageView(context: Context) : View(context) {
         return true
     }
 
-    private fun toNormalized(viewX: Float, viewY: Float): AnnotationPoint? {
+    private fun toNormalized(viewX: Float, viewY: Float, timeMs: Int = 0, pressure: Float = 0.5f): AnnotationPoint? {
         val rect = imageDisplayRect() ?: return null
         if (rect.width() <= 0f || rect.height() <= 0f) return null
         val x = (viewX - rect.left) / rect.width()
         val y = (viewY - rect.top) / rect.height()
         if (x < 0f || x > 1f || y < 0f || y > 1f) return null
-        return AnnotationPoint(x, y)
+        return AnnotationPoint(x, y, timeMs, pressure.coerceIn(0f, 1f))
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -770,10 +782,28 @@ class ZoomableImageView(context: Context) : View(context) {
             annotationDirty = false
         }
         canvas.drawBitmap(layer, 0f, 0f, null)
+        // 进行中的画笔笔画实时绘制在离屏层之上：起收笔收尖要跟随笔画总长度变化，
+        // 一旦画进离屏层就擦不掉了。板擦例外，它必须写进离屏层才能只擦笔迹。
+        activeStroke?.takeIf { !it.isEraser }?.let { drawStroke(canvas, it, 0) }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        when (event.actionMasked) {
+        val action = event.actionMasked
+        if (action == MotionEvent.ACTION_DOWN) {
+            val tool = event.getToolType(0)
+            stylusInk = tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
+            // 掌托在 Android 上不区分工具类型（系统报成 FINGER），靠"笔在写 / 刚抬笔"来判定：
+            // 笔正在写时多出来的触点一律不参与绘制与缩放；刚抬笔的屏蔽窗口内的触控整段丢弃。
+            palmIgnored = !stylusInk && event.eventTime < stylusGuardUntil
+        }
+        if (palmIgnored) {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) palmIgnored = false
+            return true
+        }
+        // 手写笔书写期间，多出来的触点（掌托 / 手指）不参与双指缩放和翻页
+        if (stylusInk && action == MotionEvent.ACTION_POINTER_DOWN) return true
+        if (stylusInk && action == MotionEvent.ACTION_POINTER_UP) return true
+        when (action) {
             MotionEvent.ACTION_DOWN -> {
                 twoFingerActive = false
                 twoFingerTapCandidate = false
@@ -808,7 +838,8 @@ class ZoomableImageView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_MOVE -> {
                 when {
-                    mode == ImageCastMode.Pen && event.pointerCount == 1 -> {
+                    // 手写笔书写时即使掌托多按了一指，也只认笔尖（pointer 0）的轨迹
+                    mode == ImageCastMode.Pen && (event.pointerCount == 1 || stylusInk) -> {
                         if (hasPendingStart) {
                             val dx = event.x - pendingStartX
                             val dy = event.y - pendingStartY
@@ -816,14 +847,14 @@ class ZoomableImageView(context: Context) : View(context) {
                             if (dx * dx + dy * dy >= slop * slop) {
                                 // 确认为绘制：以最初落点起笔，再补上当前这个移动点
                                 hasPendingStart = false
-                                startStroke(pendingStartX, pendingStartY)
-                                extendStroke(event.x, event.y)
+                                startStroke(pendingStartX, pendingStartY, event.eventTime, event.pressure)
+                                extendStroke(event)
                             }
                         } else {
-                            extendStroke(event.x, event.y)
+                            extendStroke(event)
                         }
                     }
-                    event.pointerCount >= 2 -> {
+                    event.pointerCount >= 2 && !stylusInk -> {
                         // 双指手势期间丢弃待定落点，避免抬指后被当成单击画点
                         hasPendingStart = false
                         if (twoFingerTapCandidate) {
@@ -852,7 +883,7 @@ class ZoomableImageView(context: Context) : View(context) {
                 if (hasPendingStart) {
                     // 单指点击且未移动：补画一个点，保留"单击画点"的能力
                     hasPendingStart = false
-                    startStroke(pendingStartX, pendingStartY)
+                    startStroke(pendingStartX, pendingStartY, event.eventTime, event.pressure)
                 }
                 if (twoFingerTapCandidate) {
                     twoFingerTapCandidate = false
@@ -861,6 +892,8 @@ class ZoomableImageView(context: Context) : View(context) {
                     }
                 }
                 finishActiveStroke(notify = true)
+                // 抬笔后屏蔽一小段时间，防止掌托边缘紧接着落下被当成新的手指操作
+                if (stylusInk) stylusGuardUntil = event.eventTime + STYLUS_GUARD_MS
                 notifyViewport(force = true)
                 performClick()
             }
@@ -869,6 +902,7 @@ class ZoomableImageView(context: Context) : View(context) {
                 hasPendingStart = false
                 twoFingerTapCandidate = false
                 finishActiveStroke(notify = true)
+                if (stylusInk) stylusGuardUntil = event.eventTime + STYLUS_GUARD_MS
                 notifyViewport(force = true)
             }
         }
@@ -915,12 +949,13 @@ class ZoomableImageView(context: Context) : View(context) {
 
     // ---- 画笔：笔迹生命周期 ----
 
-    private fun startStroke(viewX: Float, viewY: Float) {
-        val point = toNormalized(viewX, viewY) ?: return
+    private fun startStroke(viewX: Float, viewY: Float, eventTime: Long, pressure: Float) {
+        val point = toNormalized(viewX, viewY, 0, pressure) ?: return
+        strokeStartedAtMs = eventTime
         val stroke = AnnotationStroke(
             id = "a${++strokeSeq}",
             colorHex = if (penEraser) ERASER_COLOR else penColorHex,
-            width = if (penEraser) AnnotationPalette.ERASER_WIDTH else AnnotationPalette.PEN_WIDTH,
+            width = if (penEraser) AnnotationPalette.ERASER_WIDTH else PenSettings.width,
             isEraser = penEraser
         )
         stroke.points.add(point)
@@ -933,14 +968,33 @@ class ZoomableImageView(context: Context) : View(context) {
             redrawAnnotationLayer()
             annotationDirty = false
         }
-        appendActiveSegment()
+        // 板擦必须画进离屏层（CLEAR 只能作用于笔迹层，画到视图层会把底图擦掉）；
+        // 画笔改为每帧实时绘制，因为起收笔收尖要跟着笔画总长度变化，画进离屏层就改不回来了。
+        if (stroke.isEraser) appendActiveSegment()
         invalidate()
         onStrokeBegin?.invoke(stroke.id, stroke.colorHex, stroke.width, stroke.isEraser, point)
     }
 
-    private fun extendStroke(viewX: Float, viewY: Float) {
+    /**
+     * 处理一次 MOVE：MotionEvent 一批里通常合并了 3~10 个采样点（getHistorical*），
+     * 只取 event.x / event.y 会把笔迹拉成稀疏折线、笔锋看不出粗细渐变。
+     */
+    private fun extendStroke(event: MotionEvent) {
+        for (h in 0 until event.historySize) {
+            extendStroke(
+                event.getHistoricalX(0, h),
+                event.getHistoricalY(0, h),
+                event.getHistoricalEventTime(h),
+                event.getHistoricalPressure(0, h)
+            )
+        }
+        extendStroke(event.x, event.y, event.eventTime, event.pressure)
+    }
+
+    private fun extendStroke(viewX: Float, viewY: Float, eventTime: Long, pressure: Float) {
         val stroke = activeStroke ?: return
-        val point = toNormalized(viewX, viewY) ?: return
+        val elapsed = (eventTime - strokeStartedAtMs).coerceIn(0L, 600000L).toInt()
+        val point = toNormalized(viewX, viewY, elapsed, pressure) ?: return
         val last = stroke.points.last()
         val dx = point.x - last.x
         val dy = point.y - last.y
@@ -948,7 +1002,7 @@ class ZoomableImageView(context: Context) : View(context) {
         if (dx * dx + dy * dy < threshold * threshold) return
         stroke.points.add(point)
         pendingPoints.add(point)
-        appendActiveSegment()
+        if (stroke.isEraser) appendActiveSegment()
         invalidate()
         val now = System.currentTimeMillis()
         if (now - lastSyncAt >= AnnotationPalette.SYNC_INTERVAL_MS || pendingPoints.size >= MAX_PENDING_POINTS) {
@@ -1006,7 +1060,8 @@ class ZoomableImageView(context: Context) : View(context) {
         for (stroke in remoteStrokes.values) {
             drawStroke(annotationCanvas, stroke, 0)
         }
-        activeStroke?.let {
+        activeStroke?.takeIf { it.isEraser }?.let {
+            // 只把进行中的板擦落进离屏层；画笔笔画是每帧在视图层实时画的，不能烙进层里
             drawStroke(annotationCanvas, it, 0)
             activeDrawnIndex = (it.points.size - 1).coerceAtLeast(0)
         }
@@ -1038,6 +1093,12 @@ class ZoomableImageView(context: Context) : View(context) {
         }
         targetPaint.strokeWidth = stroke.width * density * if (!stroke.isEraser && stroke.mode == "highlighter") 5f else 1f
 
+        // 实线画笔走手写轮廓（perfect-freehand）；板擦、荧光笔、虚线、直线工具保持等宽
+        if (!stroke.isEraser && stroke.mode == "solid" && !stroke.lineMode && points.size >= 3) {
+            drawFreehandStroke(target, points, targetPaint.strokeWidth, rect, targetPaint)
+            return
+        }
+
         val lastIndex = points.size - 1
         if (lastIndex == 0) {
             // 单点：补画一个圆点，与大屏端 drawAnnotationStroke 的行为一致
@@ -1066,6 +1127,55 @@ class ZoomableImageView(context: Context) : View(context) {
         strokePath.rewind()
     }
 
+    /**
+     * 手写轮廓：交给 PerfectFreehand 生成多边形，一次 drawPath 填充。
+     * 参数与大屏 web/app.js、iPad annotation.js 保持一致。
+     */
+    private fun drawFreehandStroke(
+        target: Canvas,
+        points: List<AnnotationPoint>,
+        widthPx: Float,
+        rect: RectF,
+        paint: Paint
+    ) {
+        var minP = 1f
+        var maxP = 0f
+        for (point in points) {
+            if (point.p < minP) minP = point.p
+            if (point.p > maxP) maxP = point.p
+        }
+        val hasPressure = maxP - minP >= 0.04f
+        val input = points.map { point ->
+            PerfectFreehand.Input(
+                rect.left + point.x * rect.width(),
+                rect.top + point.y * rect.height(),
+                if (hasPressure) point.p else 0.5f
+            )
+        }
+        val size = widthPx * 1.25f
+        val outline = PerfectFreehand.outline(
+            input,
+            size,
+            thinning = 0.6f,
+            smoothing = 0.5f,
+            streamline = 0.5f,
+            simulatePressure = !hasPressure,
+            taperStart = size * 0.55f,
+            taperEnd = size * 0.55f
+        )
+        if (outline.size < 4) return
+        inkPath.rewind()
+        inkPath.moveTo(outline[0], outline[1])
+        var i = 2
+        while (i + 1 < outline.size) {
+            inkPath.lineTo(outline[i], outline[i + 1])
+            i += 2
+        }
+        inkPath.close()
+        paint.style = Paint.Style.FILL
+        target.drawPath(inkPath, paint)
+        paint.style = Paint.Style.STROKE
+    }
     private fun markAnnotationDirty() {
         if (strokes.isNotEmpty() || activeStroke != null) {
             annotationDirty = true
@@ -1180,5 +1290,7 @@ class ZoomableImageView(context: Context) : View(context) {
         private const val START_STROKE_SLOP_DP = 6f
         /** 板擦不依赖颜色（大屏端固定 #000），这里给一个占位色 */
         private const val ERASER_COLOR = "#000000"
+        /** 手写笔抬笔后屏蔽触控的时间，防止掌托边缘立刻落下被当成新的手指操作 */
+        private const val STYLUS_GUARD_MS = 500L
     }
 }

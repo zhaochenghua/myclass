@@ -18,6 +18,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /**
@@ -47,34 +48,42 @@ class UpdateManager(private val activity: Activity) {
     fun checkForUpdate() {
         Thread {
             runCatching {
-                val request = Request.Builder()
-                    .url("${BuildConfig.SERVER_BASE_URL.trimEnd('/')}/api/config")
-                    .get()
-                    .build()
-                httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IOException("获取配置失败：HTTP ${response.code}")
-                    }
-                    val body = response.body?.string() ?: throw IOException("空响应")
-                    val config = JSONObject(body)
+                // 先试校园网地址，不通再试公网地址：外网用户（手机流量、校外宽带）
+                // 访问不到 10.30.13.1，只用校园网地址会静默失败，永远收不到更新提示。
+                val bases = listOf(BuildConfig.SERVER_BASE_URL, BuildConfig.EXTERNAL_SERVER_BASE_URL)
+                    .map { it.trimEnd('/') }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                for (base in bases) {
+                    val config = fetchConfig(base) ?: continue
                     val remoteVersion = config.optString("apkVersion", "")
-                    val apkUrl = config.optString("apkUrl", "")
-                    if (remoteVersion.isBlank() || apkUrl.isBlank()) return@use
-                    if (isNewerVersion(BuildConfig.VERSION_NAME, remoteVersion)) {
-                        val cached = cachedApkFor(remoteVersion)
-                        activity.runOnUiThread {
-                            if (cached != null) {
-                                // 同一个版本之前已经下载过（例如去开启安装权限后返回）：直接给「立即安装」
-                                showInstallDialog(cached)
-                            } else {
-                                showUpdateAvailableDialog(remoteVersion, apkUrl)
-                            }
+                    if (remoteVersion.isBlank()) continue
+                    if (!isNewerVersion(BuildConfig.VERSION_NAME, remoteVersion)) return@runCatching
+                    // 下载地址必须跟"能连上的那个 base"走，否则外网用户会去下内网地址
+                    val apkUrl = "$base/myclass.apk?v=${URLEncoder.encode(remoteVersion, "UTF-8")}"
+                    val cached = cachedApkFor(remoteVersion)
+                    activity.runOnUiThread {
+                        if (cached != null) {
+                            showInstallDialog(cached)
+                        } else {
+                            showUpdateAvailableDialog(remoteVersion, apkUrl)
                         }
                     }
+                    return@runCatching
                 }
             }.onFailure { /* 静默失败，不影响正常使用 */ }
         }.start()
     }
+
+    /** 读取某个服务地址的 /api/config；连不上或返回异常时返回 null */
+    private fun fetchConfig(base: String): JSONObject? = runCatching {
+        val request = Request.Builder().url("$base/api/config").get().build()
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val body = response.body?.string() ?: return null
+            JSONObject(body)
+        }
+    }.getOrNull()
 
     private fun showUpdateAvailableDialog(remoteVersion: String, apkUrl: String) {
         AlertDialog.Builder(activity)

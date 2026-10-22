@@ -266,6 +266,9 @@ class SignalingClient(
                 JSONObject()
                     .put("x", AnnotationPalette.round(point.x))
                     .put("y", AnnotationPalette.round(point.y))
+                    // t：相对笔画起点的毫秒数；p：指针压力（0~1）。旧端忽略这两个字段
+                    .put("t", point.t)
+                    .put("p", AnnotationPalette.round(point.p))
             )
         }
     }
@@ -419,7 +422,9 @@ class SignalingClient(
                 points.add(
                     AnnotationPoint(
                         item.optDouble("x").toFloat(),
-                        item.optDouble("y").toFloat()
+                        item.optDouble("y").toFloat(),
+                        item.optInt("t", 0).coerceAtLeast(0),
+                        item.optDouble("p", 0.5).toFloat().coerceIn(0f, 1f)
                     )
                 )
             }

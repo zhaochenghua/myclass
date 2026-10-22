@@ -1,4 +1,4 @@
-import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261015-video';
+import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261022-ink';
 let embeddedVideoControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';
@@ -31,7 +31,7 @@ import { MediaPipeline } from './pipeline.js?v=20260920a';
 import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
 import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261012-ios3';
 import { mediaKind, prepareImageFile, ensureMediaUploaded } from './mediaFiles.mjs?v=20261012-ios3';
-import { AnnotationBoard } from './annotation.js?v=20261022-reader';
+import { AnnotationBoard, stylusBusy, PEN_WIDTH_LEVELS } from './annotation.js?v=20261022-start';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261012-ios3';
 import { ListPreviews, playbackProgress } from './listPreviews.mjs?v=20261022-reader';
 import { createCoursewareLinks } from './coursewareLinks.mjs?v=20261022-reader';
@@ -73,7 +73,7 @@ const state = {
   torchOn: false,
   courseware: null,
   // 图片视频投屏队列（与 Android 一致：上传后由大屏加载，投屏中可直接切换）
-  media: { queue: [], index: -1, preloading: false, uploading: false },
+  media: { queue: [], index: -1, preloading: false, uploading: false, serverList: false },
   // 大屏端视频播放状态（遥控器界面用）
   video: { playing: false, position: 0, duration: 0, muted: false, volume: 100 },
   // 画笔标注：图片投屏与课件投屏各一块画板
@@ -96,6 +96,11 @@ const state = {
   pendingCoursewareClose: false,
   // 图片/视频投屏期间课件"挂起"：state.courseware 仍保留，但不再采信大屏回传的课件状态
   coursewareSuspended: false,
+  // 笔画粗细（三档），与大屏共用一个 localStorage 键
+  penWidth: PEN_WIDTH_LEVELS[1],
+  // 这份课件是从哪个页面打开的（'CoursewareList' 表示服务器课件列表）；
+  // 结束播放时据此回到列表，而不是一律回主菜单
+  coursewareOrigin: null,
   uploadAbort: null,
   lastHiddenAt: 0
 };
@@ -234,6 +239,14 @@ async function connectCampus() {
 
   // 启动即做一次版本自检：服务端已升级而本机仍是旧代码时提示更新
   checkForUpdate();
+  // PWA 常年挂在后台不重启，只靠启动自检会永远收不到更新：
+  // 回到前台时再查一次，另外每 10 分钟兜底查一次（同一版本点过"稍后"不会再弹）
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.config) checkForUpdate();
+  });
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && state.config) checkForUpdate();
+  }, 10 * 60 * 1000);
 
   const token = storage.get('token');
   if (!token) {
@@ -832,6 +845,8 @@ function bindLiveGestures() {
   };
 
   stage.addEventListener('touchstart', (event) => {
+    // 手写笔正在写：掌托 / 手指一律不参与缩放平移，避免写字时画面乱跳
+    if (stylusBusy()) { lastSingle = null; return; }
     const points = pointsOf(event);
     if (points.length >= 2) {
       // 双指捏合：以最近一次有效间距为基准做连续缩放，
@@ -1182,18 +1197,6 @@ function panByMedia(dx, dy) {
   sendMediaViewport();
 }
 
-/** 复位图片缩放与平移（放大倍数回到 1、中心回到正中） */
-function resetMediaView() {
-  const item = state.media.queue[state.media.index];
-  if (!item || item.kind !== 'image') return;
-  item.scale = 1;
-  item.panX = 0;
-  item.panY = 0;
-  applyMediaPreviewRotation();
-  updateMediaZoomStatus();
-  sendMediaViewport();
-}
-
 /** 平移范围随放大倍数收紧，避免露出图片外的黑边 */
 function clampMediaPan(item) {
   const limit = Math.max(0, (1 - 1 / (item.scale || 1)) / 2);
@@ -1201,13 +1204,12 @@ function clampMediaPan(item) {
   item.panY = clamp(item.panY || 0, -limit, limit);
 }
 
-/** 缩放时在状态栏临时显示倍数，复位后恢复默认提示 */
+/** 缩放时在状态栏临时显示倍数，复位后清空（正常投屏不再常驻提示文字） */
 function updateMediaZoomStatus() {
   const item = state.media.queue[state.media.index];
   if (!item || item.kind !== 'image') return;
   const s = item.scale || 1;
-  $('mediaStatus').textContent =
-    s > 1.02 ? `缩放 ${s.toFixed(2)}x（双指/滚轮缩放，拖动平移）` : '大屏正在显示该图片';
+  setMediaStatus(s > 1.02 ? `缩放 ${s.toFixed(2)}x（双指/滚轮缩放，拖动平移）` : '');
 }
 
 /**
@@ -1325,6 +1327,8 @@ function bindMediaGestures() {
 
   stage.addEventListener('touchstart', (event) => {
     if (!imageShown()) return;
+    // 手写笔正在写：掌托 / 手指不参与翻页和缩放
+    if (stylusBusy()) { lastSingle = null; return; }
     const pts = pointsOf(event);
     if (pts.length > 0) beginPaging(pts);
     if (pts.length >= 2) {
@@ -1547,7 +1551,7 @@ function renderMediaQueue() {
   mediaListPreviews = new ListPreviews(body);
   body.innerHTML = '';
   if (state.media.queue.length === 0) {
-    body.innerHTML = '<p class="list-empty">还没有选择图片或视频</p>';
+    body.innerHTML = `<p class="list-empty">${state.media.serverList ? '服务器暂无图片视频' : '还没有选择图片或视频'}</p>`;
     return;
   }
 
@@ -1583,6 +1587,17 @@ function renderMediaQueue() {
     main.append(mediaListPreviews.add(item, typeText), text);
     main.addEventListener('click', () => castMediaItem(index));
     row.appendChild(main);
+
+    // 服务器上已有文件的（已上传 / 服务器列表）才给删除按钮：
+    // 还在本地待上传的条目没有 id，删了也删不到服务器上的东西
+    if (item.id) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'cw-item-del';
+      del.textContent = '删除';
+      del.addEventListener('click', () => confirmDeleteMedia(item));
+      row.appendChild(del);
+    }
     body.appendChild(row);
   });
 }
@@ -1635,20 +1650,24 @@ async function loadServerMedia() {
       panY: 0
     }));
     state.media.index = -1;
+    state.media.serverList = true;
     renderMediaQueue();
   } catch (error) {
     $('mediaQueueBody').innerHTML = `<p class="list-empty">${error.message || '加载失败'}</p>`;
   }
 }
 
+/** 投屏状态行：没有话要说时整行不占位，避免常驻一行废话挤占底部按钮空间 */
+function setMediaStatus(text) {
+  const node = $('mediaStatus');
+  node.textContent = text || '';
+  node.hidden = !text;
+}
+
 function updateMediaCastUI(statusOverride) {
   const item = state.media.queue[state.media.index];
   const total = state.media.queue.length;
   $('mediaTitle').textContent = item ? (item.title || item.name) : '图片视频投屏';
-
-  const count = $('mediaCount');
-  count.hidden = total < 2;
-  if (total >= 2) count.textContent = `${state.media.index + 1}/${total}`;
 
   const isVideo = item?.kind === 'video';
   $('mediaVideoPanel').hidden = !isVideo;
@@ -1662,17 +1681,15 @@ function updateMediaCastUI(statusOverride) {
   if (total >= 2) $('mediaListButton').textContent = `列表 ${state.media.index + 1}/${total}`;
 
   if (statusOverride) {
-    $('mediaStatus').textContent = statusOverride;
+    setMediaStatus(statusOverride);
   } else if (!item) {
-    $('mediaStatus').textContent = '尚未选择文件';
+    setMediaStatus('尚未选择文件');
   } else if (isVideo) {
     updateVideoPanelUI();
-  } else if (total >= 2) {
-    $('mediaStatus').textContent = state.joined
-      ? '点画面左/右半边、或左右滑动可切换上一张/下一张'
-      : '正在重新连接教室端...';
   } else {
-    $('mediaStatus').textContent = state.joined ? '大屏正在显示该图片' : '正在重新连接教室端...';
+    // 一切正常时不显示任何文字：投屏成功本身是看得见的，只有断线才需要提示。
+    // 切换方式由底部的上一个 / 下一个 / 列表按钮自解释。
+    setMediaStatus(state.joined ? '' : '正在重新连接教室端...');
   }
 }
 
@@ -1716,13 +1733,13 @@ function updateVideoPanelUI() {
   $('mediaVolume').value = String(video.volume);
 
   if (!state.joined) {
-    $('mediaStatus').textContent = '正在重新连接教室端...';
+    setMediaStatus('正在重新连接教室端...');
   } else if (video.duration <= 0) {
-    $('mediaStatus').textContent = '大屏正在加载视频...';
+    setMediaStatus('大屏正在加载视频...');
   } else if (video.playing) {
-    $('mediaStatus').textContent = video.muted ? '大屏正在播放（已静音）' : '大屏正在播放';
+    setMediaStatus(video.muted ? '大屏正在播放（已静音）' : '大屏正在播放');
   } else {
-    $('mediaStatus').textContent = '大屏已暂停';
+    setMediaStatus('大屏已暂停');
   }
 }
 
@@ -1782,15 +1799,48 @@ function resetVideoState() {
   state.video.duration = 0;
 }
 
-function stopMediaCast() {
+/** 通知大屏结束当前投屏（不发就重连补发一次），但不改变本机界面 */
+function endMediaCastSignals() {
   const stopSent = state.signaling?.sendStop() === true;
   const closeSent = state.signaling?.sendCoursewareClose() === true;
   if (!stopSent && !closeSent && state.roomCode) {
     state.pendingCoursewareClose = true;
     ensureSignaling().join(state.roomCode, state.token);
   }
+}
+
+function stopMediaCast() {
+  endMediaCastSignals();
   resetMediaCastState();
   showMenu();
+}
+
+/**
+ * 删除服务器上的一个图片/视频，并把它从当前队列里摘掉。
+ * 如果删的正好是正在投屏的那一个，先把大屏的投屏结束掉，
+ * 避免大屏停在一个已经不存在的地址上。
+ */
+async function confirmDeleteMedia(item) {
+  if (!item?.id) return;
+  if (!window.confirm(`确定删除《${item.title || item.name}》？`)) return;
+  const index = state.media.queue.indexOf(item);
+  const casting = index >= 0 && index === state.media.index;
+  try {
+    await state.coursewareClient.remove(item.id);
+  } catch (error) {
+    toast(error.message || '删除失败', { warn: true });
+    return;
+  }
+  if (casting) {
+    endMediaCastSignals();
+    state.media.index = -1;
+  } else if (state.media.index > index) {
+    state.media.index -= 1;
+  }
+  if (index >= 0) state.media.queue.splice(index, 1);
+  toast('已删除');
+  if (state.screen === 'MediaQueue') renderMediaQueue();
+  else if (state.media.index >= 0) updateMediaCastUI();
 }
 
 function resetMediaCastState() {
@@ -1804,6 +1854,7 @@ function resetMediaCastState() {
   state.mediaBoard?.reset();
   state.media.queue = [];
   state.media.index = -1;
+  state.media.serverList = false;
   resetVideoState();
 }
 
@@ -1838,12 +1889,14 @@ function resumeMediaCast() {
 
 const MEDIA_BAR = {
   colors: 'mediaAnnotationColors',
+  width: 'mediaWidthButton',
   eraser: 'mediaEraserButton',
   undo: 'mediaUndoButton',
   clear: 'mediaClearButton'
 };
 const CW_BAR = {
   colors: 'cwAnnotationColors',
+  width: 'cwWidthButton',
   eraser: 'cwEraserButton',
   undo: 'cwUndoButton',
   clear: 'cwClearButton'
@@ -1858,6 +1911,42 @@ function setupAnnotationBoards() {
     console.error('[MyClass] 标注画板初始化失败', error);
     toast('标注功能初始化失败，请刷新页面重试', { warn: true, duration: 4000 });
   }
+}
+
+const PEN_WIDTH_LABELS = ['细', '中', '粗'];
+const PEN_WIDTH_STORAGE_KEY = 'myclass.penWidth';
+
+/** 笔画粗细：图标上三条线按当前档位高亮，不占文字宽度 */
+function renderAnnotationPenWidth() {
+  const index = Math.max(0, PEN_WIDTH_LEVELS.indexOf(state.penWidth));
+  document.querySelectorAll('.width-tool').forEach((button) => {
+    button.querySelectorAll('line').forEach((line, i) => line.setAttribute('opacity', i === index ? '1' : '.35'));
+    const label = `笔画粗细：${PEN_WIDTH_LABELS[index]}（点击切换）`;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  });
+}
+
+function setAnnotationPenWidth(width) {
+  const index = PEN_WIDTH_LEVELS.indexOf(width);
+  state.penWidth = PEN_WIDTH_LEVELS[index >= 0 ? index : 1];
+  state.mediaBoard?.setPenWidth(state.penWidth);
+  state.cwBoard?.setPenWidth(state.penWidth);
+  try { localStorage.setItem(PEN_WIDTH_STORAGE_KEY, String(state.penWidth)); } catch {}
+  renderAnnotationPenWidth();
+}
+
+function cycleAnnotationPenWidth() {
+  const index = Math.max(0, PEN_WIDTH_LEVELS.indexOf(state.penWidth));
+  setAnnotationPenWidth(PEN_WIDTH_LEVELS[(index + 1) % PEN_WIDTH_LEVELS.length]);
+}
+
+function restoreAnnotationPenWidth() {
+  let stored = NaN;
+  try { stored = Number(localStorage.getItem(PEN_WIDTH_STORAGE_KEY)); } catch {}
+  const width = PEN_WIDTH_LEVELS.includes(stored) ? stored : PEN_WIDTH_LEVELS[1];
+  setAnnotationPenWidth(width);
+  renderAnnotationPenWidth();
 }
 
 function createAnnotationBoards() {
@@ -1883,6 +1972,7 @@ function createAnnotationBoards() {
 
   bindAnnotationBar(MEDIA_BAR, state.mediaBoard);
   bindAnnotationBar(CW_BAR, state.cwBoard);
+  restoreAnnotationPenWidth();
 }
 
 function boardOfBar(bar) {
@@ -1902,6 +1992,10 @@ function bindAnnotationBar(bar, board) {
     board.setEraser(!board.eraser);
     refreshAnnotationBar(bar);
   });
+  // 笔画粗细：图标按钮循环切换 细 / 中 / 粗
+  $(bar.width)?.addEventListener('click', () => cycleAnnotationPenWidth());
+  // 换图 / 换课件后把当前档位同步给新画布
+  board.setPenWidth(state.penWidth);
   $(bar.undo).addEventListener('click', () => {
     if (!board.undo()) toast('没有可撤销的笔迹');
   });
@@ -2232,6 +2326,7 @@ function releaseCoursewarePreview() {
 function clearCourseware() {
   state.courseware = null;
   state.coursewareSuspended = false;
+  state.coursewareOrigin = null;
   releaseCoursewarePreview();
 }
 
@@ -2700,6 +2795,8 @@ function bindCoursewareGestures() {
 
   stage.addEventListener('touchstart', (event) => {
     if (!coursewarePreviewReady()) return;
+    // 手写笔正在写：掌托 / 手指不参与翻页和缩放
+    if (stylusBusy()) { lastSingle = null; return; }
     const pts = pointsOf(event);
     beginPaging(pts);
     viewerDragStarted = false;
@@ -2973,6 +3070,8 @@ function openCourseware(item) {
     linkUrl: item.linkUrl || null
   };
   state.coursewareSuspended = false;
+  // 记住入口：从「服务器课件列表」点进来的，结束播放后回到列表；其余回主菜单
+  state.coursewareOrigin = state.screen === 'CoursewareList' ? 'CoursewareList' : 'Menu';
 
   state.signaling?.sendCoursewareOpen({
     url: state.courseware.url,
@@ -3116,13 +3215,19 @@ function stopCoursewareSignals() {
 
 function stopCourseware({ silent = false } = {}) {
   if (!state.courseware) return;
+  // 从服务器课件列表点进去的，结束后回到列表继续挑课件；本地文件 / 菜单入口仍回主菜单
+  const backToList = state.coursewareOrigin === 'CoursewareList' && !!state.coursewareClient;
   clearCourseware();
   if (silent) return;
   if (!stopCoursewareSignals() && state.roomCode) {
     state.pendingCoursewareClose = true;
     ensureSignaling().join(state.roomCode, state.token);
   }
-  showMenu();
+  if (backToList) {
+    loadServerCourseware({ forManage: false }).catch(() => showMenu());
+  } else {
+    showMenu();
+  }
 }
 
 // 长按连续翻页
@@ -3254,7 +3359,11 @@ function bindStaticEvents() {
   });
   embeddedVideoControls = createEmbeddedVideos({
     container: document.querySelector('.cw-footer .classroom-actions'), remote: true,
-    getContext: () => state.screen === 'CoursewarePlay' && state.courseware && !state.coursewareSuspended ? { url: state.courseware.url, page: state.courseware.page } : null,
+    // 只有 PDF 课件才可能有内嵌视频：图片课件也走课件播放页，但它没有 .metadata，
+    // 不加这个判断就会在图片上冒出一个"视频信息"按钮。
+    getContext: () => state.screen === 'CoursewarePlay' && state.courseware && !state.coursewareSuspended
+      && coursewarePreviewKind(state.courseware) === 'pdf'
+      ? { url: state.courseware.url, page: state.courseware.page } : null,
     send: payload => state.signaling?.send(payload) ?? false
   });
   coursewareLinkControls = createCoursewareLinks({
@@ -3412,15 +3521,6 @@ function bindStaticEvents() {
   $('cwLeaveButton').addEventListener('click', () => leaveCoursewareToMenu());
   $('menuResumeCourseware').addEventListener('click', () => resumeCourseware());
   $('cwPenButton').addEventListener('click', () => setCoursewarePenMode(!state.cwBoard?.penMode));
-  // 缩放 / 平移后一键回到「顶部对齐 + 1 倍」的默认视图
-  $('cwResetView').addEventListener('click', () => {
-    if (!coursewarePreviewReady()) {
-      toast('当前课件不支持在 iPad 上预览', { warn: true });
-      return;
-    }
-    resetCoursewareViewport({ atBottom: false });
-    toast('已复位视图');
-  });
 
   bindPageLongPress('cwPrevPage', -1);
   bindPageLongPress('cwNextPage', 1);
@@ -3431,7 +3531,6 @@ function bindStaticEvents() {
   bindMediaGestures();
   // 课件预览的缩放 / 平移 / 点动与滑动翻页（缺了这一步 iPad 上只能看不能操作画面）
   bindCoursewareGestures();
-  $('mediaResetView').addEventListener('click', resetMediaView);
 
   window.addEventListener('orientationchange', () => {
     setTimeout(() => handleOrientationChange(), 300);

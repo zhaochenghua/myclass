@@ -9,10 +9,27 @@ const coursewareLinkControls = import('./ios/js/coursewareLinks.mjs?v=20261015-l
 })).catch(() => ({ clear() {}, render() {}, update() {}, setInteractive() {} }));
 const embeddedVideos = import('./ios/js/embeddedVideos.mjs?v=20261015-video').then(({ createEmbeddedVideos }) => createEmbeddedVideos({
   container: document.getElementById('annotationToolbar'),
-  getContext: () => state.presentationMode === 'courseware' && state.courseware ? { url: state.courseware.url, page: state.courseware.page } : null,
+  // 内嵌视频只有 PDF 课件才有（图片/视频/压缩包都不存在 .metadata 接口），
+  // 否则大屏在投屏图片时也会冒出"视频信息"按钮。
+  getContext: () => state.presentationMode === 'courseware' && state.courseware && currentContentKind() === 'pdf'
+    ? { url: state.courseware.url, page: state.courseware.page } : null,
   send: payload => sendMessage(payload)
 })).catch(() => ({ receive() {} }));
+// 手写笔迹轮廓：perfect-freehand（MIT）。动态加载，加载完成前先用下面的兜底算法渲染，
+// 避免首屏笔画直接消失。
+let freehandStroke = null;
+import('./ios/js/perfect-freehand.mjs')
+  .then((module) => {
+    freehandStroke = module.default;
+    if (typeof scheduleAnnotationRedraw === 'function') scheduleAnnotationRedraw();
+  })
+  .catch(() => {});
 let studentRoller = null;
+// 笔画粗细三档（CSS px）：细 / 中 / 粗。工具栏用图标切换，不写字省位置。
+const PEN_WIDTH_LEVELS = [4, 6, 9];
+const PEN_WIDTH_ICONS = ['<line x1="6" y1="6" x2="42" y2="6" stroke-width="2"/>',
+  '<line x1="6" y1="6" x2="42" y2="6" stroke-width="4"/>',
+  '<line x1="6" y1="6" x2="42" y2="6" stroke-width="7"/>'];
 // A document reload starts a new visit; a socket reconnect does not.
 let viewerJoinedThisPage = false;
 const state = {
@@ -54,7 +71,9 @@ const state = {
     tool: 'pen',
     mode: 'solid',  // solid | dashed | dashdot | highlighter
     lineMode: false,  // true=直线 false=曲线（与线型正交）
-    eraserWidth: 40  // 板擦直径(px)
+    eraserWidth: 40,  // 板擦直径(px)
+    // 笔画粗细三档（CSS px）。笔锋的粗细变化在这个量级才看得出来，4 太细
+    penWidth: PEN_WIDTH_LEVELS[1]
   },
   blackboard: {
     active: false,
@@ -190,6 +209,8 @@ const elements = {
   annotationMoreColorsMenu: document.getElementById('annotationMoreColorsMenu'),
   annotationColorsDropdown: document.getElementById('annotationColorsDropdown'),
   annotationModeMenu: document.getElementById('annotationModeMenu'),
+  annotationWidthButton: document.getElementById('annotationWidthButton'),
+  blackboardWidthButton: document.getElementById('blackboardWidthButton'),
   annotationLineToggle: document.getElementById('annotationLineToggle'),
   fullscreenButton: document.getElementById('annotationFullscreenButton'),
   coursewareDropdown: document.getElementById('coursewareDropdown'),
@@ -652,6 +673,14 @@ async function bootstrap() {
         elements.annotationModeMenu.classList.remove('is-open');
       });
     });
+    elements.annotationWidthButton?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cycleAnnotationPenWidth();
+    });
+    elements.blackboardWidthButton?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cycleAnnotationPenWidth();
+    });
     document.addEventListener('click', (e) => {
       const dropdown = elements.annotationColorsDropdown;
       if (dropdown && !dropdown.contains(e.target)) {
@@ -668,6 +697,7 @@ async function bootstrap() {
     updateAnnotationButtons();
     updateAnnotationColorButtons();
     updateAnnotationModeButtons();
+    restoreAnnotationPenWidth();
     updateBlackboardColorButtons();
     updateBlackboardModeButtons();
     updateAnnotationToolButtons();
@@ -2294,7 +2324,13 @@ function normalizeAnnotationPoints(rawPoints) {
     const x = Number(raw && raw.x);
     const y = Number(raw && raw.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    points.push({ x: clamp(x, 0, 1), y: clamp(y, 0, 1) });
+    // t 用于速度笔锋；p 是手写笔压力（0~1），缺省时各端会退回速度模拟
+    const t = Number(raw && raw.t);
+    const point = { x: clamp(x, 0, 1), y: clamp(y, 0, 1) };
+    if (Number.isFinite(t) && t >= 0) point.t = t;
+    const p = Number(raw && raw.p);
+    if (Number.isFinite(p) && p >= 0) point.p = clamp(p, 0, 1);
+    points.push(point);
   }
   return points;
 }
@@ -3806,7 +3842,29 @@ function handleHandwritingTouch(event, phase, blackboard = false) {
   return true;
 }
 
+// ---- 手写笔防误触 ----
+// 带手写笔的触摸大屏会同时收到 pointerType === 'pen'（笔）和 'touch'（手掌、手指）。
+// 笔在写的时候，手指 / 掌托一律不参与绘制，也不触发缩放、平移、翻页；抬笔后再屏蔽一小段时间，
+// 避免掌托边缘刚离开又落下时画出杂笔。
+const STYLUS_GUARD_MS = 500;
+let stylusActiveUntil = 0;
+
+function noteStylus(event) {
+  if (event && event.pointerType === 'pen') stylusActiveUntil = performance.now() + STYLUS_GUARD_MS;
+}
+
+function stylusBusy() {
+  return performance.now() < stylusActiveUntil;
+}
+
+/** 非手写笔的触点是否需要让开：笔正在写（或刚抬笔）时返回 true */
+function absorbPalmTouch(event) {
+  noteStylus(event);
+  return !!event && event.pointerType !== 'pen' && stylusBusy();
+}
+
 function beginAnnotationStroke(event) {
+  if (absorbPalmTouch(event)) return;
   if (state.courseware?.pdfDocument && state.courseware.displayedPage !== state.courseware.page) return;
   if (handleHandwritingTouch(event, 'down')) return;
   if (beginLockedVideoPan(event)) return;
@@ -3835,14 +3893,18 @@ function beginAnnotationStroke(event) {
   elements.annotationCanvas.setPointerCapture(event.pointerId);
   const isEraser = state.annotations.tool === 'eraser';
   const isLine = !isEraser && state.annotations.lineMode;
+  // 记下起笔时间，后续每个点带上相对时间戳，供速度笔锋计算线宽
+  point.t = 0;
+  point.p = pointerPressure(event);
   state.annotations.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
     color: isEraser ? '#000' : state.annotations.currentColor,
-    width: isEraser ? state.annotations.eraserWidth : 4,
+    width: isEraser ? state.annotations.eraserWidth : state.annotations.penWidth,
     isEraser: isEraser,
     mode: isEraser ? null : state.annotations.mode,
     lineMode: isLine,
     points: [point],
+    startedAt: event.timeStamp,
     startScreen: isLine ? { x: event.clientX, y: event.clientY } : null,
     page: currentCoursewarePage()
   });
@@ -3851,6 +3913,7 @@ function beginAnnotationStroke(event) {
 }
 
 function continueAnnotationStroke(event) {
+  if (absorbPalmTouch(event)) return;
   if (handleHandwritingTouch(event, 'move')) return;
   if (continueLockedVideoPan(event)) return;
   // 投屏图片：正在平移/捏合时优先处理，避免中途切工具导致手势错乱
@@ -3882,23 +3945,48 @@ function continueAnnotationStroke(event) {
     return;
   }
   event.preventDefault();
-  const lastPoint = stroke.points.at(-1);
-  if (lastPoint && Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 0.001) {
-    return;
-  }
   if (stroke.lineMode) {
+    const lastPoint = stroke.points.at(-1);
+    if (lastPoint && Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 0.0005) {
+      return;
+    }
     // 直线模式：只保留起点与当前点，水平/竖直自动吸附，实时显示长度与夹角
     const { storagePoint, screenPoint } = computeLineSnap(stroke.points[0], point, stroke.startScreen, event);
     stroke.points = [stroke.points[0], storagePoint];
     updateAngleIndicator(stroke.startScreen, screenPoint);
-  } else {
-    stroke.points.push(point);
+    syncViewerAnnotationPoints(event.pointerId, stroke.points.at(-1));
+    drawAnnotations();
+    return;
   }
+
+  // 浏览器把一帧内的多个采样点合并进同一个 pointermove（getCoalescedEvents），
+  // 只取 event 本身会让笔迹变成稀疏折线——这正是"没有测试页顺滑"的原因。
+  let samples = [];
+  try {
+    if (typeof event.getCoalescedEvents === 'function') samples = event.getCoalescedEvents() || [];
+  } catch {
+    samples = [];
+  }
+  if (!samples.length) samples = [event];
+
+  let added = false;
+  for (const sample of samples) {
+    const samplePoint = pointerEventToSourcePoint(sample);
+    if (!samplePoint) continue;
+    const last = stroke.points.at(-1);
+    if (last && Math.hypot(samplePoint.x - last.x, samplePoint.y - last.y) < 0.0005) continue;
+    samplePoint.t = Math.max(0, Math.round(sample.timeStamp - (stroke.startedAt || sample.timeStamp)));
+    samplePoint.p = pointerPressure(sample);
+    stroke.points.push(samplePoint);
+    added = true;
+  }
+  if (!added) return;
   syncViewerAnnotationPoints(event.pointerId, stroke.points.at(-1));
   drawAnnotations();
 }
 
 function finishAnnotationStroke(event) {
+  noteStylus(event);
   if (handleHandwritingTouch(event, 'up')) return;
   if (finishLockedVideoPan(event)) return;
   // 投屏图片：清理本次手势的指针缓存，结束平移或捏合
@@ -4276,8 +4364,48 @@ function updateAnnotationModeButtons() {
   });
 }
 
-function updateLineToggleButtons() {
-  if (elements.annotationLineToggle) {
+/** 笔画粗细三档：图标上的三条线按当前档位高亮，不占用文字宽度 */
+const PEN_WIDTH_LABELS = ['细', '中', '粗'];
+const PEN_WIDTH_STORAGE_KEY = 'myclass.penWidth';
+
+function annotationPenWidthIndex() {
+  const index = PEN_WIDTH_LEVELS.indexOf(state.annotations.penWidth);
+  return index >= 0 ? index : 1;
+}
+
+function renderAnnotationPenWidth() {
+  const index = annotationPenWidthIndex();
+  const label = `笔画粗细：${PEN_WIDTH_LABELS[index]}（点击切换）`;
+  // 课件工具栏与黑板工具栏共用同一个档位，两个按钮一起刷新
+  document.querySelectorAll('.pen-width-button').forEach((button) => {
+    button.querySelectorAll('line').forEach((line, i) => line.setAttribute('opacity', i === index ? '1' : '.35'));
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  });
+}
+
+function setAnnotationPenWidth(width, { persist = true } = {}) {
+  const index = PEN_WIDTH_LEVELS.indexOf(width);
+  state.annotations.penWidth = PEN_WIDTH_LEVELS[index >= 0 ? index : 1];
+  if (persist) {
+    try { localStorage.setItem(PEN_WIDTH_STORAGE_KEY, String(state.annotations.penWidth)); } catch {}
+  }
+  renderAnnotationPenWidth();
+}
+
+function cycleAnnotationPenWidth() {
+  const next = (annotationPenWidthIndex() + 1) % PEN_WIDTH_LEVELS.length;
+  setAnnotationPenWidth(PEN_WIDTH_LEVELS[next]);
+}
+
+function restoreAnnotationPenWidth() {
+  let stored = NaN;
+  try { stored = Number(localStorage.getItem(PEN_WIDTH_STORAGE_KEY)); } catch {}
+  state.annotations.penWidth = PEN_WIDTH_LEVELS.includes(stored) ? stored : PEN_WIDTH_LEVELS[1];
+  renderAnnotationPenWidth();
+}
+
+function updateLineToggleButtons() {  if (elements.annotationLineToggle) {
     elements.annotationLineToggle.textContent = state.annotations.lineMode ? '曲线' : '直线';
     elements.annotationLineToggle.classList.toggle('is-active', state.annotations.lineMode);
   }
@@ -4438,6 +4566,17 @@ function updateAnnotationColorButtons() {
   elements.annotationMoreColorsButton.title = `点击选择深绿色线型，再次点击展开其他颜色（当前：${selected?.getAttribute('aria-label') || '深绿色'}）`;
 }
 
+/**
+ * 指针压力（0~1）。手写笔给真实压力；手指 / 鼠标固定 0.5——
+ * 各端渲染时会检查整笔的压力跨度，恒定值自动退回"用速度模拟"。
+ */
+function pointerPressure(event) {
+  if (!event || event.pointerType !== 'pen') return 0.5;
+  const value = Number(event.pressure);
+  if (!Number.isFinite(value) || value <= 0) return 0.5;
+  return clamp(value, 0.01, 1);
+}
+
 function pointerEventToSourcePoint(event) {
   const videoRect = currentVideoContentRect();
   if (!videoRect || videoRect.width <= 0 || videoRect.height <= 0) {
@@ -4481,6 +4620,211 @@ function drawAnnotations() {
   }
 }
 
+// ---- 速度笔锋 ----
+// 三端（大屏 / iOS / Android）共用同一套参数：同一份笔迹（含每个点的时间戳 t）在哪块屏幕上
+// 算出来的粗细变化都一致，老师手机写完、投影仪上没有变形。
+// t 为相对笔画起点的毫秒数；缺少 t 的旧笔迹按 16ms 采样间隔退化处理。
+const INK_SPEED_REF = 1.75; // 归一化速度（图宽/秒）达到该值后不再继续变细
+const INK_SPEED_DROP = 0.56; // 最快处衰减到 0.44 倍
+const INK_TAPER_RATIO = 3.2; // 起收笔收尖长度 = 线宽 × 3.2
+const INK_TAPER_MIN = 0.2; // 笔尖最细到 0.2 倍
+const INK_MIN_WIDTH = 0.6; // px，避免出现 0 宽度的断续
+const INK_MAX_WIDTH_SCALE = 2.6; // 保险上限，防止异常数据把线画爆
+
+function inkSmoothstep(t) {
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * 按"写得多快"给每个点算线宽（px）。
+ * @param {Array<{x:number,y:number,t?:number}>} points 坐标（大屏笔迹为归一化，黑板笔迹为世界 px）
+ * @param {number} width 基础线宽（px）
+ * @param {number} unitX 一个 x 单位对应的像素宽
+ * @param {number} unitY 一个 y 单位对应的像素高
+ * @param {number} [refLen] 速度归一化长度（默认取 unitX），让不同坐标系下的"快慢"口径一致
+ */
+function inkWidths(points, width, unitX, unitY, refLen = unitX) {
+  const n = points.length;
+  const out = new Float32Array(n);
+  if (n === 0) return out;
+  if (n === 1) {
+    out[0] = width;
+    return out;
+  }
+  const reference = refLen > 0 ? refLen : 1;
+
+  // 1) 速度（参考长度/秒）做 EMA 平滑，避免抖动让粗细一节一节
+  const speeds = new Float32Array(n);
+  let speed = 0;
+  for (let i = 1; i < n; i++) {
+    const dx = (points[i].x - points[i - 1].x) * unitX;
+    const dy = (points[i].y - points[i - 1].y) * unitY;
+    const rawDt = Number(points[i].t) - Number(points[i - 1].t);
+    const dt = Math.max(1, Math.min(120, Number.isFinite(rawDt) && rawDt > 0 ? rawDt : 16));
+    speed = speed * 0.5 + ((Math.hypot(dx, dy) / reference / dt) * 1000) * 0.5;
+    speeds[i] = speed;
+  }
+  speeds[0] = speeds[1];
+
+  // 2) 沿笔迹的累计弧长（px），用于起笔 / 收笔收尖
+  const dist = new Float32Array(n);
+  for (let i = 1; i < n; i++) {
+    const dx = (points[i].x - points[i - 1].x) * unitX;
+    const dy = (points[i].y - points[i - 1].y) * unitY;
+    dist[i] = dist[i - 1] + Math.hypot(dx, dy);
+  }
+  const total = dist[n - 1] || 0;
+  const taper = Math.min(width * INK_TAPER_RATIO, total * 0.45);
+  const tapered = total > taper * 2.2;
+
+  for (let i = 0; i < n; i++) {
+    let factor = 1 - INK_SPEED_DROP * Math.min(speeds[i] / INK_SPEED_REF, 1);
+    if (tapered) {
+      const head = inkSmoothstep(Math.min(dist[i] / taper, 1));
+      const tail = inkSmoothstep(Math.min((total - dist[i]) / taper, 1));
+      factor *= (INK_TAPER_MIN + (1 - INK_TAPER_MIN) * head) * (INK_TAPER_MIN + (1 - INK_TAPER_MIN) * tail);
+    }
+    out[i] = Math.min(width * INK_MAX_WIDTH_SCALE, Math.max(INK_MIN_WIDTH, width * factor));
+  }
+  return out;
+}
+
+/**
+ * 把可变宽度的折线画成一个闭合轮廓再填充：一次 fill 完成整笔，
+ * 比逐段 stroke 便宜得多（大屏每帧要重绘全页笔迹）。
+ * @param {Array<{x:number,y:number,w:number}>} pts 画布坐标 + 该点线宽
+ */
+function traceInkOutline(context, pts) {
+  const cleaned = [];
+  for (const point of pts) {
+    const last = cleaned[cleaned.length - 1];
+    if (last && Math.abs(last.x - point.x) < 0.01 && Math.abs(last.y - point.y) < 0.01) {
+      last.w = point.w;
+      continue;
+    }
+    cleaned.push({ x: point.x, y: point.y, w: point.w });
+  }
+  if (cleaned.length === 0) return;
+  if (cleaned.length === 1) {
+    const only = cleaned[0];
+    context.beginPath();
+    context.arc(only.x, only.y, Math.max(only.w / 2, 0.5), 0, Math.PI * 2);
+    context.fill();
+    return;
+  }
+
+  const n = cleaned.length;
+  const left = new Array(n);
+  const right = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const point = cleaned[i];
+    const half = point.w / 2;
+    let ox;
+    let oy;
+    if (i === 0) {
+      const dx = cleaned[1].x - point.x;
+      const dy = cleaned[1].y - point.y;
+      const len = Math.hypot(dx, dy) || 1;
+      ox = (-dy / len) * half;
+      oy = (dx / len) * half;
+    } else if (i === n - 1) {
+      const dx = point.x - cleaned[i - 1].x;
+      const dy = point.y - cleaned[i - 1].y;
+      const len = Math.hypot(dx, dy) || 1;
+      ox = (-dy / len) * half;
+      oy = (dx / len) * half;
+    } else {
+      // 斜接：两条相邻线段法线的角平分线，长度 1/cos(θ/2)，角度过大时截断，避免尖刺
+      const ax = point.x - cleaned[i - 1].x;
+      const ay = point.y - cleaned[i - 1].y;
+      const bx = cleaned[i + 1].x - point.x;
+      const by = cleaned[i + 1].y - point.y;
+      const la = Math.hypot(ax, ay) || 1;
+      const lb = Math.hypot(bx, by) || 1;
+      const n1x = -ay / la;
+      const n1y = ax / la;
+      const n2x = -by / lb;
+      const n2y = bx / lb;
+      const dot = n1x * n2x + n1y * n2y;
+      const k = Math.max(1 + dot, 0.4);
+      ox = ((n1x + n2x) / k) * half;
+      oy = ((n1y + n2y) / k) * half;
+    }
+    left[i] = { x: point.x + ox, y: point.y + oy };
+    right[i] = { x: point.x - ox, y: point.y - oy };
+  }
+
+  context.beginPath();
+  context.moveTo(left[0].x, left[0].y);
+  for (let i = 1; i < n; i += 1) context.lineTo(left[i].x, left[i].y);
+  for (let i = n - 1; i >= 0; i -= 1) context.lineTo(right[i].x, right[i].y);
+  context.closePath();
+  context.fill();
+}
+
+/** 一笔里的压力跨度：>= 0.04 才认为设备给了真实压感，否则交给速度模拟 */
+function strokeHasPressure(points) {
+  let min = 1;
+  let max = 0;
+  for (const point of points) {
+    const value = Number(point.p);
+    if (!Number.isFinite(value)) continue;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return max - min >= 0.04;
+}
+
+/**
+ * 手写笔迹：优先用 perfect-freehand 生成轮廓（MIT，Excalidraw 同款），
+ * 模块还没加载完或加载失败时退回 inkWidths + traceInkOutline，保证不出现"整笔消失"。
+ */
+function drawFreehandStroke(context, stroke, canvasRect, videoRect, crop) {
+  const hasPressure = strokeHasPressure(stroke.points);
+  const size = stroke.width * 1.25;
+  const options = {
+    size,
+    thinning: 0.6,
+    smoothing: 0.5,
+    streamline: 0.5,
+    simulatePressure: !hasPressure,
+    start: { taper: size * 0.55, cap: true },
+    end: { taper: size * 0.55, cap: true },
+    last: true
+  };
+  const widths = freehandStroke ? null : inkWidths(stroke.points, stroke.width, videoRect.width, videoRect.height);
+  let run = [];
+  const flush = () => {
+    if (run.length >= 2 && freehandStroke) {
+      const outline = freehandStroke(run, options);
+      if (outline.length > 1) {
+        context.beginPath();
+        outline.forEach(([x, y], index) => (index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)));
+        context.closePath();
+        context.fill();
+      }
+    } else if (run.length >= 2) {
+      traceInkOutline(context, run.map(([x, y, , w]) => ({ x, y, w })));
+    } else if (run.length === 1) {
+      const [x, y, , w] = run[0];
+      context.beginPath();
+      context.arc(x, y, Math.max((w || size) / 2, 0.5), 0, Math.PI * 2);
+      context.fill();
+    }
+    run = [];
+  };
+  for (let i = 0; i < stroke.points.length; i += 1) {
+    const canvasPoint = sourcePointToCanvasPoint(stroke.points[i], canvasRect, videoRect, crop);
+    if (!canvasPoint.visible) {
+      flush();
+      continue;
+    }
+    const pressure = hasPressure ? clamp(Number(stroke.points[i].p) || 0.5, 0, 1) : 0.5;
+    run.push([canvasPoint.x, canvasPoint.y, pressure, widths ? widths[i] : stroke.width]);
+  }
+  flush();
+}
+
 function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
   context.save();
   if (stroke.isEraser) {
@@ -4505,6 +4849,15 @@ function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
       context.lineWidth = stroke.width * 5;
       context.globalAlpha = 0.45;
     }
+  }
+
+  // 实线画笔走手写轮廓：线宽随压感 / 书写速度变化，起收笔收尖。
+  // 板擦 / 荧光笔 / 虚线 / 直线工具保持等宽——它们不是"手写"，变宽反而怪。
+  const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
+  if (solidInk && stroke.points.length >= 3) {
+    drawFreehandStroke(context, stroke, canvasRect, videoRect, crop);
+    context.restore();
+    return;
   }
 
   let segmentStarted = false;
@@ -4910,6 +5263,7 @@ function toggleBlackboard(forceState) {
 }
 
 function beginBlackboardStroke(event) {
+  if (absorbPalmTouch(event)) return;
   if (!state.blackboard.active) return;
   if (handleHandwritingTouch(event, 'down', true)) return;
 
@@ -4943,20 +5297,23 @@ function beginBlackboardStroke(event) {
 
   const isEraser = state.blackboard.tool === 'eraser';
   const isLine = !isEraser && state.blackboard.lineMode;
+  point.t = 0;
   state.blackboard.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
     color: isEraser ? '#2c2f36' : state.blackboard.currentColor,
-    width: isEraser ? state.blackboard.eraserWidth : 6,
+    width: isEraser ? state.blackboard.eraserWidth : state.annotations.penWidth + 2,
     isEraser: isEraser,
     mode: isEraser ? null : state.blackboard.mode,
     lineMode: isLine,
     points: [point],
+    startedAt: event.timeStamp,
     startScreen: isLine ? { x: event.clientX, y: event.clientY } : null
   });
   renderBlackboard();
 }
 
 function continueBlackboardStroke(event) {
+  if (absorbPalmTouch(event)) return;
   if (!state.blackboard.active) return;
   if (handleHandwritingTouch(event, 'move', true)) return;
 
@@ -4999,12 +5356,14 @@ function continueBlackboardStroke(event) {
     stroke.points = [stroke.points[0], storagePoint];
     updateAngleIndicator(stroke.startScreen, screenPoint);
   } else {
+    point.t = Math.max(0, Math.round(event.timeStamp - (stroke.startedAt || event.timeStamp)));
     stroke.points.push(point);
   }
   renderBlackboard();
 }
 
 function finishBlackboardStroke(event) {
+  noteStylus(event);
   if (!state.blackboard.active) return;
   if (handleHandwritingTouch(event, 'up', true)) return;
 
@@ -5170,6 +5529,18 @@ function drawBlackboardStroke(ctx, stroke) {
       ctx.lineWidth = stroke.width * 5;
       ctx.globalAlpha = 0.45;
     }
+  }
+
+  // 黑板坐标是世界像素，速度口径按 1280 世界像素 ≈ 一屏宽归一化
+  const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
+  if (solidInk && stroke.points.length >= 3) {
+    const widths = inkWidths(stroke.points, stroke.width, 1, 1, 1280);
+    traceInkOutline(
+      ctx,
+      stroke.points.map((point, index) => ({ x: point.x, y: point.y, w: widths[index] }))
+    );
+    ctx.restore();
+    return;
   }
 
   ctx.beginPath();

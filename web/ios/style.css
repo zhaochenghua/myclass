@@ -1376,6 +1376,11 @@ button.file-thumbnail { cursor: pointer; }
     font-size: 0.78rem;
   }
 
+  /* 画笔模式下横条按钮多，标题让位：只保留返回 / 张数，避免标题被硬生生截成"图片视" */
+  #viewMediaCast:has(#mediaAnnotationBar:not([hidden])) .list-title {
+    display: none;
+  }
+
   #viewMediaCast .list-title {
     max-width: 8rem;
     overflow: hidden;
@@ -1396,15 +1401,16 @@ button.file-thumbnail { cursor: pointer; }
     border-radius: 8px;
   }
 
-  /* 抽学生 / 标注工具 / 旋转 / 切换 / 结束投屏：整体摊平成一条横向工具栏 */
+  /* 抽学生 / 标注工具 / 旋转 / 切换 / 结束投屏：整体摊平成一条横向工具栏。
+     不换行：换行会让底部横条变成两排、舞台高度跟着跳；宽度不够时只压缩状态文字。 */
   #viewMediaCast > .list-footer {
     grid-area: side;
     display: flex;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     justify-content: flex-end;
-    gap: 0.35rem 0.55rem;
+    gap: 0.3rem 0.45rem;
     padding-top: 0;
     padding-left: 0;
     border-top: none;
@@ -1441,10 +1447,20 @@ button.file-thumbnail { cursor: pointer; }
     gap: 0.35rem;
   }
 
+  /* 状态文字可以压缩（省略号），但按钮不能被挤掉：横条永远保持一排 */
   #viewMediaCast .subtitle {
     margin: 0;
-    font-size: 0.75rem;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 0.74rem;
     white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* 画笔模式下按钮更多，状态文字直接让位（否则会被压成 0 宽的空位） */
+  #viewMediaCast > .list-footer:has(#mediaAnnotationBar:not([hidden])) > .subtitle {
+    display: none;
   }
 
   /* 横条内按钮一律收成"内容宽度"，否则 .btn-nav / .tool / .media-row .btn 上的 flex:1
@@ -1721,6 +1737,9 @@ button.file-thumbnail { cursor: pointer; }
 }
 
 button[data-tool-icon] { white-space: nowrap; }
+/* 笔画粗细：图标按钮，不写字，避免把标注条挤换行 */
+button.width-tool { display: inline-flex; align-items: center; justify-content: center; padding-left: 0.55rem; padding-right: 0.55rem; }
+button.width-tool svg { display: block; }
 button[data-tool-icon]::before {
   content: "";
   display: inline-block;
@@ -1750,12 +1769,37 @@ button[data-tool-icon]::before {
   #viewCoursewarePlay > .cw-side { flex-shrink: 0; max-height: 52vh; overflow-y: auto; }
   #viewCoursewarePlay .cw-footer { gap: 6px; padding-top: 4px; }
   #viewCoursewarePlay .page-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  /* 上一屏 / 下一屏 / 快速翻页 三键一行，避免"快速翻页"单独占满一整行 */
+  #viewCoursewarePlay .page-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #viewCoursewarePlay .page-row .btn, #viewCoursewarePlay .cw-footer > .btn { min-width: 0; min-height: 40px; padding: 6px 8px; font-size: 14px; }
   #viewCoursewarePlay .classroom-actions { flex-wrap: wrap; gap: 6px; }
   #viewCoursewarePlay .classroom-actions > button { min-width: 0; min-height: 36px; padding: 4px 8px; }
   #viewCoursewarePlay .subtitle { margin: 0; }
   #viewCoursewarePlay .annotation-bar { padding: 2px 0; gap: 4px; }
   #viewCoursewarePlay .annotation-actions .tool { min-height: 36px; padding: 4px 8px; }
+}
+
+/* 图片视频投屏（竖屏）：底部按钮按整行分组，最后一行让"切换"与"结束投屏"并排，
+   避免出现单个按钮独占一整行的大片空白；只有一张图（没有切换行）时结束投屏占满整行。 */
+@media (orientation: portrait) {
+  #viewMediaCast > .list-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "tools tools"
+      "status status"
+      "annot annot"
+      "image image"
+      "switch end";
+    gap: 0.45rem;
+  }
+  #viewMediaCast .classroom-actions { grid-area: tools; }
+  #viewMediaCast > .list-footer > .subtitle { grid-area: status; }
+  #viewMediaCast .annotation-bar { grid-area: annot; }
+  #viewMediaCast #mediaImageActions { grid-area: image; }
+  #viewMediaCast #mediaSwitchRow { grid-area: switch; }
+  #viewMediaCast #mediaEndButton { grid-area: end; }
+  #viewMediaCast > .list-footer:has(#mediaSwitchRow[hidden]) #mediaEndButton { grid-column: 1 / -1; }
 }
 
 .document-preview { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left); background: #edf0f3; color: #18232b; }

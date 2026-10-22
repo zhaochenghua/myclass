@@ -53,7 +53,16 @@ function normalizeAnnotation(message, page) {
   if (['begin', 'points'].includes(message.action)) {
     if (!Array.isArray(message.points) || message.points.length > 10000 ||
         message.points.some(p => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) throw new Error('无效笔迹坐标');
-    result.points = message.points.map(p => ({ x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) }));
+    // t 是相对笔画起点的毫秒数、p 是手写笔压力（0~1），都只影响线宽曲线；
+    // 旧端不带这两个字段时保持缺省，各端会退化成等宽或用速度模拟，不影响笔迹同步。
+    result.points = message.points.map(p => {
+      const point = { x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) };
+      const t = Number(p.t);
+      if (Number.isFinite(t) && t >= 0) point.t = Math.min(600000, Math.round(t));
+      const pressure = Number(p.p);
+      if (Number.isFinite(pressure) && pressure >= 0) point.p = Math.max(0, Math.min(1, pressure));
+      return point;
+    });
   }
   if (message.action === 'begin') {
     result.color = /^#[\da-f]{6}$/i.test(message.color || message.colorHex) ? (message.color || message.colorHex) : '#ff4d6d';

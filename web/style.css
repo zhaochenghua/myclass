@@ -585,6 +585,8 @@ video {
 .eraser-size-menu { flex-direction: row; }
 .eraser-size-menu .is-active { background: #315e83; }
 .annotation-mode[hidden] { display: none; }
+/* 笔画粗细：纯图标按钮，收窄内边距，避免把工具栏挤换行 */
+.pen-width-button { padding: 0 0.4rem; }
 #studentRollToolbarSlot { min-width: 0; max-width: 100%; }
 
 .annotation-modes {

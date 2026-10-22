@@ -22,6 +22,7 @@ class ImportFlowInstrumentation : Instrumentation() {
     private var continuousPreview = false
     private var clearUndo = false
     private var quickPaging = false
+    private var inkSpeed = false
     private var notesVideosRoom: String? = null
     private var previewHoldMs = 0L
     override fun onCreate(arguments: Bundle?) {
@@ -31,12 +32,14 @@ class ImportFlowInstrumentation : Instrumentation() {
         continuousPreview = arguments?.getString("continuousPreview") == "true"
         clearUndo = arguments?.getString("clearUndo") == "true"
         quickPaging = arguments?.getString("quickPaging") == "true"
+        inkSpeed = arguments?.getString("inkSpeed") == "true"
         notesVideosRoom = arguments?.getString("notesVideosRoom")
         previewHoldMs = arguments?.getString("previewHoldMs")?.toLongOrNull()?.coerceIn(0, 30000) ?: 0L
         start()
     }
     override fun onStart() {
         if (quickPaging) { QuickPagingCheck.run(this); return }
+        if (inkSpeed) { InkSpeedCheck.run(this); return }
         if (clearUndo) { ClearUndoCheck.run(this); return }
         if (continuousPreview) { ContinuousPreviewCheck.run(this); return }
         notesVideosRoom?.let { NotesVideosCheck.run(this, it); return }

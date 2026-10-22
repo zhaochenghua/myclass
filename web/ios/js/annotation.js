@@ -11,18 +11,37 @@
 // 避免每次手指移动都全量重绘（对齐 Android 的离屏层 + 增量追加思路）。
 
 import { layoutPoint, layoutRect } from './orientation.mjs?v=20261022-reader';
+import getStroke from './perfect-freehand.mjs';
 
 export const ANNOTATION_COLORS = ['#E87500', '#D00000', '#0057B8', '#00843D', '#FFFFFF'];
 export const DEFAULT_COLOR = '#D00000';
 export const PEN_WIDTH = 4;
 export const ERASER_WIDTH = 40;
+// 笔画粗细三档（CSS px）：细 / 中 / 粗
+export const PEN_WIDTH_LEVELS = [4, 6, 9];
 
 const SYNC_INTERVAL_MS = 60;
 const MAX_PENDING_POINTS = 12;
-const MIN_POINT_DISTANCE = 0.0015;
+// 0.0015 在 1600px 宽的内容上约 2.4px，会把合并事件里的点大量丢掉；收紧到 0.0005 让笔迹连续
+const MIN_POINT_DISTANCE = 0.0005;
 /** 起笔判定阈值（CSS px）：单指移动超过该距离才认定为绘制，避免落点被误判成笔画 */
 const START_STROKE_SLOP_PX = 6;
 const ERASER_COLOR = '#000000';
+
+// ---- 手写笔防误触 ----
+// Apple Pencil 报 pointerType === 'pen'，手指 / 掌托报 'touch'。
+// 笔在写的时候手指落屏一律忽略；抬笔后再屏蔽一段时间，避免掌托边缘刚抬笔就画出杂笔或触发缩放。
+const STYLUS_GUARD_MS = 500;
+let stylusActiveUntil = 0;
+
+/** 笔是否正在书写（含抬笔后的短暂屏蔽期），供手势层判断要不要让开 */
+export function stylusBusy() {
+  return performance.now() < stylusActiveUntil;
+}
+
+function noteStylus(event) {
+  if (event && event.pointerType === 'pen') stylusActiveUntil = performance.now() + STYLUS_GUARD_MS;
+}
 
 function round4(value) {
   return Math.round(value * 10000) / 10000;
@@ -37,7 +56,68 @@ function normalizeRemotePoint(raw) {
   const x = Number(raw && raw.x);
   const y = Number(raw && raw.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { x: clamp01(x), y: clamp01(y) };
+  const point = { x: clamp01(x), y: clamp01(y) };
+  // t 是相对笔画起点的毫秒数，只用于速度笔锋；旧端不带时保持缺省
+  const t = Number(raw && raw.t);
+  if (Number.isFinite(t) && t >= 0) point.t = t;
+  const p = Number(raw && raw.p);
+  if (Number.isFinite(p) && p >= 0) point.p = clamp01(p);
+  return point;
+}
+
+/** 指针压力（0~1）：手写笔给真实压力，手指 / 鼠标记 0.5，渲染时按整笔跨度决定是否用速度模拟 */
+function eventPressure(event) {
+  if (!event || event.pointerType !== 'pen') return 0.5;
+  const value = Number(event.pressure);
+  if (!Number.isFinite(value) || value <= 0) return 0.5;
+  return clamp01(value);
+}
+
+// ---- 手写笔迹轮廓（perfect-freehand, MIT）----
+// 参数与大屏 web/app.js、Android 端保持一致，保证同一笔迹三端一样。
+const FREEHAND_THINNING = 0.6;
+const FREEHAND_SMOOTHING = 0.5;
+const FREEHAND_STREAMLINE = 0.5;
+
+/** 一笔里的压力跨度：>= 0.04 才认为设备给了真实压感，否则交给速度模拟 */
+function strokePressureRange(points) {
+  let min = 1;
+  let max = 0;
+  for (const point of points) {
+    const value = Number(point.p);
+    if (!Number.isFinite(value)) continue;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return points.length ? max - min : 0;
+}
+
+/** 用 perfect-freehand 生成一笔的轮廓并填充 */
+function drawFreehandStroke(ctx, stroke, rect) {
+  const points = stroke.points;
+  if (points.length < 2) return;
+  const hasPressure = strokePressureRange(points) >= 0.04;
+  const size = stroke.width * 1.25;
+  const input = points.map((point) => [
+    rect.left + point.x * rect.width,
+    rect.top + point.y * rect.height,
+    hasPressure ? clamp01(Number(point.p) || 0.5) : 0.5
+  ]);
+  const outline = getStroke(input, {
+    size,
+    thinning: FREEHAND_THINNING,
+    smoothing: FREEHAND_SMOOTHING,
+    streamline: FREEHAND_STREAMLINE,
+    simulatePressure: !hasPressure,
+    start: { taper: size * 0.55, cap: true },
+    end: { taper: size * 0.55, cap: true },
+    last: true
+  });
+  if (outline.length < 2) return;
+  ctx.beginPath();
+  outline.forEach(([x, y], index) => (index === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+  ctx.fill();
 }
 
 export class AnnotationBoard {
@@ -58,6 +138,9 @@ export class AnnotationBoard {
     this.color = DEFAULT_COLOR;
     this.eraser = false;
     this.enabled = false;
+    // 笔画粗细（三档）与最近一次指针压力：压力为 0.5 表示手指/电容笔
+    this.penWidth = PEN_WIDTH;
+    this.lastPressure = 0.5;
 
     this.strokes = [];
     this.remoteStrokes = new Map();
@@ -111,6 +194,12 @@ export class AnnotationBoard {
 
   setEraser(on) {
     this.eraser = on === true;
+  }
+
+  /** 笔画粗细（CSS px）：细 / 中 / 粗三档由调用方决定 */
+  setPenWidth(width) {
+    const value = Number(width);
+    if (Number.isFinite(value) && value > 0) this.penWidth = value;
   }
 
   /** 换图 / 翻页 / 换课件：丢弃笔迹且不产生同步副作用 */
@@ -381,6 +470,14 @@ export class AnnotationBoard {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
+    // 实线画笔走手写轮廓（perfect-freehand，与大屏 / Android 同一套参数）；板擦、荧光笔、虚线保持等宽
+    const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
+    if (solidInk && stroke.points.length >= 3) {
+      drawFreehandStroke(ctx, stroke, rect);
+      ctx.restore();
+      return;
+    }
+
     if (stroke.points.length === 1) {
       // 单点：补画圆点，与大屏端 drawAnnotationStroke 行为一致
       const only = stroke.points[0];
@@ -415,6 +512,9 @@ export class AnnotationBoard {
 
     canvas.addEventListener('pointerdown', (event) => {
       if (!this.penMode || !this.enabled) return;
+      noteStylus(event);
+      // 笔正在写：手指 / 掌托落屏直接忽略，不参与绘制也不参与手势
+      if (event.pointerType !== 'pen' && stylusBusy()) return;
       if (event.pointerType === 'mouse' && event.button !== 0) return;
       // 多指时交给手势处理；仅当同一指针确实还在进行中才忽略，
       // 避免异常丢失 pointerup 时残留的 id 把画笔永久锁死。
@@ -429,8 +529,10 @@ export class AnnotationBoard {
         /* 某些浏览器不支持捕获，忽略 */
       }
       this.activePointerId = event.pointerId;
+      this.lastPressure = eventPressure(event);
       // 先只记录落点，等确认是单指绘制（移动超过阈值）才真正起笔，
       // 避免双指缩放 / 平移时把落点提交成"只有一个点的笔画"而留下小点。
+      this.pendingStartTime = event.timeStamp;
       this.pendingClientX = event.clientX;
       this.pendingClientY = event.clientY;
       this.pendingStart = point;
@@ -438,6 +540,7 @@ export class AnnotationBoard {
     });
 
     canvas.addEventListener('pointermove', (event) => {
+      noteStylus(event);
       if (!this.activeStroke && !this.hasPendingStart) return;
       if (event.pointerId !== this.activePointerId) return;
       event.preventDefault();
@@ -459,11 +562,13 @@ export class AnnotationBoard {
           this.#beginStroke(this.pendingStart);
           this.pendingStart = null;
         }
-        this.#extendStroke(sample.clientX, sample.clientY);
+        this.lastPressure = eventPressure(sample);
+        this.#extendStroke(sample.clientX, sample.clientY, sample.timeStamp);
       }
     });
 
     const finish = (event) => {
+      noteStylus(event);
       if (this.activePointerId === null || event.pointerId !== this.activePointerId) return;
       event.preventDefault();
       if (this.hasPendingStart) {
@@ -509,10 +614,16 @@ export class AnnotationBoard {
 
   #beginStroke(point) {
     const id = `i${(this.strokeSeq += 1)}`;
+    // 时间基准用"落指那一刻"，不是真正起笔的这一帧：
+    // 起笔要等移动超过 6px 才发生，若以此刻为基准，第二个点的 dt≈0，
+    // 速度被算成无穷大、线宽瞬间压到最细，看起来就是起笔处跳变。
+    this.strokeStartedAt = Number.isFinite(this.pendingStartTime) ? this.pendingStartTime : performance.now();
+    point.t = 0;
+    point.p = this.lastPressure;
     const stroke = {
       id,
       colorHex: this.eraser ? ERASER_COLOR : this.color,
-      width: this.eraser ? ERASER_WIDTH : PEN_WIDTH,
+      width: this.eraser ? ERASER_WIDTH : this.penWidth,
       isEraser: this.eraser,
       points: [point]
     };
@@ -527,13 +638,13 @@ export class AnnotationBoard {
       width: stroke.width,
       isEraser: stroke.isEraser,
       mode: 'solid',
-      points: [{ x: round4(point.x), y: round4(point.y) }]
+      points: [{ x: round4(point.x), y: round4(point.y), t: 0, p: round4(point.p) }]
     });
     this.invalidate();
     this.onChange();
   }
 
-  #extendStroke(clientX, clientY) {
+  #extendStroke(clientX, clientY, timeStamp) {
     const stroke = this.activeStroke;
     if (!stroke) return;
     const point = this.#toNormalized(clientX, clientY);
@@ -543,6 +654,8 @@ export class AnnotationBoard {
     const dy = point.y - last.y;
     if (dx * dx + dy * dy < MIN_POINT_DISTANCE * MIN_POINT_DISTANCE) return;
 
+    point.t = Math.max(0, Math.round((Number.isFinite(timeStamp) ? timeStamp : performance.now()) - (this.strokeStartedAt || performance.now())));
+    point.p = this.lastPressure;
     stroke.points.push(point);
     this.pendingPoints.push(point);
 
@@ -557,7 +670,7 @@ export class AnnotationBoard {
   #flushPendingPoints() {
     const stroke = this.activeStroke;
     if (!stroke || this.pendingPoints.length === 0) return;
-    const points = this.pendingPoints.map((point) => ({ x: round4(point.x), y: round4(point.y) }));
+    const points = this.pendingPoints.map((point) => ({ x: round4(point.x), y: round4(point.y), t: point.t || 0, p: round4(point.p ?? 0.5) }));
     this.pendingPoints = [];
     this.emit({ action: 'points', strokeId: stroke.id, points });
   }

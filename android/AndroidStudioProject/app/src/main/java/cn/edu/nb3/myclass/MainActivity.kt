@@ -4337,6 +4337,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             colorDots.add(dot)
             paletteRow.addView(dot)
         }
+        // 笔画粗细：图标按钮循环切换（细 / 中 / 粗），设置持久化，两个画面共用
+        PenSettings.index = getSharedPreferences("myclass_ui", MODE_PRIVATE).getInt("penWidth", PenSettings.index)
+        val penWidthButton = PenWidthButton(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply { marginEnd = dotMargin }
+            level = PenSettings.index
+            onCycle = {
+                PenSettings.cycle()
+                level = PenSettings.index
+                getSharedPreferences("myclass_ui", MODE_PRIVATE).edit().putInt("penWidth", PenSettings.index).apply()
+                refreshAnnotationBar?.invoke()
+            }
+        }
         val eraserButton = annotationToolButton("板擦").apply {
             setOnClickListener {
                 zoomable.penEraser = !zoomable.penEraser
@@ -4349,6 +4361,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             penBar.addView(paletteRow)
         } else {
             eraserButton.layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
+            paletteRow.addView(penWidthButton)
             paletteRow.addView(eraserButton)
             penBar.addView(paletteRow)
         }
@@ -4375,7 +4388,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         /** 一行等宽按钮 */
-        fun buildActionRow(buttons: List<MaterialButton>): LinearLayout = LinearLayout(this).apply {
+        fun buildActionRow(buttons: List<View>): LinearLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(4), dp(12), if (isLandscape) dp(4) else dp(10))
@@ -4393,7 +4406,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         if (isLandscape) {
-            penBar.addView(buildActionRow(listOf(eraserButton, undoButton)))
+            penBar.addView(buildActionRow(listOf(penWidthButton, eraserButton, undoButton)))
             penBar.addView(buildActionRow(listOf(penBackButton, penEndButton)))
         } else {
             penBar.addView(buildActionRow(listOf(undoButton, penBackButton, penEndButton)))
@@ -4826,6 +4839,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             colorDots.add(dot)
             paletteRow.addView(dot)
         }
+        // 笔画粗细：图标按钮循环切换（细 / 中 / 粗），设置持久化，两个画面共用
+        PenSettings.index = getSharedPreferences("myclass_ui", MODE_PRIVATE).getInt("penWidth", PenSettings.index)
+        val penWidthButton = PenWidthButton(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply { marginEnd = dotMargin }
+            level = PenSettings.index
+            onCycle = {
+                PenSettings.cycle()
+                level = PenSettings.index
+                getSharedPreferences("myclass_ui", MODE_PRIVATE).edit().putInt("penWidth", PenSettings.index).apply()
+                refreshAnnotationBar?.invoke()
+            }
+        }
         val eraserButton = annotationToolButton("板擦").apply {
             setOnClickListener {
                 zoomable.penEraser = !zoomable.penEraser
@@ -4838,6 +4863,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             penBar.addView(paletteRow)
         } else {
             eraserButton.layoutParams = LinearLayout.LayoutParams(dp(76), dp(40))
+            paletteRow.addView(penWidthButton)
             paletteRow.addView(eraserButton)
             penBar.addView(paletteRow)
         }
@@ -4864,7 +4890,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
 
         /** 一行等宽按钮 */
-        fun buildActionRow(buttons: List<MaterialButton>): LinearLayout = LinearLayout(this).apply {
+        fun buildActionRow(buttons: List<View>): LinearLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(4), dp(12), if (isLandscape) dp(4) else dp(10))
@@ -4883,7 +4909,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         if (isLandscape) {
             // 横屏右侧面板较窄：拆成两行，避免"返回主菜单"这类长文字被截断
-            penBar.addView(buildActionRow(listOf(eraserButton, undoButton)))
+            penBar.addView(buildActionRow(listOf(penWidthButton, eraserButton, undoButton)))
             penBar.addView(buildActionRow(listOf(penBackButton, penEndButton)))
         } else {
             penBar.addView(buildActionRow(listOf(undoButton, penBackButton, penEndButton)))

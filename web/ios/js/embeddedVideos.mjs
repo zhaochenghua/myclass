@@ -82,9 +82,15 @@ export function createEmbeddedVideos({ container, getContext, send, remote = fal
         const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 120000);
         let response;
         try { response = await fetch(endpoint, { signal: controller.signal }); } finally { clearTimeout(timer); }
-        if (!response.ok) throw new Error('metadata');
-        const data = await response.json(); if (epoch !== generation) return;
-        metadata = data; warning = data.videoWarning || '';
+        if (!response.ok) {
+          // 404 = 这个文件本来就没有内嵌视频的元数据（图片、压缩包、未登记的旧课件），
+          // 属于正常情况：不提示、不显示按钮，而不是当成"加载失败"。
+          if (response.status === 404) { if (epoch !== generation) return; metadata = { videos: [] }; }
+          else throw new Error('metadata');
+        } else {
+          const data = await response.json(); if (epoch !== generation) return;
+          metadata = data; warning = data.videoWarning || '';
+        }
       } catch { if (epoch !== generation) return; warning = '视频信息加载失败，请重新打开课件后重试。'; }
     }
     const count = available().length;
