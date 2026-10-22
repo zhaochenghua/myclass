@@ -55,6 +55,17 @@ body {
   inset: 0;
 }
 
+/* iPad / iPhone 的地址栏、Chrome iOS 的底部工具条会占用可视高度：
+   position:fixed + height:100% 跟的是「布局视口」，底部按钮会被工具条压住、
+   甚至整排落到屏幕外（表现为“底部露一条深色边 + 页码/结束播放看不见”）。
+   dvh 跟的是「可视视口」，工具条出现或收起时跟着伸缩；旧系统不支持 dvh 时
+   仍退回上面的 100%，行为与以前一致。 */
+html,
+body {
+  height: 100%;
+  height: 100dvh;
+}
+
 input,
 textarea,
 select {
@@ -677,6 +688,18 @@ button.file-thumbnail { cursor: pointer; }
 .view-cw {
   display: flex;
   flex-direction: column;
+}
+
+/* 兜底布局：不支持 @container 的旧 Safari（如 iPadOS 15.x）只会命中这一条。
+   标题 / 课件 / 控件三行，课件行可收缩，控件行按内容高度贴在底部——
+   否则 flex 列会把「标注栏 + 翻页按钮」一起压扁，底部按钮被挤出屏幕（表现为
+   底部露出黑色舞台、页码和结束播放都看不见）。支持 @container 的浏览器会由
+   后面的各尺寸块整体覆盖，不受影响。 */
+#viewCoursewarePlay {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
 }
 
 .cw-stage {

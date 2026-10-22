@@ -118,6 +118,22 @@ function pdfFixture() {
         });
         assert.ok(reachable, 'landscape phone can scroll to the close button');
       }
+      // 旧 Safari（iPadOS 15.x 等）不支持 @container，只会命中 style.css 里的兜底网格：
+      // 那套布局同样必须把翻页按钮留在屏幕内，否则底部会露出黑色舞台、按钮被挤出视口。
+      if (viewport.width === 768) {
+        const legacy = await phone.evaluate(async () => {
+          const style = document.createElement('style');
+          style.textContent = '#orientationRoot { container-type: normal !important; }';
+          document.head.append(style);
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const root = document.getElementById('orientationRoot').getBoundingClientRect();
+          const close = document.getElementById('cwCloseButton').getBoundingClientRect();
+          document.head.removeChild(style);
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          return {inside:close.top >= root.top-1 && close.bottom <= root.bottom+1, closeBottom:Math.round(close.bottom), rootBottom:Math.round(root.bottom)};
+        });
+        assert.ok(legacy.inside, `container-query fallback keeps controls on screen ${JSON.stringify(legacy)}`);
+      }
       await phone.screenshot({path:path.join(output,`a4-portrait-pen-${viewport.width}.png`)});
       // Draw a real pointer stroke in the current layout and check normalized wire coordinates.
       const target = await phone.evaluate(() => {
