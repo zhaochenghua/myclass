@@ -1,6 +1,6 @@
 # 三端手写渲染管线：为什么 pen-test 好看、项目里难看
 
-日期：2026-10-24。范围：大屏（Web）、iPad（iOS 网页版）、Android 手机 / 平板、Android TV 回放。
+日期：2026-10-24。范围：大屏（Web）、iPad（iOS 网页版）、Android 手机 / 平板。
 
 ## 结论（根因）
 
@@ -78,5 +78,8 @@
 
 - 大屏 / iPad 与 Android 的轮廓生成器不同（perfect-freehand vs 法线偏移），同一笔的
   边缘有亚像素差异；线宽曲线已经统一，视觉粗细一致。
+- 电视原生端（`android/AndroidStudioProject/tv`）仍用自己的 `speedWidths + PerfectFreehand`
+  渲染。传输降采样后 1080p 电视上点距约 1.3px，暂时够用；4K 电视若出现折线，可按
+  同一套 `InkRenderer` 逻辑再补一次重采样。
 - 实体红外框的采样噪声、投影仪刷新与端到端延迟无法用浏览器测试覆盖，仍需现场试写。
 - `web/pen-test/` 是本地对比页（已加入 `.gitignore`），不随服务器发布。
