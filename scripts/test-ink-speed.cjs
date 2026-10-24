@@ -92,7 +92,6 @@ function pdfFixture() {
       const zoomed = thicknessAt(atZoomed(0.5));
       const debug = {
         kind: currentContentKind(),
-        inkScale: annotationInkScale(),
         baseRectWidth: videoRect.width,
         zoomedRectWidth: zoomedRect.width
       };

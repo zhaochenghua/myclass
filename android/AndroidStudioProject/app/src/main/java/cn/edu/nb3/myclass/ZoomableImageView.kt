@@ -1116,10 +1116,11 @@ class ZoomableImageView(context: Context) : View(context) {
         val rect = imageDisplayRect() ?: return
         val points = stroke.points
         if (points.isEmpty()) return
-        // 笔迹线宽随课件/图片的放大倍率一起缩放：放大 → 线变粗，保持与内容的相对比例。
-        // 以前线宽固定为 dp×density，放大后内容变大、线不变，看起来反而越来越细。
-        val inkScale = userScale.coerceAtLeast(1f)
-        val baseWidth = stroke.width * density * inkScale
+        // 线宽 = 内容宽度的千分比：4/6/9 → 0.4%/0.6%/0.9%，板擦 2%。
+        // 手机、iPad、大屏因此与页面保持同样的粗细比例；rect 已含缩放，放大时线自然变粗。
+        // 以前用 dp×density，手机相对页面比大屏粗 3~5 倍。
+        val inkRatio = if (stroke.isEraser) 0.02f else stroke.width / 1000f
+        val baseWidth = (inkRatio * rect.width()).coerceAtLeast(0.8f)
         val targetPaint = if (stroke.isEraser) eraserPaint else strokePaint
         if (!stroke.isEraser) {
             targetPaint.color = runCatching { Color.parseColor(stroke.colorHex) }.getOrDefault(Color.RED)

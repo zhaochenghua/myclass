@@ -140,7 +140,6 @@ export class AnnotationBoard {
   constructor(options = {}) {
     this.canvas = options.canvas;
     this.getSurface = options.getSurface || (() => null);
-    this.getInkScale = options.getInkScale || (() => 1);
     this.emit = options.emit || (() => {});
     this.onChange = options.onChange || (() => {});
 
@@ -466,19 +465,13 @@ export class AnnotationBoard {
     };
   }
 
-  /**
-   * 内容当前的放大倍率。笔迹线宽要按同一倍率缩放，才能保持它与课件的相对比例：
-   * 放大 → 线变粗，缩小 → 线变细。以前线宽固定为 CSS 像素，放大后反而越看越细。
-   */
-  #inkScale() {
-    const value = Number(this.getInkScale?.());
-    return Number.isFinite(value) && value > 0 ? value : 1;
-  }
-
   #drawStroke(ctx, stroke, content) {
     const rect = content || this.#contentRect();
     if (!rect || stroke.points.length === 0) return;
-    const width = Math.max(0.5, (Number(stroke.width) || PEN_WIDTH) * this.#inkScale());
+    // 线宽 = 内容宽度的千分比：4/6/9 → 0.4%/0.6%/0.9%，板擦 2%。
+    // 与大屏 / Android 同一口径，内容矩形已含缩放，放大时线自动变粗。
+    const ratio = stroke.isEraser ? 0.02 : (Number(stroke.width) || PEN_WIDTH) / 1000;
+    const width = Math.max(0.8, ratio * Math.max(1, rect.width));
 
     ctx.save();
     if (stroke.isEraser) {

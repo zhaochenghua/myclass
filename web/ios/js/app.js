@@ -1987,8 +1987,6 @@ function createAnnotationBoards() {
   state.mediaBoard = new AnnotationBoard({
     canvas: $('mediaAnnotationCanvas'),
     getSurface: () => ($('mediaPreview').hidden ? null : $('mediaPreview')),
-    // 图片投屏：笔迹线宽随图片放大倍率缩放
-    getInkScale: () => state.media.queue[state.media.index]?.scale || 1,
     emit: (payload) => sendAnnotation(payload, 0),
     onChange: () => {
       refreshAnnotationBar(MEDIA_BAR);
@@ -1999,8 +1997,6 @@ function createAnnotationBoards() {
   state.cwBoard = new AnnotationBoard({
     canvas: $('cwAnnotationCanvas'),
     getSurface: coursewareSurface,
-    // 课件：笔迹线宽随课件放大倍率缩放，保持与页面的相对比例
-    getInkScale: () => state.cwView.scale || 1,
     emit: (payload) => sendAnnotation(payload, state.courseware?.page || 1),
     onChange: () => {
       refreshAnnotationBar(CW_BAR);
@@ -3887,3 +3883,4 @@ window.__myclassApp = {
   openCamera: () => openCameraLive(),
   showImage: (file) => showImageLive(file)
 };
+

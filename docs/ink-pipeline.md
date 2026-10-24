@@ -51,21 +51,34 @@
 - **Android 直接按左右法线偏移生成轮廓**（不用 `PerfectFreehand.kt` 的移植版）：1px
   重采样后偏移边缘天然连续，两端补圆点做端帽。移植版缺抽稀，密集采样会自交成串珠。
 
-## 线宽跟随课件缩放
+## 线宽口径：内容宽度的千分比
 
-笔迹要"钉"在课件上：课件放大，线同比变粗；缩小，线同比变细，始终保持与页面的相对比例。
-以前线宽是固定的屏幕像素，内容被 transform 放大后线不变，看起来反而越放越细。
+笔迹宽度不再按像素（dp / CSS px）算，而是**内容宽度的千分比**：
 
-| 端 | 缩放来源 | 落点 |
+| 画笔档位 | 存的值 | 占内容宽度 |
 | --- | --- | --- |
-| 大屏 | `state.imageView.scale`（PDF / 图片课件的 transform） | `annotationInkScale()` → `width = stroke.width × scale` |
-| iPad | `state.cwView.scale`（课件）、`media.queue[i].scale`（图片投屏），由 `getInkScale` 注入 | `AnnotationBoard#inkScale()` |
-| Android | `userScale`（`imageDisplayRect()` 已含该倍率） | `drawStroke()` 里 `width = stroke.width × density × userScale` |
+| 细 | 4 | 0.4% |
+| 中 | 6 | 0.6% |
+| 粗 | 9 | 0.9% |
+| 板擦 | 40 | 2% |
 
-板擦、荧光笔、虚线、点划线的 `lineWidth` / `dash` 一起缩放。电子黑板是世界坐标 + 画布
-变换，笔迹本来就随缩放变化，不需要额外处理。
-回归检查在 `scripts/test-ink-speed.cjs`（放大 2 倍后线宽 ≥1.7 倍）和 Android
-`InkSpeedCheck`（1x→2x 实测 12px→24px）。
+`width = 内容矩形宽度 × 比例`。内容矩形本身已经包含缩放，所以放大时线自动变粗、
+缩小时变细，不需要再单独乘缩放倍率。
+
+同一笔在不同设备上的实际像素：
+
+| 内容宽 | 细 | 中 | 粗 |
+| --- | --- | --- | --- |
+| 手机 1080 | 4.3px（1.6dp） | 6.5px（2.4dp） | 9.7px（3.5dp） |
+| iPad 1024 | 4.1px | 6.1px | 9.2px |
+| 大屏 1920（16:9 满宽） | 7.7px | 11.5px | 17.3px |
+| 大屏 A4 竖版（约 764） | 3.1px | 4.6px | 6.9px |
+
+以前 Android 用 `dp × density`（6dp ≈ 16.5px）、大屏和 iPad 用 CSS px（6px），
+手机相对页面比大屏粗 3~5 倍，所以手机上总觉得太粗。现在三端比例完全一致。
+
+板擦、荧光笔、虚线、点划线的 `lineWidth` / `dash` 都从同一个宽度派生。电子黑板是
+世界坐标 + 画布变换，笔迹本来就随缩放变化，不需要额外处理。
 
 ## 本地渲染与传输分离
 

@@ -4908,19 +4908,19 @@ function drawBlackboardFreehand(ctx, stroke) {
 }
 
 /**
- * 课件/图片在视口里被放大时，笔迹线宽要按同一倍率缩放，才能保持它与内容的相对比例：
- * 放大 → 线变粗（占页面同样的比例），缩小 → 线变细。
- * 以前线宽固定为屏幕像素，放大后页面变大、线不变，看起来反而越来越细。
+ * 笔迹线宽 = 内容宽度的千分比：4/6/9 → 0.4%/0.6%/0.9%，板擦固定 2%。
+ *
+ * 这样手机、iPad、大屏看到的线宽与页面的比例完全一致（以前 Android 用 dp×density、
+ * 大屏和 iPad 用 CSS px，手机相对页面粗 3~5 倍）。内容矩形的宽度本身已经包含缩放，
+ * 所以放大时线自动变粗、缩小时自动变细，不需要再乘缩放倍率。
  */
-function annotationInkScale() {
-  if (currentContentKind() === 'none') return 1;
-  const scale = Number(state.imageView?.scale);
-  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+function annotationInkWidth(stroke, contentWidth) {
+  const ratio = stroke.isEraser ? 0.02 : (Number(stroke.width) || 4) / 1000;
+  return Math.max(0.8, ratio * Math.max(1, Number(contentWidth) || 1));
 }
 
 function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
-  // 线宽 = 画笔宽度 × 内容缩放，板擦/荧光笔/虚线同样跟随
-  const width = Math.max(0.5, (Number(stroke.width) || 4) * annotationInkScale());
+  const width = annotationInkWidth(stroke, videoRect.width);
   context.save();
   if (stroke.isEraser) {
     // 标注画布透明（叠在视频上），板擦用 destination-out 真正擦除下层笔画

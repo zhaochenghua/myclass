@@ -43,8 +43,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "cn.edu.nb3.myclass.ImportFlowInstrumentation"
-        versionCode = 2026102408
-        versionName = "1.10.3-2026102408"
+        versionCode = 2026102409
+        versionName = "1.10.4-2026102409"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
         buildConfigField("String", "EXTERNAL_SERVER_BASE_URL", myClassExternalServerUrl.asBuildConfigString())
@@ -117,6 +117,7 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.2")
     implementation("io.github.webrtc-sdk:android:125.6422.07")
 }
+
 
 
 
