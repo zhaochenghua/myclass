@@ -4732,108 +4732,9 @@ function drawAnnotations(rebuild = true) {
   }
 }
 
-// Infrared touch reports constant pressure. Keep its width and completed curve
-// segments stable instead of re-tapering the entire stroke at every sample.
-function isUnpressuredInk(stroke) {
-  return stroke.points.length > 0 && stroke.points.every(point => point.p === 0.5);
-}
-
-function drawStableInk(context, points, width) {
-  if (!points.length) return;
-  context.lineWidth = width;
-  if (points.length === 1) {
-    context.beginPath();
-    context.arc(points[0].x, points[0].y, width / 2, 0, Math.PI * 2);
-    context.fill();
-    return;
-  }
-  let start = points[0];
-  for (let i = 1; i < points.length - 1; i++) {
-    const p = points[i], next = points[i + 1];
-    const end = { x: (p.x + next.x) / 2, y: (p.y + next.y) / 2 };
-    // Rasterize fixed segments independently: GPU path tessellation can change
-    // antialiasing along an entire path when only its tail is extended.
-    context.beginPath();
-    context.moveTo(start.x, start.y);
-    context.quadraticCurveTo(p.x, p.y, end.x, end.y);
-    context.stroke();
-    start = end;
-  }
-  const end = points.at(-1);
-  context.beginPath();
-  context.moveTo(start.x, start.y);
-  context.lineTo(end.x, end.y);
-  context.stroke();
-}
-
-// ---- 速度笔锋 ----
-// 三端（大屏 / iOS / Android）共用同一套参数：同一份笔迹（含每个点的时间戳 t）在哪块屏幕上
-// 算出来的粗细变化都一致，老师手机写完、投影仪上没有变形。
-// t 为相对笔画起点的毫秒数；缺少 t 的旧笔迹按 16ms 采样间隔退化处理。
-const INK_SPEED_REF = 1.75; // 归一化速度（图宽/秒）达到该值后不再继续变细
-const INK_SPEED_DROP = 0.56; // 最快处衰减到 0.44 倍
-const INK_TAPER_RATIO = 3.2; // 起收笔收尖长度 = 线宽 × 3.2
-const INK_TAPER_MIN = 0.2; // 笔尖最细到 0.2 倍
-const INK_MIN_WIDTH = 0.6; // px，避免出现 0 宽度的断续
-const INK_MAX_WIDTH_SCALE = 2.6; // 保险上限，防止异常数据把线画爆
-
-function inkSmoothstep(t) {
-  return t * t * (3 - 2 * t);
-}
-
-/**
- * 按"写得多快"给每个点算线宽（px）。
- * @param {Array<{x:number,y:number,t?:number}>} points 坐标（大屏笔迹为归一化，黑板笔迹为世界 px）
- * @param {number} width 基础线宽（px）
- * @param {number} unitX 一个 x 单位对应的像素宽
- * @param {number} unitY 一个 y 单位对应的像素高
- * @param {number} [refLen] 速度归一化长度（默认取 unitX），让不同坐标系下的"快慢"口径一致
- */
-function inkWidths(points, width, unitX, unitY, refLen = unitX) {
-  const n = points.length;
-  const out = new Float32Array(n);
-  if (n === 0) return out;
-  if (n === 1) {
-    out[0] = width;
-    return out;
-  }
-  const reference = refLen > 0 ? refLen : 1;
-
-  // 1) 速度（参考长度/秒）做 EMA 平滑，避免抖动让粗细一节一节
-  const speeds = new Float32Array(n);
-  let speed = 0;
-  for (let i = 1; i < n; i++) {
-    const dx = (points[i].x - points[i - 1].x) * unitX;
-    const dy = (points[i].y - points[i - 1].y) * unitY;
-    const rawDt = Number(points[i].t) - Number(points[i - 1].t);
-    const dt = Math.max(1, Math.min(120, Number.isFinite(rawDt) && rawDt > 0 ? rawDt : 16));
-    speed = speed * 0.5 + ((Math.hypot(dx, dy) / reference / dt) * 1000) * 0.5;
-    speeds[i] = speed;
-  }
-  speeds[0] = speeds[1];
-
-  // 2) 沿笔迹的累计弧长（px），用于起笔 / 收笔收尖
-  const dist = new Float32Array(n);
-  for (let i = 1; i < n; i++) {
-    const dx = (points[i].x - points[i - 1].x) * unitX;
-    const dy = (points[i].y - points[i - 1].y) * unitY;
-    dist[i] = dist[i - 1] + Math.hypot(dx, dy);
-  }
-  const total = dist[n - 1] || 0;
-  const taper = Math.min(width * INK_TAPER_RATIO, total * 0.45);
-  const tapered = total > taper * 2.2;
-
-  for (let i = 0; i < n; i++) {
-    let factor = 1 - INK_SPEED_DROP * Math.min(speeds[i] / INK_SPEED_REF, 1);
-    if (tapered) {
-      const head = inkSmoothstep(Math.min(dist[i] / taper, 1));
-      const tail = inkSmoothstep(Math.min((total - dist[i]) / taper, 1));
-      factor *= (INK_TAPER_MIN + (1 - INK_TAPER_MIN) * head) * (INK_TAPER_MIN + (1 - INK_TAPER_MIN) * tail);
-    }
-    out[i] = Math.min(width * INK_MAX_WIDTH_SCALE, Math.max(INK_MIN_WIDTH, width * factor));
-  }
-  return out;
-}
+// ---- 手写笔宽 ----
+// 线宽曲线、采样去重与平滑都在 web/inkRenderer.js（iOS / Android 用同一套参数移植），
+// 这里只负责把「归一化坐标 → 画布像素」映射好再交给它。
 
 /**
  * 把可变宽度的折线画成一个闭合轮廓再填充：一次 fill 完成整笔，
@@ -4921,42 +4822,62 @@ function strokeHasPressure(points) {
   return max - min >= 0.04;
 }
 
+/** perfect-freehand 参数：线宽由 InkRenderer 算好后以压力形式传入，这里只负责描边形状 */
+function freehandOptions(size) {
+  return {
+    size,
+    thinning: InkRenderer.constants.THINNING,
+    smoothing: 0.5,
+    streamline: 0.5,
+    simulatePressure: false,
+    start: { taper: 0, cap: true },
+    end: { taper: 0, cap: true },
+    last: true
+  };
+}
+
+/** 把 InkRenderer.prepare() 的结果画到画布上；perfect-freehand 未就绪时退回可变宽度轮廓 */
+function paintFreehand(context, prepared) {
+  if (!prepared) return false;
+  if (freehandStroke && prepared.points.length >= 2) {
+    const outline = freehandStroke(prepared.points, freehandOptions(prepared.size));
+    if (outline.length > 1) {
+      context.beginPath();
+      outline.forEach(([x, y], index) => (index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)));
+      context.closePath();
+      context.fill();
+      return true;
+    }
+  }
+  if (prepared.source.length >= 2) {
+    // 兜底：用同一份线宽画可变宽度轮廓，粗细曲线与 perfect-freehand 一致
+    traceInkOutline(context, prepared.source.map((point, index) => ({
+      x: point.x, y: point.y, w: prepared.widths[index]
+    })));
+    return true;
+  }
+  const only = prepared.source[0] || prepared.points[0];
+  if (!only) return false;
+  context.beginPath();
+  context.arc(only.x, only.y, Math.max(prepared.size / 2, 0.5), 0, Math.PI * 2);
+  context.fill();
+  return true;
+}
+
 /**
- * 手写笔迹：优先用 perfect-freehand 生成轮廓（MIT，Excalidraw 同款），
- * 模块还没加载完或加载失败时退回 inkWidths + traceInkOutline，保证不出现"整笔消失"。
+ * 手写笔迹：先由 InkRenderer 做像素级去重 / 平滑 / 线宽曲线，再交给 perfect-freehand
+ * 生成轮廓（MIT，Excalidraw 同款）。模块还没加载完或加载失败时用同一份线宽退回
+ * traceInkOutline，保证不出现"整笔消失"。
+ *
+ * 有压感、无压感（红外屏 / 手指 / 电容笔）走的是同一条路径：无压感时线宽由书写速度
+ * 决定，而不是降级成等宽直线——这是教室里最常见的情况。
  */
 function drawFreehandStroke(context, stroke, canvasRect, videoRect, crop) {
   const hasPressure = strokeHasPressure(stroke.points);
-  const size = stroke.width * 1.25;
-  const options = {
-    size,
-    thinning: 0.6,
-    smoothing: 0.5,
-    streamline: 0.5,
-    simulatePressure: !hasPressure,
-    start: { taper: size * 0.55, cap: true },
-    end: { taper: size * 0.55, cap: true },
-    last: true
-  };
-  const widths = freehandStroke ? null : inkWidths(stroke.points, stroke.width, videoRect.width, videoRect.height);
   let run = [];
   const flush = () => {
-    if (run.length >= 2 && freehandStroke) {
-      const outline = freehandStroke(run, options);
-      if (outline.length > 1) {
-        context.beginPath();
-        outline.forEach(([x, y], index) => (index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)));
-        context.closePath();
-        context.fill();
-      }
-    } else if (run.length >= 2) {
-      traceInkOutline(context, run.map(([x, y, , w]) => ({ x, y, w })));
-    } else if (run.length === 1) {
-      const [x, y, , w] = run[0];
-      context.beginPath();
-      context.arc(x, y, Math.max((w || size) / 2, 0.5), 0, Math.PI * 2);
-      context.fill();
-    }
+    if (run.length === 0) return;
+    paintFreehand(context, InkRenderer.prepare(run, stroke.width));
     run = [];
   };
   for (let i = 0; i < stroke.points.length; i += 1) {
@@ -4965,10 +4886,25 @@ function drawFreehandStroke(context, stroke, canvasRect, videoRect, crop) {
       flush();
       continue;
     }
-    const pressure = hasPressure ? clamp(Number(stroke.points[i].p) || 0.5, 0, 1) : 0.5;
-    run.push([canvasPoint.x, canvasPoint.y, pressure, widths ? widths[i] : stroke.width]);
+    run.push({
+      x: canvasPoint.x,
+      y: canvasPoint.y,
+      p: hasPressure ? clamp(Number(stroke.points[i].p) || 0.5, 0, 1) : 0.5,
+      t: Number(stroke.points[i].t) || 0
+    });
   }
   flush();
+}
+
+/** 电子黑板：世界像素坐标，直接进同一条手写管线 */
+function drawBlackboardFreehand(ctx, stroke) {
+  const hasPressure = strokeHasPressure(stroke.points);
+  paintFreehand(ctx, InkRenderer.prepare(stroke.points.map(point => ({
+    x: point.x,
+    y: point.y,
+    p: hasPressure ? clamp(Number(point.p) || 0.5, 0, 1) : 0.5,
+    t: Number(point.t) || 0
+  })), stroke.width));
 }
 
 function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
@@ -4999,19 +4935,10 @@ function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
 
   // 实线画笔走手写轮廓：线宽随压感 / 书写速度变化，起收笔收尖。
   // 板擦 / 荧光笔 / 虚线 / 直线工具保持等宽——它们不是"手写"，变宽反而怪。
+  // 注意：这里不再区分有没有压感。红外屏 / 手指 / 电容笔的压力恒为 0.5，
+  // 旧逻辑会把它降级成等宽二次曲线，教室里最常见的输入反而完全没有笔锋。
   const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
-  if (solidInk && isUnpressuredInk(stroke)) {
-    let run = [];
-    for (const point of stroke.points) {
-      const mapped = sourcePointToCanvasPoint(point, canvasRect, videoRect, crop);
-      if (mapped.visible) run.push(mapped);
-      else { drawStableInk(context, run, stroke.width); run = []; }
-    }
-    drawStableInk(context, run, stroke.width);
-    context.restore();
-    return;
-  }
-  if (solidInk && stroke.points.length >= 3) {
+  if (solidInk && stroke.points.length >= 2) {
     drawFreehandStroke(context, stroke, canvasRect, videoRect, crop);
     context.restore();
     return;
@@ -5696,19 +5623,12 @@ function drawBlackboardStroke(ctx, stroke) {
     }
   }
 
-  // 黑板坐标是世界像素，速度口径按 1280 世界像素 ≈ 一屏宽归一化
+  // 黑板坐标是世界像素，和课件标注走同一套手写管线（去重 / 平滑 / 速度笔锋 / 起收笔收尖）。
+  // 以前这里用 inkWidths + traceInkOutline：忽略压力、斜接多边形又不做抽稀，
+  // 采样一密就是锯齿和毛刺——这是《红外触控书写优化》里最容易看出差距的一条路径。
   const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
-  if (solidInk && isUnpressuredInk(stroke)) {
-    drawStableInk(ctx, stroke.points, stroke.width);
-    ctx.restore();
-    return;
-  }
-  if (solidInk && stroke.points.length >= 3) {
-    const widths = inkWidths(stroke.points, stroke.width, 1, 1, 1280);
-    traceInkOutline(
-      ctx,
-      stroke.points.map((point, index) => ({ x: point.x, y: point.y, w: widths[index] }))
-    );
+  if (solidInk && stroke.points.length >= 2) {
+    drawBlackboardFreehand(ctx, stroke);
     ctx.restore();
     return;
   }

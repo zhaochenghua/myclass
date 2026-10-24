@@ -110,6 +110,13 @@ object AnnotationPalette {
      */
     const val MIN_POINT_DISTANCE = 0.0005f
 
+    /**
+     * 传输降采样：本地按全部采样点渲染，发给大屏时只保留每 0.0012 归一化距离
+     * （1920 宽约 2.3px）一个点。接收端用同一套 InkRenderer 重采样回 1px 再平滑，
+     * 形状与粗细不变，报文体积约为原来的 1/4。
+     */
+    const val SYNC_MIN_DISTANCE = 0.0012f
+
     /** 归一化坐标保留 4 位小数，避免浮点长尾把报文撑大 */
     fun round(value: Float): Double = Math.round(value.toDouble() * 10000.0) / 10000.0
 }

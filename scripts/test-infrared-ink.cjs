@@ -75,16 +75,26 @@ const { startTestServer } = require('../server/testSupport');
         if (board) renderBlackboard(); else drawAnnotations();
         const sameAfterRedraw = committed === snapshot();
 
-        // Keep the start of an ongoing stroke pixel-identical as its tail grows.
+        // Keep the start of an ongoing stroke stable as its tail grows.
+        // perfect-freehand 每帧重建整条轮廓，已画部分允许极少量抗锯齿差异（<=2% 像素），
+        // 但线宽 / 位置不能整体跳动——这正是红外屏最容易看出的"闪"。
         fire('pointerdown', 200, 450);
         for (let x = 210; x <= 500; x += 10) fire('pointermove', x, 450 + Math.sin(x / 45) * 12);
         await frame();
         const ratio = canvas.width / canvas.getBoundingClientRect().width;
-        const prefix = () => Array.from(canvas.getContext('2d').getImageData(190 * ratio, 420 * ratio, 170 * ratio, 60 * ratio).data).join(',');
+        const prefix = () => canvas.getContext('2d').getImageData(190 * ratio, 420 * ratio, 170 * ratio, 60 * ratio).data;
+        const diffRatio = (a, b) => {
+          let diff = 0;
+          for (let i = 0; i < a.length; i += 4) {
+            if (Math.abs(a[i] - b[i]) > 8 || Math.abs(a[i + 1] - b[i + 1]) > 8 || Math.abs(a[i + 2] - b[i + 2]) > 8) diff++;
+          }
+          return diff / (a.length / 4);
+        };
         const before = prefix();
         for (let x = 510; x <= 800; x += 10) fire('pointermove', x, 450 + Math.sin(x / 45) * 12);
         await frame();
-        const stablePrefix = before === prefix();
+        const prefixDiff = diffRatio(before, prefix());
+        const stablePrefix = prefixDiff <= 0.02;
         const live = snapshot();
         fire('pointerup', 800, 450 + Math.sin(800 / 45) * 12);
         await frame();
@@ -101,7 +111,7 @@ const { startTestServer } = require('../server/testSupport');
         await frame();
         const empty = board ? !drawing.pages[0].strokes.length : !drawing.strokes.length;
         if (board) setBlackboardTool('pen'); else setAnnotationTool('pen');
-        return { points, completeSync, sameAfterRedraw, stablePrefix, stableCommit, erased, undoRestored, empty };
+        return { points, completeSync, sameAfterRedraw, stablePrefix, prefixDiff, stableCommit, erased, undoRestored, empty };
       }, board);
       assert.equal(result.points.length, 9, JSON.stringify(result));
       const expected = [[200, 300], [210, 305], [220, 310], [230, 315], [240, 320], [250, 330], [255, 320], [240, 320], [280, 330]];

@@ -14,7 +14,10 @@ import android.view.View
  * 速度笔锋的机上校验（不需要服务器）：
  *   * 每个采样点都带单调递增的相对时间戳 t；
  *   * 慢写段明显比快写段粗；
- *   * 起笔处收尖，比行笔段细。
+ *   * 起笔处收尖，比行笔段细；
+ *   * 本地保留全部采样点，发给大屏的点按像素距离降采样，且收笔点一定包含在内。
+ *
+ * 渲染结果会写到应用缓存目录的 ink-check.png，方便 adb pull 出来肉眼核对。
  */
 object InkSpeedCheck {
     fun run(test: Instrumentation) {
@@ -36,7 +39,11 @@ object InkSpeedCheck {
                 view.setImage(image)
                 view.mode = ImageCastMode.Pen
 
-                // 一条横线：前 30 步慢写（4px / 30ms），之后快写（24px / 10ms）
+                // 记录实际发给大屏的点（本地渲染不受影响）
+                val synced = mutableListOf<AnnotationPoint>()
+                view.onStrokePoints = { _, batch -> synced.addAll(batch) }
+
+                // 一条横线：前 40 步慢写（1px / 30ms，采样比传输阈值更密），之后快写（24px / 10ms）
                 val downTime = SystemClock.uptimeMillis()
                 var time = downTime
                 var x = 100f
@@ -49,8 +56,8 @@ object InkSpeedCheck {
                 send(MotionEvent.ACTION_DOWN, time, x)
                 var step = 0
                 while (x < width - 150f) {
-                    val slow = step < 30
-                    x += if (slow) 4f else 24f
+                    val slow = step < 40
+                    x += if (slow) 1f else 24f
                     time += if (slow) 30L else 10L
                     send(MotionEvent.ACTION_MOVE, time, x)
                     step++
@@ -67,8 +74,21 @@ object InkSpeedCheck {
                     check(points[i].t >= points[i - 1].t) { "时间戳非单调 @$i" }
                 }
 
+                // 本地全量、传输降采样：线上点必须明显更少，但收笔位置一致
+                check(synced.isNotEmpty()) { "没有任何点发给大屏" }
+                check(synced.size < points.size) { "传输没有降采样: 本地 ${points.size} 线上 ${synced.size}" }
+                check(synced.last().x == points.last().x && synced.last().y == points.last().y) {
+                    "收笔点没有同步：线上 ${synced.last()} 本地 ${points.last()}"
+                }
+
                 val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                 view.draw(Canvas(output))
+                // 留一份渲染结果给人工核对（adb pull），失败时也能看到实际笔迹
+                runCatching {
+                    java.io.File(test.targetContext.cacheDir, "ink-check.png").outputStream().use {
+                        output.compress(Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                }
                 fun thickness(px: Int): Int {
                     var best = 0
                     var run = 0
@@ -81,16 +101,36 @@ object InkSpeedCheck {
                     return best
                 }
 
-                val slow = thickness(200)
+                val slow = thickness(120)
                 val fast = thickness(900)
                 val tip = thickness(104)
-                check(slow >= 4) { "慢写段没有墨迹: $slow" }
-                check(slow > fast * 1.3) { "快写段没有变细: 慢=$slow 快=$fast" }
-                check(tip < slow) { "起笔没有收尖: 起笔=$tip 慢写=$slow" }
+
+                // 诊断信息：管线输出规模与线宽区间
+                val density = view.resources.displayMetrics.density
+                val prepared = InkRenderer.prepare(points.map {
+                    InkRenderer.Point(it.x * width, it.y * height, it.p, it.t.toFloat())
+                }, PenSettings.width * density)
+                val debug = prepared?.let {
+                    "管线 source=${it.source.size} size=${"%.1f".format(it.size)} " +
+                        "w=${"%.1f".format(it.widths.min())}..${"%.1f".format(it.widths.max())} " +
+                        "w120=${"%.1f".format(it.widths.getOrNull(120) ?: -1f)} w900=${"%.1f".format(it.widths.getOrNull(900) ?: -1f)}"
+                } ?: "管线为空"
+
+                check(slow >= 4) { "慢写段没有墨迹: $slow ($debug)" }
+                check(slow > fast * 1.3) { "快写段没有变细: 慢=$slow 快=$fast ($debug)" }
+                check(tip < slow) { "起笔没有收尖: 起笔=$tip 慢写=$slow ($debug)" }
+
+                // 留一份渲染结果给人工核对（adb pull）
+                runCatching {
+                    java.io.File(test.targetContext.cacheDir, "ink-check.png").outputStream().use {
+                        output.compress(Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                }
 
                 result.putString(
                     "stream",
-                    "PASS: 速度笔锋 起笔=${tip}px 慢写=${slow}px 快写=${fast}px，共 ${points.size} 点，t=${points.first().t}..${points.last().t}ms"
+                    "PASS: 速度笔锋 起笔=${tip}px 慢写=${slow}px 快写=${fast}px，" +
+                        "本地 ${points.size} 点 / 线上 ${synced.size} 点，t=${points.first().t}..${points.last().t}ms"
                 )
             } catch (error: Throwable) {
                 failure = error

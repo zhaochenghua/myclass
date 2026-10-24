@@ -186,6 +186,8 @@ class ZoomableImageView(context: Context) : View(context) {
     private var twoFingerTapP1X = 0f
     private var twoFingerTapP1Y = 0f
     private val pendingPoints = mutableListOf<AnnotationPoint>()
+    /** 最后一个已经发给大屏的点：本地全量渲染，传输按像素距离降采样 */
+    private var lastSyncedPoint: AnnotationPoint? = null
     private var strokeSeq = 0
     private var lastSyncAt = 0L
 
@@ -301,6 +303,7 @@ class ZoomableImageView(context: Context) : View(context) {
         activeDrawnIndex = 0
         hasPendingStart = false
         pendingPoints.clear()
+        lastSyncedPoint = null
         strokes.clear()
         remoteStrokes.clear()
         annotationDirty = true
@@ -314,6 +317,7 @@ class ZoomableImageView(context: Context) : View(context) {
         activeDrawnIndex = 0
         hasPendingStart = false
         pendingPoints.clear()
+        lastSyncedPoint = null
         strokes.clear()
         remoteStrokes.clear()
         annotationCanvas.setBitmap(null)
@@ -341,6 +345,7 @@ class ZoomableImageView(context: Context) : View(context) {
         activeDrawnIndex = 0
         hasPendingStart = false
         pendingPoints.clear()
+        lastSyncedPoint = null
         strokes.clear()
         strokes.addAll(next.map { it.copy(points = it.points.toMutableList()) })
         remoteStrokes.clear()
@@ -962,6 +967,7 @@ class ZoomableImageView(context: Context) : View(context) {
         activeStroke = stroke
         activeDrawnIndex = 0
         pendingPoints.clear()
+        lastSyncedPoint = point
         lastSyncAt = System.currentTimeMillis()
         ensureAnnotationLayer()
         if (annotationDirty) {
@@ -1013,11 +1019,18 @@ class ZoomableImageView(context: Context) : View(context) {
 
     private fun finishActiveStroke(notify: Boolean) {
         val stroke = activeStroke ?: return
+        // 收笔位置一定要发给大屏：最后一个移动点可能因为降采样阈值没进队列
+        val lastPoint = stroke.points.lastOrNull()
+        val synced = lastSyncedPoint
+        if (lastPoint != null && (synced == null || lastPoint.x != synced.x || lastPoint.y != synced.y)) {
+            pendingPoints.add(lastPoint)
+        }
         // 先把尚未发送的点补发出去，再结束笔画。
         // 顺序很关键：若先置空 activeStroke，flush 时取到 null 会直接 return，
         // 最后一段点就丢了，大屏上的笔画会短一截（例如画圆不闭合）。
         flushPendingPoints(stroke)
         activeStroke = null
+        lastSyncedPoint = null
         strokes.add(stroke)
         annotationDirty = true
         invalidate()
@@ -1027,10 +1040,33 @@ class ZoomableImageView(context: Context) : View(context) {
         onAnnotationCountChanged?.invoke()
     }
 
+    /**
+     * 把积攒的点发给大屏。
+     *
+     * 本地渲染用全部采样点（画质最好），传输只发"够描述形状"的点：默认每 0.0012
+     * 归一化距离（1920 宽上约 2.3px）一个，接收端用同一套 InkRenderer 重采样回 1px
+     * 再平滑，所以形状和粗细不会因为降采样而变化，报文却能小 3~4 倍。
+     * 每批的最后一个点一定发送，保证收笔位置不被抹掉。
+     */
     private fun flushPendingPoints(stroke: AnnotationStroke?) {
         if (stroke == null || pendingPoints.isEmpty()) return
-        val batch = pendingPoints.toList()
+        val threshold = AnnotationPalette.SYNC_MIN_DISTANCE
+        val batch = ArrayList<AnnotationPoint>(pendingPoints.size)
+        var last = lastSyncedPoint
+        for (index in pendingPoints.indices) {
+            val point = pendingPoints[index]
+            val isLast = index == pendingPoints.lastIndex
+            if (!isLast && last != null) {
+                val dx = point.x - last.x
+                val dy = point.y - last.y
+                if (dx * dx + dy * dy < threshold * threshold) continue
+            }
+            batch.add(point)
+            last = point
+        }
         pendingPoints.clear()
+        if (batch.isEmpty()) return
+        lastSyncedPoint = last
         onStrokePoints?.invoke(stroke.id, batch)
     }
 
@@ -1093,8 +1129,8 @@ class ZoomableImageView(context: Context) : View(context) {
         }
         targetPaint.strokeWidth = stroke.width * density * if (!stroke.isEraser && stroke.mode == "highlighter") 5f else 1f
 
-        // 实线画笔走手写轮廓（perfect-freehand）；板擦、荧光笔、虚线、直线工具保持等宽
-        if (!stroke.isEraser && stroke.mode == "solid" && !stroke.lineMode && points.size >= 3) {
+        // 实线画笔走手写轮廓（InkRenderer + perfect-freehand）；板擦、荧光笔、虚线、直线工具保持等宽
+        if (!stroke.isEraser && stroke.mode == "solid" && !stroke.lineMode && points.size >= 2) {
             drawFreehandStroke(target, points, targetPaint.strokeWidth, rect, targetPaint)
             return
         }
@@ -1128,8 +1164,12 @@ class ZoomableImageView(context: Context) : View(context) {
     }
 
     /**
-     * 手写轮廓：交给 PerfectFreehand 生成多边形，一次 drawPath 填充。
-     * 参数与大屏 web/app.js、iPad annotation.js 保持一致。
+     * 手写轮廓：InkRenderer 负责「像素去重 → 位置平滑 → 速度/压力线宽 → 等距重采样」，
+     * 这里按每个点的线宽生成左右两条边，一次 drawPath 填充。
+     *
+     * 没有沿用 PerfectFreehand.kt 的移植版：它缺上游的轮廓抽稀与端帽，密集采样时
+     * 多边形会自交成一串"串珠"；而按 1px 重采样后的点直接做法线偏移，边缘是连续的，
+     * 与网页端 traceInkOutline 的兜底轮廓同源。
      */
     private fun drawFreehandStroke(
         target: Canvas,
@@ -1138,42 +1178,56 @@ class ZoomableImageView(context: Context) : View(context) {
         rect: RectF,
         paint: Paint
     ) {
-        var minP = 1f
-        var maxP = 0f
-        for (point in points) {
-            if (point.p < minP) minP = point.p
-            if (point.p > maxP) maxP = point.p
-        }
-        val hasPressure = maxP - minP >= 0.04f
-        val input = points.map { point ->
-            PerfectFreehand.Input(
+        val prepared = InkRenderer.prepare(points.map { point ->
+            InkRenderer.Point(
                 rect.left + point.x * rect.width(),
                 rect.top + point.y * rect.height(),
-                if (hasPressure) point.p else 0.5f
+                point.p,
+                point.t.toFloat()
             )
-        }
-        val size = widthPx * 1.25f
-        val outline = PerfectFreehand.outline(
-            input,
-            size,
-            thinning = 0.6f,
-            smoothing = 0.5f,
-            streamline = 0.5f,
-            simulatePressure = !hasPressure,
-            taperStart = size * 0.55f,
-            taperEnd = size * 0.55f
-        )
-        if (outline.size < 4) return
-        inkPath.rewind()
-        inkPath.moveTo(outline[0], outline[1])
-        var i = 2
-        while (i + 1 < outline.size) {
-            inkPath.lineTo(outline[i], outline[i + 1])
-            i += 2
-        }
-        inkPath.close()
+        }, widthPx) ?: return
+        val source = prepared.source
+        val widths = prepared.widths
         paint.style = Paint.Style.FILL
-        target.drawPath(inkPath, paint)
+
+        if (source.size >= 2) {
+            val n = source.size
+            inkPath.rewind()
+            // 左边：沿前进方向左法线偏移半个线宽
+            for (i in 0 until n) {
+                val prev = source[if (i == 0) 0 else i - 1]
+                val next = source[if (i == n - 1) n - 1 else i + 1]
+                val half = widths[i] / 2f
+                var nx = -(next.y - prev.y)
+                var ny = next.x - prev.x
+                val len = hypot(nx, ny).coerceAtLeast(0.0001f)
+                nx /= len
+                ny /= len
+                val x = source[i].x + nx * half
+                val y = source[i].y + ny * half
+                if (i == 0) inkPath.moveTo(x, y) else inkPath.lineTo(x, y)
+            }
+            // 右边：反向回到起点
+            for (i in n - 1 downTo 0) {
+                val prev = source[if (i == 0) 0 else i - 1]
+                val next = source[if (i == n - 1) n - 1 else i + 1]
+                val half = widths[i] / 2f
+                var nx = -(next.y - prev.y)
+                var ny = next.x - prev.x
+                val len = hypot(nx, ny).coerceAtLeast(0.0001f)
+                nx /= len
+                ny /= len
+                inkPath.lineTo(source[i].x - nx * half, source[i].y - ny * half)
+            }
+            inkPath.close()
+            target.drawPath(inkPath, paint)
+        }
+
+        // 端帽：起收笔各补一个圆，保证收笔不是平头
+        val first = source.first()
+        val last = source.last()
+        target.drawCircle(first.x, first.y, (widths.first() / 2f).coerceAtLeast(0.5f), paint)
+        target.drawCircle(last.x, last.y, (widths.last() / 2f).coerceAtLeast(0.5f), paint)
         paint.style = Paint.Style.STROKE
     }
     private fun markAnnotationDirty() {
@@ -1294,3 +1348,4 @@ class ZoomableImageView(context: Context) : View(context) {
         private const val STYLUS_GUARD_MS = 500L
     }
 }
+

@@ -24,6 +24,9 @@ const SYNC_INTERVAL_MS = 60;
 const MAX_PENDING_POINTS = 12;
 // 0.0015 在 1600px 宽的内容上约 2.4px，会把合并事件里的点大量丢掉；收紧到 0.0005 让笔迹连续
 const MIN_POINT_DISTANCE = 0.0005;
+// 传输降采样：本地按全部采样点渲染，发给大屏时每 0.0012（1920 宽约 2.3px）一个点。
+// 大屏用同一套 InkRenderer 重采样回 1px 再平滑，形状与粗细不变，报文约为 1/4。
+const SYNC_MIN_DISTANCE = 0.0012;
 /** 起笔判定阈值（CSS px）：单指移动超过该距离才认定为绘制，避免落点被误判成笔画 */
 const START_STROKE_SLOP_PX = 6;
 const ERASER_COLOR = '#000000';
@@ -92,25 +95,31 @@ function strokePressureRange(points) {
   return points.length ? max - min : 0;
 }
 
-/** 用 perfect-freehand 生成一笔的轮廓并填充 */
+/** 用 perfect-freehand 生成一笔的轮廓并填充（输入先过统一的 InkRenderer 管线） */
 function drawFreehandStroke(ctx, stroke, rect) {
   const points = stroke.points;
   if (points.length < 2) return;
   const hasPressure = strokePressureRange(points) >= 0.04;
-  const size = stroke.width * 1.25;
-  const input = points.map((point) => [
-    rect.left + point.x * rect.width,
-    rect.top + point.y * rect.height,
-    hasPressure ? clamp01(Number(point.p) || 0.5) : 0.5
-  ]);
-  const outline = getStroke(input, {
-    size,
-    thinning: FREEHAND_THINNING,
+  const renderer = globalThis.InkRenderer;
+  const px = points.map((point) => ({
+    x: rect.left + point.x * rect.width,
+    y: rect.top + point.y * rect.height,
+    p: hasPressure ? clamp01(Number(point.p) || 0.5) : 0.5,
+    t: Number(point.t) || 0
+  }));
+  // 没有加载到 inkRenderer.js（旧缓存页面）时退回原来的直接调用，至少不会整笔消失
+  const prepared = renderer
+    ? renderer.prepare(px, stroke.width)
+    : { points: px, size: stroke.width * 1.25 };
+  if (!prepared || prepared.points.length < 2) return;
+  const outline = getStroke(prepared.points, {
+    size: prepared.size,
+    thinning: renderer ? renderer.constants.THINNING : FREEHAND_THINNING,
     smoothing: FREEHAND_SMOOTHING,
     streamline: FREEHAND_STREAMLINE,
-    simulatePressure: !hasPressure,
-    start: { taper: size * 0.55, cap: true },
-    end: { taper: size * 0.55, cap: true },
+    simulatePressure: renderer ? false : !hasPressure,
+    start: { taper: 0, cap: true },
+    end: { taper: 0, cap: true },
     last: true
   });
   if (outline.length < 2) return;
@@ -154,6 +163,7 @@ export class AnnotationBoard {
     this.pendingClientY = 0;
     this.pendingPoints = [];
     this.lastSyncAt = 0;
+    this.lastSyncedPoint = null;
     this.strokeSeq = 0;
 
     this.ctx = this.canvas.getContext('2d');
@@ -208,6 +218,7 @@ export class AnnotationBoard {
     this.strokes = [];
     this.remoteStrokes.clear();
     this.pendingPoints = [];
+    this.lastSyncedPoint = null;
     this.dirty = true;
     this.invalidate();
     this.onChange();
@@ -270,7 +281,14 @@ export class AnnotationBoard {
       // 双指缩放/平移时第二指落下走的就是这条路径。
       return;
     }
+    // 收笔位置一定要发给大屏：最后一个移动点可能因为降采样阈值没进队列
+    const lastPoint = stroke.points[stroke.points.length - 1];
+    if (lastPoint && (!this.lastSyncedPoint ||
+        lastPoint.x !== this.lastSyncedPoint.x || lastPoint.y !== this.lastSyncedPoint.y)) {
+      this.pendingPoints.push(lastPoint);
+    }
     this.#flushPendingPoints();
+    this.lastSyncedPoint = null;
     this.activeStroke = null;
     this.activePointerId = null;
     if (stroke.points.length > 0) {
@@ -630,6 +648,7 @@ export class AnnotationBoard {
     this.activeStroke = stroke;
     // begin 已携带起点，无需再放入待发队列，避免首帧把起点重复发给大屏
     this.pendingPoints = [];
+    this.lastSyncedPoint = point;
     this.lastSyncAt = performance.now();
     this.emit({
       action: 'begin',
@@ -670,8 +689,28 @@ export class AnnotationBoard {
   #flushPendingPoints() {
     const stroke = this.activeStroke;
     if (!stroke || this.pendingPoints.length === 0) return;
-    const points = this.pendingPoints.map((point) => ({ x: round4(point.x), y: round4(point.y), t: point.t || 0, p: round4(point.p ?? 0.5) }));
+    // 本地按全部采样点渲染，发给大屏时按像素距离抽稀（1920 宽约 2.3px 一个点）。
+    // 大屏用同一套 InkRenderer 重采样回 1px 再平滑，形状与粗细不变，报文约为 1/4。
+    const batch = [];
+    let last = this.lastSyncedPoint;
+    for (let index = 0; index < this.pendingPoints.length; index += 1) {
+      const point = this.pendingPoints[index];
+      const isLast = index === this.pendingPoints.length - 1;
+      if (!isLast && last) {
+        const dx = point.x - last.x;
+        const dy = point.y - last.y;
+        if (dx * dx + dy * dy < SYNC_MIN_DISTANCE * SYNC_MIN_DISTANCE) continue;
+      }
+      batch.push(point);
+      last = point;
+    }
     this.pendingPoints = [];
-    this.emit({ action: 'points', strokeId: stroke.id, points });
+    if (batch.length === 0) return;
+    this.lastSyncedPoint = last;
+    this.emit({
+      action: 'points',
+      strokeId: stroke.id,
+      points: batch.map((point) => ({ x: round4(point.x), y: round4(point.y), t: point.t || 0, p: round4(point.p ?? 0.5) }))
+    });
   }
 }
