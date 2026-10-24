@@ -1260,18 +1260,28 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun showUserManagementDialog() {
         AlertDialog.Builder(this)
             .setTitle("用户管理")
-            .setItems(arrayOf("课件管理", "剪贴板链接", "切换用户")) { _, which ->
+            .setItems(arrayOf("课件管理", "后台管理", "剪贴板链接", "切换用户")) { _, which ->
                 when (which) {
                     0 -> showCoursewareManagement()
-                    1 -> {
+                    1 -> openAdminConsole()
+                    2 -> {
                         clipboardManualRequested = true
                         window.decorView.post { checkClipboardLink() }
                     }
-                    2 -> confirmSwitchUser()
+                    3 -> confirmSwitchUser()
                 }
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /** 管理后台是网页端，手机浏览器打开后用它自己的管理员登录。 */
+    private fun adminConsoleUrl(): String = serverBaseUrl().trimEnd('/') + "/admin.html"
+
+    private fun openAdminConsole() {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(adminConsoleUrl()))) }
+            .onSuccess { toast("已在浏览器中打开管理后台") }
+            .onFailure { toast("没有可打开管理后台的浏览器") }
     }
 
     private fun confirmSwitchUser() {
@@ -4556,6 +4566,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 takeOver(it)
                 penRow.addView(it)
             }
+            // 平板横屏不走 paletteRow，粗细按钮原先只挂在未使用的 penBar 上，
+            // 必须搬进这一行，否则画笔模式里看不到粗细切换。
+            takeOver(penWidthButton)
+            penWidthButton.layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply {
+                marginStart = dp(4)
+            }
+            penRow.addView(penWidthButton)
             listOf(eraserButton, undoButton).forEach { button ->
                 takeOver(button)
                 button.layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
@@ -5208,6 +5225,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 takeOver(it)
                 penRow.addView(it)
             }
+            // 同图片投屏：平板横屏的画笔行也要带上粗细按钮。
+            takeOver(penWidthButton)
+            penWidthButton.layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply {
+                marginStart = dp(4)
+            }
+            penRow.addView(penWidthButton)
             listOf(eraserButton, undoButton).forEach { button ->
                 takeOver(button)
                 button.layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {

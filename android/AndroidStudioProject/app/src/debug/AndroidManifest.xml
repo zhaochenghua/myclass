@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug-only provider used by androidTest to emulate cloud file access. -->
+        <provider
+            android:name="cn.edu.nb3.myclass.FakeCloudProvider"
+            android:authorities="cn.edu.nb3.myclass.fakecloud"
+            android:exported="false" />
+    </application>
+</manifest>
