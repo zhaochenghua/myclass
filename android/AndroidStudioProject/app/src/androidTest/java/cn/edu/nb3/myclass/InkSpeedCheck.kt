@@ -118,7 +118,9 @@ object InkSpeedCheck {
 
                 check(slow >= 4) { "慢写段没有墨迹: $slow ($debug)" }
                 check(slow > fast * 1.3) { "快写段没有变细: 慢=$slow 快=$fast ($debug)" }
-                check(tip < slow) { "起笔没有收尖: 起笔=$tip 慢写=$slow ($debug)" }
+                // 起笔是圆珠笔式的圆头：比行笔略细，但不能细成一个尖
+                check(tip >= slow * 0.4f) { "起笔不是圆头（太尖）: 起笔=$tip 慢写=$slow ($debug)" }
+                check(tip <= slow) { "起笔比行笔还粗: 起笔=$tip 慢写=$slow ($debug)" }
 
                 // 留一份渲染结果给人工核对（adb pull）
                 runCatching {

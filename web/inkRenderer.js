@@ -26,10 +26,13 @@
   const SPEED_REF = 1.0;
   /** 最快处衰减到 1 - SPEED_DROP 倍 */
   const SPEED_DROP = 0.7;
-  /** 起收笔收尖长度 = 线宽 × 3.2 */
-  const TAPER_RATIO = 3.2;
-  /** 笔尖最细到 0.18 倍 */
-  const TAPER_MIN = 0.18;
+  /**
+   * 起收笔收尖长度 = 线宽 × 2.2。原来 3.2 配 0.18 的收尖像毛笔，iPad 上两端太尖；
+   * 收短并抬高下限后，起收笔是圆珠笔那种圆头。
+   */
+  const TAPER_RATIO = 2.2;
+  /** 笔尖最细到 0.55 倍（原来 0.18） */
+  const TAPER_MIN = 0.55;
   /** perfect-freehand 的 size 与画笔宽度的比例（保持原有视觉重量） */
   const SIZE_SCALE = 1.25;
   /** 交给 perfect-freehand 的 thinning：配合下面的压力换算，radius 正好等于 w/2 */
@@ -254,4 +257,5 @@
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.InkRenderer = api;
 })(typeof window !== 'undefined' ? window : globalThis);
+
 

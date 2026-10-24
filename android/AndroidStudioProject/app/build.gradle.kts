@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
@@ -43,8 +43,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "cn.edu.nb3.myclass.ImportFlowInstrumentation"
-        versionCode = 2026102405
-        versionName = "1.10.0-2026102405"
+        versionCode = 2026102406
+        versionName = "1.10.1-2026102406"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
         buildConfigField("String", "EXTERNAL_SERVER_BASE_URL", myClassExternalServerUrl.asBuildConfigString())
@@ -117,3 +117,4 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.2")
     implementation("io.github.webrtc-sdk:android:125.6422.07")
 }
+

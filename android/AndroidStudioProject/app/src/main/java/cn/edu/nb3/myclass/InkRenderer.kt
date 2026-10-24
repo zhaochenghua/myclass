@@ -26,8 +26,9 @@ object InkRenderer {
     /** 速度参考（px/ms） */
     private const val SPEED_REF = 1.0f
     private const val SPEED_DROP = 0.7f
-    private const val TAPER_RATIO = 3.2f
-    private const val TAPER_MIN = 0.18f
+    /** 起收笔收尖长度 = 线宽 × 2.2；下限 0.55，收笔像圆珠笔的圆头而不是毛笔尖 */
+    private const val TAPER_RATIO = 2.2f
+    private const val TAPER_MIN = 0.55f
     /** perfect-freehand 的 size 与画笔宽度的比例 */
     const val SIZE_SCALE = 1.25f
     /** 交给 PerfectFreehand 的 thinning（与压力反解配套） */
@@ -192,5 +193,6 @@ object InkRenderer {
         return Prepared(inputs, maxWidth, strokeWidths, conditioned)
     }
 }
+
 
 

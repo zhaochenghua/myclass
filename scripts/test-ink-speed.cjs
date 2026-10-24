@@ -79,7 +79,7 @@ function pdfFixture() {
       return {
         slow: thicknessAt(at(0.25)),
         fast: thicknessAt(at(0.8)),
-        // 收尖只覆盖起笔后约 3 倍线宽的距离，采样点要贴紧起笔处
+        // 起笔是圆珠笔式的圆头：比行笔略细，但不能细成一个尖
         tip: thicknessAt(at(0.122)),
         canvasWidth: canvas.width
       };
@@ -87,7 +87,8 @@ function pdfFixture() {
     assert.ok(measured.canvasWidth > 0, '标注画布未初始化');
     assert.ok(measured.slow >= 3, `慢写段没有墨迹: ${JSON.stringify(measured)}`);
     assert.ok(measured.slow > measured.fast * 1.5, `快写段没有变细: ${JSON.stringify(measured)}`);
-    assert.ok(measured.tip < measured.slow * 0.85, `起笔没有收尖: ${JSON.stringify(measured)}`);
+    assert.ok(measured.tip >= measured.slow * 0.4, `起笔不是圆头（太尖）: ${JSON.stringify(measured)}`);
+    assert.ok(measured.tip <= measured.slow, `起笔比行笔还粗: ${JSON.stringify(measured)}`);
 
     // 输入链路：真实指针事件也要带上相对时间戳
     const captured = await page.evaluate(async () => {
