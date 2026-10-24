@@ -4872,12 +4872,12 @@ function paintFreehand(context, prepared) {
  * 有压感、无压感（红外屏 / 手指 / 电容笔）走的是同一条路径：无压感时线宽由书写速度
  * 决定，而不是降级成等宽直线——这是教室里最常见的情况。
  */
-function drawFreehandStroke(context, stroke, canvasRect, videoRect, crop) {
+function drawFreehandStroke(context, stroke, canvasRect, videoRect, crop, width = stroke.width) {
   const hasPressure = strokeHasPressure(stroke.points);
   let run = [];
   const flush = () => {
     if (run.length === 0) return;
-    paintFreehand(context, InkRenderer.prepare(run, stroke.width));
+    paintFreehand(context, InkRenderer.prepare(run, width));
     run = [];
   };
   for (let i = 0; i < stroke.points.length; i += 1) {
@@ -4907,28 +4907,41 @@ function drawBlackboardFreehand(ctx, stroke) {
   })), stroke.width));
 }
 
+/**
+ * 课件/图片在视口里被放大时，笔迹线宽要按同一倍率缩放，才能保持它与内容的相对比例：
+ * 放大 → 线变粗（占页面同样的比例），缩小 → 线变细。
+ * 以前线宽固定为屏幕像素，放大后页面变大、线不变，看起来反而越来越细。
+ */
+function annotationInkScale() {
+  if (currentContentKind() === 'none') return 1;
+  const scale = Number(state.imageView?.scale);
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
 function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
+  // 线宽 = 画笔宽度 × 内容缩放，板擦/荧光笔/虚线同样跟随
+  const width = Math.max(0.5, (Number(stroke.width) || 4) * annotationInkScale());
   context.save();
   if (stroke.isEraser) {
     // 标注画布透明（叠在视频上），板擦用 destination-out 真正擦除下层笔画
     context.globalCompositeOperation = 'destination-out';
     context.strokeStyle = '#000';
     context.fillStyle = '#000';
-    context.lineWidth = stroke.width;
+    context.lineWidth = width;
     context.lineCap = 'round';
     context.lineJoin = 'round';
   } else {
     context.strokeStyle = stroke.color;
     context.fillStyle = stroke.color;
-    context.lineWidth = stroke.width;
+    context.lineWidth = width;
     context.lineCap = 'round';
     context.lineJoin = 'round';
     if (stroke.mode === 'dashed') {
-      context.setLineDash([stroke.width * 2.2, stroke.width * 1.6]);
+      context.setLineDash([width * 2.2, width * 1.6]);
     } else if (stroke.mode === 'dashdot') {
-      context.setLineDash([stroke.width * 2.2, stroke.width * 1.2, 0.1, stroke.width * 1.2]);
+      context.setLineDash([width * 2.2, width * 1.2, 0.1, width * 1.2]);
     } else if (stroke.mode === 'highlighter') {
-      context.lineWidth = stroke.width * 5;
+      context.lineWidth = width * 5;
       context.globalAlpha = 0.45;
     }
   }
@@ -4939,7 +4952,7 @@ function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
   // 旧逻辑会把它降级成等宽二次曲线，教室里最常见的输入反而完全没有笔锋。
   const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
   if (solidInk && stroke.points.length >= 2) {
-    drawFreehandStroke(context, stroke, canvasRect, videoRect, crop);
+    drawFreehandStroke(context, stroke, canvasRect, videoRect, crop, width);
     context.restore();
     return;
   }
@@ -4978,7 +4991,7 @@ function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
       .find((point) => point.visible);
     if (onlyPoint) {
       context.beginPath();
-      context.arc(onlyPoint.x, onlyPoint.y, (stroke.mode === 'highlighter' ? stroke.width * 5 : stroke.width) / 2, 0, Math.PI * 2);
+      context.arc(onlyPoint.x, onlyPoint.y, (stroke.mode === 'highlighter' ? width * 5 : width) / 2, 0, Math.PI * 2);
       context.fill();
     }
   }

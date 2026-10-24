@@ -131,6 +131,46 @@ object InkSpeedCheck {
                         demoOutput.compress(Bitmap.CompressFormat.PNG, 100, it)
                     }
                 }
+                // 放大后线宽应同比变粗：笔迹要钉在课件上，放大时一起放大
+                val zoomStroke = AnnotationStroke(
+                    id = "zoom",
+                    colorHex = "#D00000",
+                    width = PenSettings.width,
+                    isEraser = false
+                )
+                for (i in 0..80) {
+                    zoomStroke.points.add(AnnotationPoint(0.15f + i * 0.008f, 0.5f, i * 8, 0.5f))
+                }
+                view.replaceStrokes(listOf(zoomStroke))
+                val scaleField = ZoomableImageView::class.java.getDeclaredField("userScale")
+                scaleField.isAccessible = true
+                fun inkThicknessAt(scale: Float): Int {
+                    scaleField.setFloat(view, scale)
+                    // 离屏层按旧比例栅格化过，缩放后必须重建（真实手势由 markAnnotationDirty 触发）
+                    view.replaceStrokes(listOf(zoomStroke.copy(points = zoomStroke.points.toMutableList())))
+                    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    view.draw(Canvas(bitmap))
+                    // 图片 1200x800 与控件同尺寸，fit = 1，缩放后居中
+                    val size = width * scale
+                    val left = (width - size) / 2f
+                    val px = (left + 0.4f * size).toInt().coerceIn(0, width - 1)
+                    var best = 0
+                    var run = 0
+                    for (y in 0 until height) {
+                        val color = bitmap.getPixel(px, y)
+                        val ink = Color.red(color) > 150 && Color.green(color) < 120
+                        run = if (ink) run + 1 else 0
+                        if (run > best) best = run
+                    }
+                    return best
+                }
+                val zoomBase = inkThicknessAt(1f)
+                val zoomed = inkThicknessAt(2f)
+                scaleField.setFloat(view, 1f)
+                check(zoomed >= (zoomBase * 1.7f).toInt()) {
+                    "放大后笔迹没有变粗: 1x=$zoomBase 2x=$zoomed"
+                }
+
                 val slow = thickness(120)
                 val fast = thickness(900)
                 val tip = thickness(104)
@@ -164,6 +204,7 @@ object InkSpeedCheck {
                 result.putString(
                     "stream",
                     "PASS: 速度笔锋 起笔=${tip}px 慢写=${slow}px 快写=${fast}px，" +
+                        "放大 1x→2x ${zoomBase}px→${zoomed}px，" +
                         "本地 ${points.size} 点 / 线上 ${synced.size} 点，t=${points.first().t}..${points.last().t}ms"
                 )
             } catch (error: Throwable) {
@@ -176,4 +217,6 @@ object InkSpeedCheck {
         test.finish(if (failure == null) Activity.RESULT_OK else Activity.RESULT_CANCELED, result)
     }
 }
+
+
 

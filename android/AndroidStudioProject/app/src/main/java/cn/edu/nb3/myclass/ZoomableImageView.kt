@@ -1116,18 +1116,22 @@ class ZoomableImageView(context: Context) : View(context) {
         val rect = imageDisplayRect() ?: return
         val points = stroke.points
         if (points.isEmpty()) return
+        // 笔迹线宽随课件/图片的放大倍率一起缩放：放大 → 线变粗，保持与内容的相对比例。
+        // 以前线宽固定为 dp×density，放大后内容变大、线不变，看起来反而越来越细。
+        val inkScale = userScale.coerceAtLeast(1f)
+        val baseWidth = stroke.width * density * inkScale
         val targetPaint = if (stroke.isEraser) eraserPaint else strokePaint
         if (!stroke.isEraser) {
             targetPaint.color = runCatching { Color.parseColor(stroke.colorHex) }.getOrDefault(Color.RED)
             targetPaint.alpha = if (stroke.mode == "highlighter") 115 else 255
-            val unit = stroke.width * density
+            val unit = baseWidth
             targetPaint.pathEffect = when (stroke.mode) {
                 "dashed" -> DashPathEffect(floatArrayOf(unit * 2.2f, unit * 1.6f), 0f)
                 "dashdot" -> DashPathEffect(floatArrayOf(unit * 2.2f, unit * 1.2f, 0.1f, unit * 1.2f), 0f)
                 else -> null
             }
         }
-        targetPaint.strokeWidth = stroke.width * density * if (!stroke.isEraser && stroke.mode == "highlighter") 5f else 1f
+        targetPaint.strokeWidth = baseWidth * if (!stroke.isEraser && stroke.mode == "highlighter") 5f else 1f
 
         // 实线画笔走手写轮廓（InkRenderer + perfect-freehand）；板擦、荧光笔、虚线、直线工具保持等宽
         if (!stroke.isEraser && stroke.mode == "solid" && !stroke.lineMode && points.size >= 2) {

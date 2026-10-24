@@ -61,8 +61,9 @@ function pdfFixture() {
       const rect = canvas.getBoundingClientRect();
       const dpr = canvas.width / Math.max(1, rect.width);
       const ctx = canvas.getContext('2d');
-      const image = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
       const thicknessAt = (cssX) => {
+        // 每次都重新取像素：缩放后画布已经重绘，用第一次的快照会测到旧笔迹
+        const image = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
         const px = Math.round(cssX * dpr);
         // 按 alpha 覆盖率累加，得到亚像素精度；整数游程在 4px 线宽上会四舍五入成一样粗
         let coverage = 0;
@@ -75,13 +76,29 @@ function pdfFixture() {
       };
       const videoRect = currentVideoContentRect();
       const at = (fraction) => videoRect.left - rect.left + videoRect.width * fraction;
-      return {
+      const before = {
         slow: thicknessAt(at(0.25)),
         fast: thicknessAt(at(0.8)),
         // 起笔是圆珠笔式的圆头：比行笔略细，但不能细成一个尖
         tip: thicknessAt(at(0.122)),
-        canvasWidth: canvas.width
+        mid: thicknessAt(at(0.5))
       };
+
+      // 课件放大 2 倍后，同一笔的线宽应同比变粗（保持与页面的相对比例），而不是不变/变细
+      state.imageView.scale = 2;
+      applyCoursewareImageViewTransform();
+      const zoomedRect = currentVideoContentRect();
+      const atZoomed = (fraction) => zoomedRect.left - rect.left + zoomedRect.width * fraction;
+      const zoomed = thicknessAt(atZoomed(0.5));
+      const debug = {
+        kind: currentContentKind(),
+        inkScale: annotationInkScale(),
+        baseRectWidth: videoRect.width,
+        zoomedRectWidth: zoomedRect.width
+      };
+      state.imageView.scale = 1;
+      applyCoursewareImageViewTransform();
+      return { ...before, zoomed, debug, canvasWidth: canvas.width };
     });
     assert.ok(measured.canvasWidth > 0, '标注画布未初始化');
     assert.ok(measured.slow >= 3, `慢写段没有墨迹: ${JSON.stringify(measured)}`);
@@ -89,6 +106,8 @@ function pdfFixture() {
     assert.ok(measured.slow <= measured.fast * 2, `快慢段粗细相差过大: ${JSON.stringify(measured)}`);
     assert.ok(measured.tip >= measured.slow * 0.4, `起笔不是圆头（太尖）: ${JSON.stringify(measured)}`);
     assert.ok(measured.tip <= measured.slow, `起笔比行笔还粗: ${JSON.stringify(measured)}`);
+    assert.ok(measured.zoomed >= measured.mid * 1.7, `放大后笔迹没有变粗: ${JSON.stringify(measured)}`);
+    assert.ok(measured.zoomed >= measured.slow * 1.7, `放大后笔迹没有变粗: ${JSON.stringify(measured)}`);
 
     // 输入链路：真实指针事件也要带上相对时间戳
     const captured = await page.evaluate(async () => {

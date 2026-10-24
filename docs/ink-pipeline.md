@@ -1,4 +1,4 @@
-﻿# 三端手写渲染管线：为什么 pen-test 好看、项目里难看
+# 三端手写渲染管线：为什么 pen-test 好看、项目里难看
 
 日期：2026-10-24。范围：大屏（Web）、iPad（iOS 网页版）、Android 手机 / 平板。
 
@@ -50,6 +50,22 @@
   轮廓抽稀与端帽；`simulatePressure` 必须关掉，否则会按采样间距再模拟一次。
 - **Android 直接按左右法线偏移生成轮廓**（不用 `PerfectFreehand.kt` 的移植版）：1px
   重采样后偏移边缘天然连续，两端补圆点做端帽。移植版缺抽稀，密集采样会自交成串珠。
+
+## 线宽跟随课件缩放
+
+笔迹要"钉"在课件上：课件放大，线同比变粗；缩小，线同比变细，始终保持与页面的相对比例。
+以前线宽是固定的屏幕像素，内容被 transform 放大后线不变，看起来反而越放越细。
+
+| 端 | 缩放来源 | 落点 |
+| --- | --- | --- |
+| 大屏 | `state.imageView.scale`（PDF / 图片课件的 transform） | `annotationInkScale()` → `width = stroke.width × scale` |
+| iPad | `state.cwView.scale`（课件）、`media.queue[i].scale`（图片投屏），由 `getInkScale` 注入 | `AnnotationBoard#inkScale()` |
+| Android | `userScale`（`imageDisplayRect()` 已含该倍率） | `drawStroke()` 里 `width = stroke.width × density × userScale` |
+
+板擦、荧光笔、虚线、点划线的 `lineWidth` / `dash` 一起缩放。电子黑板是世界坐标 + 画布
+变换，笔迹本来就随缩放变化，不需要额外处理。
+回归检查在 `scripts/test-ink-speed.cjs`（放大 2 倍后线宽 ≥1.7 倍）和 Android
+`InkSpeedCheck`（1x→2x 实测 12px→24px）。
 
 ## 本地渲染与传输分离
 

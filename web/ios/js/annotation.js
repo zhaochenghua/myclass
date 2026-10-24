@@ -96,7 +96,7 @@ function strokePressureRange(points) {
 }
 
 /** 用 perfect-freehand 生成一笔的轮廓并填充（输入先过统一的 InkRenderer 管线） */
-function drawFreehandStroke(ctx, stroke, rect) {
+function drawFreehandStroke(ctx, stroke, rect, width = stroke.width) {
   const points = stroke.points;
   if (points.length < 2) return;
   const hasPressure = strokePressureRange(points) >= 0.04;
@@ -109,8 +109,8 @@ function drawFreehandStroke(ctx, stroke, rect) {
   }));
   // 没有加载到 inkRenderer.js（旧缓存页面）时退回原来的直接调用，至少不会整笔消失
   const prepared = renderer
-    ? renderer.prepare(px, stroke.width)
-    : { points: px, size: stroke.width * 1.25 };
+    ? renderer.prepare(px, width)
+    : { points: px, size: width * 1.25 };
   if (!prepared || prepared.points.length < 2) return;
   const outline = getStroke(prepared.points, {
     size: prepared.size,
@@ -140,6 +140,7 @@ export class AnnotationBoard {
   constructor(options = {}) {
     this.canvas = options.canvas;
     this.getSurface = options.getSurface || (() => null);
+    this.getInkScale = options.getInkScale || (() => 1);
     this.emit = options.emit || (() => {});
     this.onChange = options.onChange || (() => {});
 
@@ -465,9 +466,19 @@ export class AnnotationBoard {
     };
   }
 
+  /**
+   * 内容当前的放大倍率。笔迹线宽要按同一倍率缩放，才能保持它与课件的相对比例：
+   * 放大 → 线变粗，缩小 → 线变细。以前线宽固定为 CSS 像素，放大后反而越看越细。
+   */
+  #inkScale() {
+    const value = Number(this.getInkScale?.());
+    return Number.isFinite(value) && value > 0 ? value : 1;
+  }
+
   #drawStroke(ctx, stroke, content) {
     const rect = content || this.#contentRect();
     if (!rect || stroke.points.length === 0) return;
+    const width = Math.max(0.5, (Number(stroke.width) || PEN_WIDTH) * this.#inkScale());
 
     ctx.save();
     if (stroke.isEraser) {
@@ -479,11 +490,11 @@ export class AnnotationBoard {
       ctx.strokeStyle = stroke.colorHex;
       ctx.fillStyle = stroke.colorHex;
     }
-    ctx.lineWidth = stroke.width;
+    ctx.lineWidth = width;
     if (!stroke.isEraser) {
-      if (stroke.mode === 'dashed') ctx.setLineDash([stroke.width * 2.2, stroke.width * 1.6]);
-      else if (stroke.mode === 'dashdot') ctx.setLineDash([stroke.width * 2.2, stroke.width * 1.2, 0.1, stroke.width * 1.2]);
-      else if (stroke.mode === 'highlighter') { ctx.lineWidth = stroke.width * 5; ctx.globalAlpha = 0.45; }
+      if (stroke.mode === 'dashed') ctx.setLineDash([width * 2.2, width * 1.6]);
+      else if (stroke.mode === 'dashdot') ctx.setLineDash([width * 2.2, width * 1.2, 0.1, width * 1.2]);
+      else if (stroke.mode === 'highlighter') { ctx.lineWidth = width * 5; ctx.globalAlpha = 0.45; }
     }
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -491,7 +502,7 @@ export class AnnotationBoard {
     // 实线画笔走手写轮廓（perfect-freehand，与大屏 / Android 同一套参数）；板擦、荧光笔、虚线保持等宽
     const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
     if (solidInk && stroke.points.length >= 3) {
-      drawFreehandStroke(ctx, stroke, rect);
+      drawFreehandStroke(ctx, stroke, rect, width);
       ctx.restore();
       return;
     }
