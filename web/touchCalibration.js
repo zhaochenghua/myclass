@@ -83,12 +83,18 @@
     if (correctedEvents.has(event)) return event;
     const p = correctedPoint(event);
     // Proxy native methods back to their original Event receiver.
-    return new Proxy(event, { get(object, key) {
+    const corrected = new Proxy(event, { get(object, key) {
       if (key === 'clientX') return p.x;
       if (key === 'clientY') return p.y;
+      // Coalesced samples are native events too; apply the same calibration once.
+      if (key === 'getCoalescedEvents' && typeof object.getCoalescedEvents === 'function') {
+        return () => object.getCoalescedEvents().map(eventFor);
+      }
       const value = Reflect.get(object, key, object);
       return typeof value === 'function' ? value.bind(object) : value;
     } });
+    correctedEvents.add(corrected);
+    return corrected;
   }
   function inToolbar(element) { return !!element?.closest(toolbarSelector); }
   const controlFor = element => element?.closest('button, a, input, select, [role="button"]');

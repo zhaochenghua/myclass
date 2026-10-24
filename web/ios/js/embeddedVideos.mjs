@@ -72,11 +72,16 @@ export function createEmbeddedVideos({ container, getContext, send, remote = fal
   async function update() {
     const next = getContext();
     if (!next?.url || (context && (!sameUrl(next.url, context.url) || next.page !== context.page))) close(!remote);
-    if (!next?.url) { context = null; metadata = null; generation++; launch.hidden = true; return; }
+    if (!next?.url) {
+      context = null; metadata = null; generation++;
+      if (!launch.hidden) launch.hidden = true;
+      return;
+    }
     const changed = !context || !sameUrl(next.url, context.url);
     context = { ...next };
     if (changed) {
-      const epoch = ++generation; metadata = null; warning = ''; launch.hidden = true;
+      const epoch = ++generation; metadata = null; warning = '';
+      if (!launch.hidden) launch.hidden = true;
       try {
         const endpoint = new URL(next.url, location.href); endpoint.pathname += '.metadata'; endpoint.searchParams.set('embedded', '1');
         const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 120000);
@@ -94,8 +99,12 @@ export function createEmbeddedVideos({ container, getContext, send, remote = fal
       } catch { if (epoch !== generation) return; warning = '视频信息加载失败，请重新打开课件后重试。'; }
     }
     const count = available().length;
-    launch.hidden = !count && !warning;
-    launch.textContent = count ? `▶ 本页视频${count > 1 ? `（${count}）` : ''}` : '视频信息';
+    const hidden = !count && !warning;
+    const label = count ? `▶ 本页视频${count > 1 ? `（${count}）` : ''}` : '视频信息';
+    // The 350 ms poll must not rewrite identical nodes: the classroom toolbar
+    // observes its subtree and would re-fit (and re-rasterize) on every tick.
+    if (launch.hidden !== hidden) launch.hidden = hidden;
+    if (launch.textContent !== label) launch.textContent = label;
     if (pending && metadata) { const message = pending; pending = null; receive(message); }
   }
   const timer = setInterval(() => void update(), 350); void update();

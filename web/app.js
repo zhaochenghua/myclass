@@ -7,7 +7,7 @@ const coursewareLinkControls = import('./ios/js/coursewareLinks.mjs?v=20261015-l
   onExternal: url => window.open(url, '_blank', 'noopener,noreferrer'),
   onInternal: page => showCoursewarePage(page)
 })).catch(() => ({ clear() {}, render() {}, update() {}, setInteractive() {} }));
-const embeddedVideos = import('./ios/js/embeddedVideos.mjs?v=20261015-video').then(({ createEmbeddedVideos }) => createEmbeddedVideos({
+const embeddedVideos = import('./ios/js/embeddedVideos.mjs?v=20261024-toolbar').then(({ createEmbeddedVideos }) => createEmbeddedVideos({
   container: document.getElementById('annotationToolbar'),
   // 内嵌视频只有 PDF 课件才有（图片/视频/压缩包都不存在 .metadata 接口），
   // 否则大屏在投屏图片时也会冒出"视频信息"按钮。
@@ -298,6 +298,11 @@ const elements = {
   iosUrlText: document.getElementById('iosUrlText'),
   iosCaQr: document.getElementById('iosCaQr'),
 };
+
+// Keep raster cache state initialized before bootstrap can request a redraw.
+const annotationInkCache = { canvas: document.createElement('canvas'), key: null };
+const blackboardInkCache = { canvas: document.createElement('canvas'), key: null };
+let blackboardInkFrame = 0;
 
 bootstrap();
 
@@ -2328,11 +2333,12 @@ function handleCoursewareImageViewport(message) {
 
 /** 一帧内合并多次重绘，避免高频 points 消息把主线程打满 */
 let teacherAnnotationFrame = 0;
-function scheduleAnnotationRedraw() {
+function scheduleAnnotationRedraw(rebuild = true) {
+  if (rebuild) annotationInkCache.key = null;
   if (teacherAnnotationFrame) return;
   teacherAnnotationFrame = requestAnimationFrame(() => {
     teacherAnnotationFrame = 0;
-    drawAnnotations();
+    drawAnnotations(false);
   });
 }
 
@@ -3171,7 +3177,10 @@ function updateScreenEndButton() {
   const videoButton = elements.annotationToolbar?.querySelector('.embedded-launch');
   const videoVisible = !!videoButton && !videoButton.hidden
     && getComputedStyle(videoButton).visibility !== 'hidden';
-  button.hidden = !(showing && !state.teacherConnected) || videoVisible;
+  const hidden = !(showing && !state.teacherConnected) || videoVisible;
+  // Do not touch the attribute when it is already correct: reflected attribute
+  // writes still notify the toolbar MutationObserver several times per second.
+  if (button.hidden !== hidden) button.hidden = hidden;
 }
 
 /** 手机端已断开，大屏自己结束投屏并回到首页（房间与连接码保留） */
@@ -3953,7 +3962,7 @@ function beginAnnotationStroke(event) {
     page: currentCoursewarePage()
   });
   syncViewerAnnotationBegin(event.pointerId);
-  drawAnnotations();
+  scheduleAnnotationRedraw(false);
 }
 
 function continueAnnotationStroke(event) {
@@ -3999,38 +4008,40 @@ function continueAnnotationStroke(event) {
     stroke.points = [stroke.points[0], storagePoint];
     updateAngleIndicator(stroke.startScreen, screenPoint);
     syncViewerAnnotationPoints(event.pointerId, stroke.points.at(-1));
-    drawAnnotations();
+    scheduleAnnotationRedraw(false);
     return;
   }
 
   // 浏览器把一帧内的多个采样点合并进同一个 pointermove（getCoalescedEvents），
   // 只取 event 本身会让笔迹变成稀疏折线——这正是"没有测试页顺滑"的原因。
-  let samples = [];
-  try {
-    if (typeof event.getCoalescedEvents === 'function') samples = event.getCoalescedEvents() || [];
-  } catch {
-    samples = [];
-  }
-  if (!samples.length) samples = [event];
+  const samples = handwritingSamples(event);
+  const rect = currentVideoContentRect();
+  const crop = currentFrameCrop();
 
   let added = false;
   for (const sample of samples) {
-    const samplePoint = pointerEventToSourcePoint(sample);
+    const samplePoint = pointerEventToSourcePoint(sample, rect, crop);
     if (!samplePoint) continue;
     const last = stroke.points.at(-1);
-    if (last && Math.hypot(samplePoint.x - last.x, samplePoint.y - last.y) < 0.0005) continue;
-    samplePoint.t = Math.max(0, Math.round(sample.timeStamp - (stroke.startedAt || sample.timeStamp)));
+    if (last && Math.hypot((samplePoint.x - last.x) * rect.width / crop.width,
+      (samplePoint.y - last.y) * rect.height / crop.height) < 0.5) continue;
+    samplePoint.t = Math.max(0, Math.round(sample.timeStamp - (stroke.startedAt ?? sample.timeStamp)));
     samplePoint.p = pointerPressure(sample);
     stroke.points.push(samplePoint);
+    // Persist every recovered sample too, so reopening/synchronizing the page
+    // does not replace the smooth local stroke with a sparse polyline.
+    syncViewerAnnotationPoints(event.pointerId, samplePoint);
     added = true;
   }
   if (!added) return;
-  syncViewerAnnotationPoints(event.pointerId, stroke.points.at(-1));
-  drawAnnotations();
+  scheduleAnnotationRedraw(false);
 }
 
 function finishAnnotationStroke(event) {
   noteStylus(event);
+  if (event.type === 'pointerup' && state.annotations.activeStrokes.has(event.pointerId)) {
+    continueAnnotationStroke(event);
+  }
   if (handleHandwritingTouch(event, 'up')) return;
   if (finishLockedVideoPan(event)) return;
   // 投屏图片：清理本次手势的指针缓存，结束平移或捏合
@@ -4467,9 +4478,16 @@ function setupResponsiveToolbars() {
     for (const bar of bars) {
       if (!bar.getClientRects().length) continue;
       const available = Math.max(1, Math.min(window.innerWidth, bar.parentElement.clientWidth) - 32);
-      // offsetWidth stays in layout pixels, independent of the applied zoom.
-      const scale = Math.min(1, available / Math.max(1, bar.offsetWidth));
-      bar.style.zoom = String(scale);
+      // Measure the unzoomed width from the rendered box. Do not use offsetWidth:
+      // some classroom (older Chromium/CEF) browsers report the zoomed width there,
+      // so scale = available / offsetWidth would grow every time it is applied and
+      // the toolbar would visibly resize/jump. Rendered width is always zoomed.
+      const applied = Number.parseFloat(bar.style.zoom) || 1;
+      const natural = bar.getBoundingClientRect().width / applied;
+      const scale = Math.min(1, available / Math.max(1, natural));
+      // "本页视频" refreshes its label on a timer; never re-apply an unchanged
+      // zoom, otherwise the bar is relaid out several times per second.
+      if (Math.abs(scale - applied) >= 0.001) bar.style.zoom = String(scale);
     }
   };
   const schedule = () => { if (!frame) frame = requestAnimationFrame(fit); };
@@ -4611,8 +4629,8 @@ function updateAnnotationColorButtons() {
 }
 
 /**
- * 指针压力（0~1）。手写笔给真实压力；手指 / 鼠标固定 0.5——
- * 各端渲染时会检查整笔的压力跨度，恒定值自动退回"用速度模拟"。
+ * 指针压力（0~1）。手写笔给真实压力；红外触摸 / 鼠标固定 0.5，
+ * 大屏用稳定等宽曲线绘制这类无压感笔迹。
  */
 function pointerPressure(event) {
   if (!event || event.pointerType !== 'pen') return 0.5;
@@ -4621,8 +4639,18 @@ function pointerPressure(event) {
   return clamp(value, 0.01, 1);
 }
 
-function pointerEventToSourcePoint(event) {
-  const videoRect = currentVideoContentRect();
+function handwritingSamples(event) {
+  let samples = [];
+  try { samples = event.getCoalescedEvents?.() || []; } catch { /* Unsupported driver. */ }
+  // Some drivers omit the dispatched endpoint from their coalesced batch.
+  const last = samples.at(-1);
+  if (!last || last.clientX !== event.clientX || last.clientY !== event.clientY) {
+    samples = [...samples, event];
+  }
+  return samples;
+}
+
+function pointerEventToSourcePoint(event, videoRect = currentVideoContentRect(), crop = currentFrameCrop()) {
   if (!videoRect || videoRect.width <= 0 || videoRect.height <= 0) {
     return null;
   }
@@ -4631,14 +4659,36 @@ function pointerEventToSourcePoint(event) {
   if (videoX < 0 || videoX > 1 || videoY < 0 || videoY > 1) {
     return null;
   }
-  const crop = currentFrameCrop();
   return {
     x: clamp(crop.x + videoX * crop.width, 0, 1),
     y: clamp(crop.y + videoY * crop.height, 0, 1)
   };
 }
 
-function drawAnnotations() {
+// Completed ink is rasterized only after edits or viewport changes. Live input
+// shares one animation frame and composites onto this base, including erasers.
+function scheduleBlackboardRedraw() {
+  if (blackboardInkFrame) return;
+  blackboardInkFrame = requestAnimationFrame(() => {
+    blackboardInkFrame = 0;
+    renderBlackboard(false);
+  });
+}
+
+function prepareInkCache(cache, canvas, key, rebuild, paint) {
+  if (rebuild || cache.key !== key) {
+    if (cache.canvas.width !== canvas.width) cache.canvas.width = canvas.width;
+    if (cache.canvas.height !== canvas.height) cache.canvas.height = canvas.height;
+    const context = cache.canvas.getContext('2d');
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    paint(context);
+    cache.key = key;
+  }
+}
+
+function drawAnnotations(rebuild = true) {
+  if (rebuild) annotationInkCache.key = null;
   resizeAnnotationCanvas();
   const canvas = elements.annotationCanvas;
   const context = canvas.getContext('2d');
@@ -4655,13 +4705,55 @@ function drawAnnotations() {
   const crop = currentFrameCrop();
   // 课件按页保存笔迹：只绘制属于当前页的标注，翻页后自动切换
   const page = state.courseware?.displayedPage || currentCoursewarePage();
-  for (const stroke of state.annotations.strokes) {
-    if (stroke.page && stroke.page !== page) continue;
-    drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop);
-  }
+  const key = JSON.stringify([canvas.width, canvas.height, ratio, canvasRect.left, canvasRect.top,
+    videoRect.left, videoRect.top, videoRect.width, videoRect.height, crop, page]);
+  prepareInkCache(annotationInkCache, canvas, key, rebuild, base => {
+    base.setTransform(ratio, 0, 0, ratio, 0, 0);
+    for (const stroke of state.annotations.strokes) {
+      if (stroke.page && stroke.page !== page) continue;
+      drawAnnotationStroke(base, stroke, canvasRect, videoRect, crop);
+    }
+  });
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.drawImage(annotationInkCache.canvas, 0, 0);
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
   for (const stroke of state.annotations.activeStrokes.values()) {
     drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop);
   }
+}
+
+// Infrared touch reports constant pressure. Keep its width and completed curve
+// segments stable instead of re-tapering the entire stroke at every sample.
+function isUnpressuredInk(stroke) {
+  return stroke.points.length > 0 && stroke.points.every(point => point.p === 0.5);
+}
+
+function drawStableInk(context, points, width) {
+  if (!points.length) return;
+  context.lineWidth = width;
+  if (points.length === 1) {
+    context.beginPath();
+    context.arc(points[0].x, points[0].y, width / 2, 0, Math.PI * 2);
+    context.fill();
+    return;
+  }
+  let start = points[0];
+  for (let i = 1; i < points.length - 1; i++) {
+    const p = points[i], next = points[i + 1];
+    const end = { x: (p.x + next.x) / 2, y: (p.y + next.y) / 2 };
+    // Rasterize fixed segments independently: GPU path tessellation can change
+    // antialiasing along an entire path when only its tail is extended.
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.quadraticCurveTo(p.x, p.y, end.x, end.y);
+    context.stroke();
+    start = end;
+  }
+  const end = points.at(-1);
+  context.beginPath();
+  context.moveTo(start.x, start.y);
+  context.lineTo(end.x, end.y);
+  context.stroke();
 }
 
 // ---- 速度笔锋 ----
@@ -4898,6 +4990,17 @@ function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
   // 实线画笔走手写轮廓：线宽随压感 / 书写速度变化，起收笔收尖。
   // 板擦 / 荧光笔 / 虚线 / 直线工具保持等宽——它们不是"手写"，变宽反而怪。
   const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
+  if (solidInk && isUnpressuredInk(stroke)) {
+    let run = [];
+    for (const point of stroke.points) {
+      const mapped = sourcePointToCanvasPoint(point, canvasRect, videoRect, crop);
+      if (mapped.visible) run.push(mapped);
+      else { drawStableInk(context, run, stroke.width); run = []; }
+    }
+    drawStableInk(context, run, stroke.width);
+    context.restore();
+    return;
+  }
   if (solidInk && stroke.points.length >= 3) {
     drawFreehandStroke(context, stroke, canvasRect, videoRect, crop);
     context.restore();
@@ -5342,6 +5445,7 @@ function beginBlackboardStroke(event) {
   const isEraser = state.blackboard.tool === 'eraser';
   const isLine = !isEraser && state.blackboard.lineMode;
   point.t = 0;
+  point.p = pointerPressure(event);
   state.blackboard.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
     color: isEraser ? '#2c2f36' : state.blackboard.currentColor,
@@ -5353,7 +5457,7 @@ function beginBlackboardStroke(event) {
     startedAt: event.timeStamp,
     startScreen: isLine ? { x: event.clientX, y: event.clientY } : null
   });
-  renderBlackboard();
+  scheduleBlackboardRedraw();
 }
 
 function continueBlackboardStroke(event) {
@@ -5393,22 +5497,32 @@ function continueBlackboardStroke(event) {
   const point = blackboardPointerToPoint(event);
   if (!point) return;
   const lastPoint = stroke.points.at(-1);
-  if (lastPoint && Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 0.001) return;
+  if (stroke.lineMode && lastPoint && Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 0.001) return;
   if (stroke.lineMode) {
     // 直线模式：只保留起点与当前点，水平/竖直自动吸附，实时显示长度与夹角
     const { storagePoint, screenPoint } = computeLineSnap(stroke.points[0], point, stroke.startScreen, event);
     stroke.points = [stroke.points[0], storagePoint];
     updateAngleIndicator(stroke.startScreen, screenPoint);
   } else {
-    point.t = Math.max(0, Math.round(event.timeStamp - (stroke.startedAt || event.timeStamp)));
-    stroke.points.push(point);
+    for (const sample of handwritingSamples(event)) {
+      const next = blackboardPointerToPoint(sample);
+      if (!next) continue;
+      const last = stroke.points.at(-1);
+      if (last && Math.hypot(next.x - last.x, next.y - last.y) * state.blackboard.scale < 0.5) continue;
+      next.t = Math.max(0, Math.round(sample.timeStamp - (stroke.startedAt ?? sample.timeStamp)));
+      next.p = pointerPressure(sample);
+      stroke.points.push(next);
+    }
   }
-  renderBlackboard();
+  scheduleBlackboardRedraw();
 }
 
 function finishBlackboardStroke(event) {
   noteStylus(event);
   if (!state.blackboard.active) return;
+  if (event.type === 'pointerup' && state.blackboard.activeStrokes.has(event.pointerId)) {
+    continueBlackboardStroke(event);
+  }
   if (handleHandwritingTouch(event, 'up', true)) return;
 
   // 清理指针缓存
@@ -5521,7 +5635,7 @@ function resizeBlackboardCanvas() {
   }
 }
 
-function renderBlackboard() {
+function renderBlackboard(rebuild = true) {
   resizeBlackboardCanvas();
   const canvas = elements.blackboardCanvas;
   const ctx = canvas.getContext('2d');
@@ -5532,22 +5646,19 @@ function renderBlackboard() {
   const scale = state.blackboard.scale;
   const s = scale * ratio;
 
-  // 视口变换：缩放 + 平移
-  ctx.setTransform(s, 0, 0, s, -panX * s, -panY * s);
-
-  // 填充黑板底色并绘制网格（世界坐标范围需覆盖视口）
-  const worldW = rect.width / scale;
-  const worldH = rect.height / scale;
-  ctx.fillStyle = '#2c2f36';
-  ctx.fillRect(panX, panY, worldW, worldH);
-  drawBlackboardGrid(ctx, rect);
-
   const page = state.blackboard.pages[state.blackboard.currentPage];
-  if (page) {
-    for (const stroke of page.strokes) {
-      drawBlackboardStroke(ctx, stroke);
-    }
-  }
+  const key = JSON.stringify([canvas.width, canvas.height, ratio, panX, panY, scale, state.blackboard.currentPage]);
+  prepareInkCache(blackboardInkCache, canvas, key, rebuild, base => {
+    base.setTransform(s, 0, 0, s, -panX * s, -panY * s);
+    base.fillStyle = '#2c2f36';
+    base.fillRect(panX, panY, rect.width / scale, rect.height / scale);
+    drawBlackboardGrid(base, rect);
+    for (const stroke of page?.strokes || []) drawBlackboardStroke(base, stroke);
+  });
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(blackboardInkCache.canvas, 0, 0);
+  ctx.setTransform(s, 0, 0, s, -panX * s, -panY * s);
   for (const stroke of state.blackboard.activeStrokes.values()) {
     drawBlackboardStroke(ctx, stroke);
   }
@@ -5577,6 +5688,11 @@ function drawBlackboardStroke(ctx, stroke) {
 
   // 黑板坐标是世界像素，速度口径按 1280 世界像素 ≈ 一屏宽归一化
   const solidInk = !stroke.isEraser && (stroke.mode === 'solid' || !stroke.mode) && !stroke.lineMode;
+  if (solidInk && isUnpressuredInk(stroke)) {
+    drawStableInk(ctx, stroke.points, stroke.width);
+    ctx.restore();
+    return;
+  }
   if (solidInk && stroke.points.length >= 3) {
     const widths = inkWidths(stroke.points, stroke.width, 1, 1, 1280);
     traceInkOutline(
