@@ -361,6 +361,29 @@
   table-layout: fixed;
 }
 
+/* 固定布局后列宽由 colgroup 决定，单元格内容必须自己换行/裁剪，不能溢出到相邻列 */
+.courseware-table td {
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+.courseware-table td:nth-child(2) {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.courseware-table td:last-child {
+  white-space: nowrap;
+}
+
+.courseware-table td:first-child progress {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.35rem;
+}
+
 .courseware-hint {
   margin: -0.25rem 0 0.9rem;
   color: var(--muted);

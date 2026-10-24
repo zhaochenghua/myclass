@@ -7,7 +7,7 @@ const { startTestServer } = require('../server/testSupport');
 
 const items = [
   { id: 'cw-10', userId: 'alice', owner: '张三', title: '数学 10', fileName: 'math10.pdf', size: 2 * 1024, createdAt: '2026-10-01T08:00:00.000Z' },
-  { id: 'cw-2', userId: 'admin', owner: '所有人', title: '数学 2', fileName: 'math2.pdf', size: 1024 * 1024, createdAt: '2026-10-03T08:00:00.000Z' },
+  { id: 'cw-2', userId: 'admin', owner: '所有人', title: '数学 2', fileName: '16_20403IMG_20250316_204035123_abcdefghijklmnop.jpg', size: 1024 * 1024, createdAt: '2026-10-03T08:00:00.000Z' },
   { id: 'cw-cn', userId: 'bob', owner: '李四', title: '语文', fileName: 'chinese.pdf', size: 500 * 1024, createdAt: '2026-10-02T08:00:00.000Z' }
 ];
 
@@ -74,7 +74,16 @@ const titles = page => page.locator('#coursewareTableBody tr td:first-child').al
 
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'resized table must stay inside the page on mobile');
-    await page.screenshot({ path: path.join(output, 'mobile.png'), fullPage: true });
+    const fileNameCell = page.locator('#coursewareTableBody td:nth-child(2)').first();
+    const fileNameStyle = await fileNameCell.evaluate(element => {
+      const style = getComputedStyle(element);
+      return { overflow: style.overflow, textOverflow: style.textOverflow, whiteSpace: style.whiteSpace };
+    });
+    assert.equal(fileNameStyle.overflow, 'hidden', 'long file names must not spill into neighbouring columns');
+    assert.equal(fileNameStyle.textOverflow, 'ellipsis');
+    assert.equal(fileNameStyle.whiteSpace, 'nowrap');
+    await page.evaluate(() => { document.querySelector('#tab-courseware .table-scroll').scrollLeft = 220; });
+    await page.screenshot({ path: path.join(output, 'mobile-scrolled.png'), fullPage: true });
 
     const userPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     userPage.on('pageerror', error => errors.push(error.message));
