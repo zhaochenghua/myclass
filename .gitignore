@@ -52,3 +52,6 @@ github令牌.txt
 # 本地 AI / 开发工具配置（不提交，.codebuddy/ 见上方）
 AGENTS.md
 CLAUDE.md
+
+# 本地临时探针脚本（保留在本机，不参与三方同步）
+scripts/tmp-*.cjs

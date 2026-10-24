@@ -3,6 +3,7 @@ package cn.edu.nb3.myclass
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -59,15 +60,25 @@ class ScreenProjectionService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun buildNotification(): Notification {
+        // 共享开始后 App 会退到后台，让老师直接看到要展示的内容；
+        // 点通知回到共享控制页即可停止共享。
+        val openApp = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_screen_share)
             .setContentTitle("正在共享屏幕")
-            .setContentText("上课投屏平台正在投屏手机屏幕")
+            .setContentText("点按返回控制页，可停止共享")
+            .setContentIntent(openApp)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
+    }
 
     companion object {
         private const val CHANNEL_ID = "myclass_screen_projection"

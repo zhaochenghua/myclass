@@ -6,10 +6,15 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
+import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
 import android.net.Uri
+import android.os.Build
+import android.util.DisplayMetrics
 import android.util.Log
 import android.util.Size
+import android.view.Display
+import android.view.WindowManager
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.CandidatePairChangeEvent
@@ -56,7 +61,9 @@ class CameraWebRtcClient(
     private val captureMode: WebRtcCaptureMode = WebRtcCaptureMode.Camera,
     private val screenCaptureData: Intent? = null,
     private val onCameraFacingChanged: (Boolean, String, Boolean, Boolean) -> Unit = { _, _, _, _ -> },
-    private val onIceConnectionFailed: () -> Unit = {}
+    private val onIceConnectionFailed: () -> Unit = {},
+    /** 屏幕共享方向/尺寸变化后回调，用于把新的横竖屏状态同步给大屏。 */
+    private val onScreenCaptureSizeChanged: () -> Unit = {}
 ) {
     private val appContext = context.applicationContext
     private val eglBase = EglBase.create()
@@ -80,6 +87,8 @@ class CameraWebRtcClient(
     private val healthHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var lastEncodedFrames = -1L
     private var lastVideoProgressAt = 0L
+    private var screenDisplayListener: DisplayManager.DisplayListener? = null
+    private var lastScreenCaptureSize: Size? = null
     private val healthCheck = object : Runnable {
         override fun run() {
             val connection = peerConnection ?: return
@@ -148,6 +157,10 @@ class CameraWebRtcClient(
         capturer.initialize(textureHelper, appContext, source.capturerObserver)
         val captureSize = captureStartSize()
         capturer.startCapture(captureSize.width, captureSize.height, captureFps())
+        if (captureMode == WebRtcCaptureMode.Screen) {
+            lastScreenCaptureSize = captureSize
+            registerScreenDisplayListener()
+        }
 
         val videoTrack = factory.createVideoTrack("myclass-video", source)
         videoTrack.setEnabled(true)
@@ -211,22 +224,80 @@ class CameraWebRtcClient(
         }
 
     private fun screenShareCaptureSize(): Size {
-        val metrics = appContext.resources.displayMetrics
-        val sourceWidth = metrics.widthPixels
-        val sourceHeight = metrics.heightPixels
+        // 必须用「整块屏幕」的尺寸，不能用资源里的 displayMetrics：
+        // 标题栏/导航栏/刘海会把 resources.displayMetrics 收窄成应用窗口尺寸，
+        // 与 MediaProjection 镜像的整块屏幕宽高比不一致，画面会被拉伸或出现黑边。
+        val displaySize = screenShareDisplaySize()
+        val sourceWidth = displaySize.width
+        val sourceHeight = displaySize.height
         if (sourceWidth <= 0 || sourceHeight <= 0) {
             return Size(SCREEN_SHARE_FALLBACK_WIDTH, SCREEN_SHARE_FALLBACK_HEIGHT)
         }
 
-        val sourceLongEdge = max(sourceWidth, sourceHeight)
-        val sourceShortEdge = min(sourceWidth, sourceHeight)
-        val targetLongEdge = min(sourceLongEdge, SCREEN_SHARE_MAX_LONG_EDGE)
-        val targetShortEdge = (sourceShortEdge * targetLongEdge.toFloat() / sourceLongEdge)
-            .roundToInt()
-        return Size(
-            targetLongEdge.toEvenAtLeast(2),
-            targetShortEdge.toEvenAtLeast(2)
+        // MediaProjection 会把整块屏幕镜像到 createVirtualDisplay 指定的缓冲尺寸。
+        // 这里必须保持当前屏幕的宽高方向：竖屏手机若传成「长边 x 短边」的横屏尺寸，
+        // 虚拟显示与真实屏幕方向不一致，系统镜像出来就是黑屏（横屏手机 / 平板上碰巧正常）。
+        val longEdge = max(sourceWidth, sourceHeight)
+        val scaleFactor = min(1f, SCREEN_SHARE_MAX_LONG_EDGE.toFloat() / longEdge)
+        val size = Size(
+            (sourceWidth * scaleFactor).roundToInt().toEvenAtLeast(2),
+            (sourceHeight * scaleFactor).roundToInt().toEvenAtLeast(2)
         )
+        Log.i(TAG, "Screen capture display=${sourceWidth}x${sourceHeight} virtualDisplay=${size.width}x${size.height}")
+        return size
+    }
+
+    @Suppress("DEPRECATION")
+    private fun screenShareDisplaySize(): Size {
+        val windowManager = appContext.getSystemService(WindowManager::class.java)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            Size(bounds.width(), bounds.height())
+        } else {
+            val metrics = DisplayMetrics()
+            windowManager.defaultDisplay.getRealMetrics(metrics)
+            Size(metrics.widthPixels, metrics.heightPixels)
+        }
+    }
+
+    /**
+     * 屏幕共享期间手机随时可能横竖屏切换。虚拟显示的尺寸只在开始共享时确定，
+     * 不跟着旋转就会把横屏内容塞进竖屏缓冲，大屏上只剩一个很小的横屏画面。
+     * 这里监听默认显示器的变化，按新的整屏尺寸 resize 正在推送的采集，并通知
+     * 大屏更新横竖屏状态。
+     */
+    private fun registerScreenDisplayListener() {
+        if (screenDisplayListener != null) return
+        val manager = appContext.getSystemService(DisplayManager::class.java) ?: return
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != Display.DEFAULT_DISPLAY) return
+                healthHandler.post { refreshScreenCaptureSize() }
+            }
+        }
+        manager.registerDisplayListener(listener, healthHandler)
+        screenDisplayListener = listener
+    }
+
+    /** 当前屏幕共享采集缓冲是否为横向；大屏按这个方向决定 contain/cover。 */
+    fun isScreenCaptureLandscape(): Boolean =
+        lastScreenCaptureSize?.let { it.width > it.height } == true
+
+    /** 供前台 Activity 的 onConfigurationChanged 直接调用；后台时由 DisplayListener 调用。 */
+    fun refreshScreenCaptureSize() {
+        if (captureMode != WebRtcCaptureMode.Screen || !previewStarted) return
+        val size = screenShareCaptureSize()
+        if (size == lastScreenCaptureSize) return
+        val capturer = videoCapturer ?: return
+        runCatching { capturer.changeCaptureFormat(size.width, size.height, captureFps()) }
+            .onSuccess {
+                lastScreenCaptureSize = size
+                Log.i(TAG, "Screen capture resized to ${size.width}x${size.height}")
+                onScreenCaptureSizeChanged()
+            }
+            .onFailure { Log.w(TAG, "Screen capture resize failed: ${it.message}") }
     }
 
     fun startLive() {
@@ -289,14 +360,13 @@ class CameraWebRtcClient(
                 localAudioSender = sender
             }
         }
-        if (captureMode == WebRtcCaptureMode.Camera) {
-            // VP8 has a software fallback in DefaultVideoEncoderFactory;
-            // H.264 often has none when a vendor encoder rejects portrait size.
-            val codecs = factory.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO).codecs
-            val preferred = codecs.sortedBy { if (it.name.equals("VP8", ignoreCase = true)) 0 else 1 }
-            connection.transceivers.filter { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO }
-                .forEach { it.setCodecPreferences(preferred) }
-        }
+        // 摄像头和屏幕共享都优先 VP8：
+        // - VP8 在 DefaultVideoEncoderFactory 里有软件回退，厂商 H.264 编码器拒绝竖屏 / 超大尺寸时可兜底；
+        // - 电视端 VP8 解码兼容性最好。屏幕共享若协商到 H.264，部分老电视在 1080p 以上会直接黑屏。
+        val codecs = factory.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO).codecs
+        val preferred = codecs.sortedBy { if (it.name.equals("VP8", ignoreCase = true)) 0 else 1 }
+        connection.transceivers.filter { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO }
+            .forEach { it.setCodecPreferences(preferred) }
         resendStaticPresentationBurst()
 
         val constraints = MediaConstraints().apply {
@@ -563,6 +633,13 @@ class CameraWebRtcClient(
     }
 
     fun release() {
+        screenDisplayListener?.let { listener ->
+            runCatching {
+                appContext.getSystemService(DisplayManager::class.java)?.unregisterDisplayListener(listener)
+            }
+        }
+        screenDisplayListener = null
+        lastScreenCaptureSize = null
         stopLive()
         renderer?.let { localVideoTrack?.removeSink(it) }
         runCatching { videoCapturer?.stopCapture() }
@@ -691,10 +768,12 @@ class CameraWebRtcClient(
         private const val MAX_IMAGE_SOURCE_EDGE = 4096
         private const val SCREEN_SHARE_FALLBACK_WIDTH = 1920
         private const val SCREEN_SHARE_FALLBACK_HEIGHT = 1080
-        private const val SCREEN_SHARE_MAX_LONG_EDGE = 2560
+        // 电视端（尤其 1080p 及以下的老机型）对超大画面解码不稳定：屏幕共享限制在
+        // 1920 长边、8 Mbps，保证 1080p 电视能硬解/软解，同时够看清手机文字。
+        private const val SCREEN_SHARE_MAX_LONG_EDGE = 1920
         private const val SCREEN_SHARE_FPS = 12
         private const val SCREEN_SHARE_MIN_BITRATE_BPS = 1_500_000
-        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 25_000_000
+        private const val SCREEN_SHARE_MAX_BITRATE_BPS = 8_000_000
 
         private fun initializeFactoryOnce(context: Context) {
             if (factoryInitialized) {

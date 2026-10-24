@@ -3661,9 +3661,9 @@ function handleTeacherOrientation(message) {
   if (![0, 90, 180, 270].includes(rotationDegrees)) {
     return;
   }
-  // Existing Android screen sharing reports an unknown camera, unlocked landscape video.
-  const screenSharing = message.cameraFacing === 'unknown' && message.frameLocked === false &&
-    (message.orientation === 'landscape' || rotationDegrees === 90 || rotationDegrees === 270);
+  // Screen sharing is the only source that reports an unknown camera and an unlocked frame.
+  // It may now be portrait as well (the virtual display follows the real screen orientation).
+  const screenSharing = message.cameraFacing === 'unknown' && message.frameLocked === false;
   if (state.framePresentation.screenSharing !== screenSharing) resetLockedVideoPan();
 
   state.videoOrientation = {
@@ -3686,6 +3686,16 @@ function handleTeacherOrientation(message) {
 }
 
 function updateVideoPresentation() {
+  // 摄像头画面的真实横竖屏以解码后的 video 尺寸为准：个别浏览器/机型对
+  // WebRTC 旋转元数据的处理与手机上报不一致时，避免把竖屏画面按 landscape
+  // 的 cover 规则裁掉。屏幕共享仍按手机上报的采集方向处理。
+  if (!state.framePresentation.screenSharing) {
+    const decodedWidth = elements.remoteVideo.videoWidth;
+    const decodedHeight = elements.remoteVideo.videoHeight;
+    if (decodedWidth && decodedHeight) {
+      state.videoOrientation.orientation = decodedWidth >= decodedHeight ? 'landscape' : 'portrait';
+    }
+  }
   const localView = isLocalVideoViewEnabled();
   if (!localView) resetLockedVideoPan();
   if (state.presentationMode === 'video') {

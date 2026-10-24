@@ -470,7 +470,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 refreshLockedFramePreviewAfterLayout()
             }
             Screen.ScreenShare -> {
-                // 共享屏幕页面布局简单，无需重建
+                // 共享屏幕页面布局简单，无需重建；但虚拟显示必须跟着屏幕方向 resize。
+                webRtcClient?.refreshScreenCaptureSize()
             }
             Screen.Courseware -> {
                 // 根据子页面类型重建课件界面；正在拍照时重建拍照页本身，
@@ -2002,11 +2003,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 updateStatus = { updateStatus(it) },
                 captureMode = WebRtcCaptureMode.Screen,
                 screenCaptureData = permissionData,
-                onIceConnectionFailed = { handleIceConnectionFailed() }
+                onIceConnectionFailed = { handleIceConnectionFailed() },
+                onScreenCaptureSizeChanged = { syncDeviceRotationFromDisplay(force = true) }
             )
             webRtcClient?.startPreview()
             sendCurrentDeviceOrientation(force = true)
             startScreenShareLive()
+            // 共享页本身是深色页面，如果停留在 App 内，大屏看到的就是这块黑底。
+            // 直播开始后自动退到后台，让老师直接切到要展示的内容；点通知可回到本页停止共享。
+            window.decorView.postDelayed({
+                if (currentScreen == Screen.ScreenShare && webRtcClient?.isLive() == true && !isFinishing) {
+                    toast("已开始共享，请切换到要展示的应用；点通知可返回停止共享")
+                    moveTaskToBack(true)
+                }
+            }, 1500L)
         }.onFailure {
             ScreenProjectionService.stop(this)
             activePresentationMode = PresentationMode.Camera
@@ -7302,16 +7312,19 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun createDeviceOrientationPayload(rawRotationDegrees: Int): DeviceOrientationPayload {
         val isScreenShare = activePresentationMode == PresentationMode.ScreenShare
+        // 屏幕共享以实际采集缓冲的方向为准：手机后台旋转时 Display.rotation 可能滞后，
+        // 但 resize 后的宽高已经能准确说明大屏该用横屏还是竖屏显示。
+        val screenLandscape = isScreenShare && webRtcClient?.isScreenCaptureLandscape() == true
+        // 旧实现固定报 landscape，会让大屏把竖屏画面按 cover 裁切。
         val rotationDegrees = when {
-            isScreenShare && rawRotationDegrees.isLandscapeRotation() -> rawRotationDegrees
-            isScreenShare -> 90
+            isScreenShare -> if (screenLandscape) 90 else 0
             !isUsingFrontCamera && rawRotationDegrees.isLandscapeRotation() -> (rawRotationDegrees + 180) % 360
             else -> rawRotationDegrees
         }
-        val orientation = if (isScreenShare || rawRotationDegrees.isLandscapeRotation()) {
-            "landscape"
-        } else {
-            "portrait"
+        val orientation = when {
+            isScreenShare -> if (screenLandscape) "landscape" else "portrait"
+            rawRotationDegrees.isLandscapeRotation() -> "landscape"
+            else -> "portrait"
         }
         val cameraFacing = when {
             isScreenShare -> "unknown"
