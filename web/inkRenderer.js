@@ -24,8 +24,16 @@
   const PRESSURE_ALPHA = 0.45;
   /** 速度参考（px/ms）：达到它后不再变细；人手书写约 0.3~1.2 px/ms */
   const SPEED_REF = 1.0;
-  /** 最快处衰减到 1 - SPEED_DROP 倍 */
-  const SPEED_DROP = 0.7;
+  /**
+   * 最快处衰减到 1 - SPEED_DROP 倍。原来 0.7（3.3 倍跨度）在手机上会让每一笔
+   * 起笔粗、行笔细，看起来像蝌蚪；收窄到 0.3 后一笔之内最多差 1.4 倍。
+   */
+  const SPEED_DROP = 0.3;
+  /** 压力项权重：有压感时只做轻微修饰，避免一笔之内粗细相差过大 */
+  const PRESSURE_MIX = 0.5;
+  /** 体宽因子的上下限（叠起收笔收尖之前） */
+  const BODY_MIN = 0.78;
+  const BODY_MAX = 1.18;
   /**
    * 起收笔收尖长度 = 线宽 × 2.2。原来 3.2 配 0.18 的收尖像毛笔，iPad 上两端太尖；
    * 收短并抬高下限后，起收笔是圆珠笔那种圆头。
@@ -52,9 +60,27 @@
     return t * t * (3 - 2 * t);
   }
 
-  /** 压力曲线：轻压 ≈ 0.25 倍、满压 ≈ 2.2 倍，接近毛笔的粗细跨度 */
+  /** 压力曲线：轻压 ≈ 0.55 倍、满压 ≈ 1.55 倍（原来 0.25~2.2，跨度过大） */
   function pressureCurve(pressure) {
-    return 0.25 + 1.95 * Math.pow(clamp(pressure, 0, 1), 1.25);
+    return 0.55 + 1.0 * Math.pow(clamp(pressure, 0, 1), 1.15);
+  }
+
+  /** 居中滑动平均（半径 radius，边界截断），用来抹平速度/宽度的突变 */
+  function smoothArray(values, radius) {
+    const n = values.length;
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i += 1) {
+      let sum = 0;
+      let count = 0;
+      for (let k = -radius; k <= radius; k += 1) {
+        const j = i + k;
+        if (j < 0 || j >= n) continue;
+        sum += values[j];
+        count += 1;
+      }
+      out[i] = count > 0 ? sum / count : values[i];
+    }
+    return out;
   }
 
   /** 一笔里的压力跨度：>= 0.04 才认为设备真的给了压感 */
@@ -117,20 +143,19 @@
     if (n === 0) return out;
     if (n === 1) { out[0] = size; return out; }
 
-    // 1) 速度（px/ms），EMA 平滑，避免抖动让线条一节粗一节细
-    const speeds = new Float32Array(n);
-    let speed = 0;
+    // 1) 每段速度（px/ms）
+    const segments = new Float32Array(n);
     for (let i = 1; i < n; i += 1) {
-      const dx = points[i].x - points[i - 1].x;
-      const dy = points[i].y - points[i - 1].y;
       const rawDt = points[i].t - points[i - 1].t;
       // 重采样后相邻点只差 1px，快速书写时 dt 可能小于 1ms，不能按 16ms 兜底，
       // 否则速度会被判成"很慢"，粗细曲线整段反过来。
       const dt = Number.isFinite(rawDt) && rawDt > 0 ? clamp(rawDt, 0.2, 120) : 16;
-      speed = speed * 0.5 + (Math.hypot(dx, dy) / dt) * 0.5;
-      speeds[i] = speed;
+      segments[i] = Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y) / dt;
     }
-    speeds[0] = speeds[1] || 0;
+    segments[0] = segments[1];
+    // 居中平滑：起笔时速度从 0 爬升，单向 EMA 会先给出一个"大圆头"（蝌蚪），
+    // 居中窗口让起点直接取附近几段的平均水平。
+    const speeds = smoothArray(segments, 2);
 
     // 2) 累计弧长，用于起笔 / 收笔收尖
     const dist = new Float32Array(n);
@@ -141,23 +166,25 @@
     const taper = Math.min(size * TAPER_RATIO, total * 0.45);
     const tapered = total > taper * 2.2;
 
+    // 3) 体宽因子 = 速度项 × 压力项；限幅保证一笔之内不会一头粗一头细
     const usePressure = pressureRange(points) >= 0.04;
+    const body = new Float32Array(n);
     for (let i = 0; i < n; i += 1) {
-      let factor = 1;
+      let factor = 1 - SPEED_DROP * Math.min(speeds[i] / SPEED_REF, 1);
+      if (usePressure) factor *= 1 + (pressureCurve(points[i].p) - 1) * PRESSURE_MIX;
+      body[i] = clamp(factor, BODY_MIN, BODY_MAX);
+    }
+    // 再做一次居中平滑，避免速度突变处出现"台阶"（粗细突变）
+    const smoothed = smoothArray(body, 2);
 
-      // 写得快 → 线变细；慢下来 → 线变粗
-      const s = Math.min(speeds[i] / SPEED_REF, 1);
-      factor *= 1 - SPEED_DROP * s;
-
-      // 有真实压感才叠压力项，否则电容笔会得到一根"两端收尖"的假笔锋
-      if (usePressure) factor *= 1 + (pressureCurve(points[i].p) - 1) * 0.85;
-
+    // 4) 起收笔收尖（圆头），叠在平滑后的体宽上
+    for (let i = 0; i < n; i += 1) {
+      let factor = smoothed[i];
       if (tapered) {
         const head = smoothstep(dist[i] / taper);
         const tail = smoothstep((total - dist[i]) / taper);
-        factor *= (TAPER_MIN + (1 - TAPER_MIN) * head) * (TAPER_MIN + (1 - TAPER_MIN) * tail);
+        factor *= TAPER_MIN + (1 - TAPER_MIN) * Math.min(head, tail);
       }
-
       out[i] = clamp(size * factor, Math.max(0.6, size * MIN_WIDTH_SCALE), size * MAX_WIDTH_SCALE);
     }
     return out;

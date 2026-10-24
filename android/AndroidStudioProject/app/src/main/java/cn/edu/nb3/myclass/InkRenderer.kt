@@ -25,7 +25,13 @@ object InkRenderer {
     private const val PRESSURE_ALPHA = 0.45f
     /** 速度参考（px/ms） */
     private const val SPEED_REF = 1.0f
-    private const val SPEED_DROP = 0.7f
+    /** 最快处衰减到 1 - SPEED_DROP 倍；0.3 让一笔之内最多差 1.4 倍，不再是"蝌蚪" */
+    private const val SPEED_DROP = 0.3f
+    /** 压力项权重：只做轻微修饰 */
+    private const val PRESSURE_MIX = 0.5f
+    /** 体宽因子的上下限（叠起收笔之前） */
+    private const val BODY_MIN = 0.78f
+    private const val BODY_MAX = 1.18f
     /** 起收笔收尖长度 = 线宽 × 2.2；下限 0.55，收笔像圆珠笔的圆头而不是毛笔尖 */
     private const val TAPER_RATIO = 2.2f
     private const val TAPER_MIN = 0.55f
@@ -54,7 +60,7 @@ object InkRenderer {
     }
 
     private fun pressureCurve(pressure: Float): Float =
-        0.25f + 1.95f * pressure.coerceIn(0f, 1f).pow(1.25f)
+        0.55f + 1.0f * pressure.coerceIn(0f, 1f).pow(1.15f)
 
     /** 输入调理：像素去重 + 位置/压力低通（不改存档，只影响渲染） */
     fun condition(points: List<Point>): List<Point> {
@@ -94,18 +100,19 @@ object InkRenderer {
             return out
         }
 
-        val speeds = FloatArray(n)
-        var speed = 0f
+        // 1) 每段速度（px/ms）
+        val segments = FloatArray(n)
         for (i in 1 until n) {
             val dx = points[i].x - points[i - 1].x
             val dy = points[i].y - points[i - 1].y
             val rawDt = points[i].t - points[i - 1].t
             // 重采样后相邻点只差 1px，快速书写时 dt 会小于 1ms，不能再用整数毫秒或 16ms 兜底
             val dt = if (rawDt.isFinite() && rawDt > 0f) rawDt.coerceIn(0.2f, 120f) else 16f
-            speed = speed * 0.5f + (hypot(dx, dy) / dt) * 0.5f
-            speeds[i] = speed
+            segments[i] = hypot(dx, dy) / dt
         }
-        speeds[0] = if (n > 1) speeds[1] else 0f
+        segments[0] = if (n > 1) segments[1] else 0f
+        // 居中平滑：起笔时速度从 0 爬升，单向 EMA 会先给出一个"大圆头"（蝌蚪）
+        val speeds = smoothArray(segments, 2)
 
         val dist = FloatArray(n)
         for (i in 1 until n) {
@@ -123,16 +130,42 @@ object InkRenderer {
         }
         val usePressure = maxPressure - minPressure >= 0.04f
 
+        // 2) 体宽因子 = 速度项 × 压力项，限幅后再平滑，避免一笔之内一头粗一头细
+        val body = FloatArray(n)
         for (i in 0 until n) {
-            var factor = 1f
-            factor *= 1f - SPEED_DROP * min(speeds[i] / SPEED_REF, 1f)
-            if (usePressure) factor *= 1f + (pressureCurve(points[i].p) - 1f) * 0.85f
+            var factor = 1f - SPEED_DROP * min(speeds[i] / SPEED_REF, 1f)
+            if (usePressure) factor *= 1f + (pressureCurve(points[i].p) - 1f) * PRESSURE_MIX
+            body[i] = factor.coerceIn(BODY_MIN, BODY_MAX)
+        }
+        val smoothed = smoothArray(body, 2)
+
+        // 3) 起收笔收尖（圆头），叠在平滑后的体宽上
+        for (i in 0 until n) {
+            var factor = smoothed[i]
             if (tapered) {
                 val head = smoothstep(dist[i] / taper)
                 val tail = smoothstep((total - dist[i]) / taper)
-                factor *= (TAPER_MIN + (1f - TAPER_MIN) * head) * (TAPER_MIN + (1f - TAPER_MIN) * tail)
+                factor *= TAPER_MIN + (1f - TAPER_MIN) * min(head, tail)
             }
             out[i] = (size * factor).coerceIn(max(0.6f, size * MIN_WIDTH_SCALE), size * MAX_WIDTH_SCALE)
+        }
+        return out
+    }
+
+    /** 居中滑动平均（半径 radius，边界截断），抹平速度/宽度的突变 */
+    private fun smoothArray(values: FloatArray, radius: Int): FloatArray {
+        val n = values.size
+        val out = FloatArray(n)
+        for (i in 0 until n) {
+            var sum = 0f
+            var count = 0
+            for (k in -radius..radius) {
+                val j = i + k
+                if (j < 0 || j >= n) continue
+                sum += values[j]
+                count++
+            }
+            out[i] = if (count > 0) sum / count else values[i]
         }
         return out
     }

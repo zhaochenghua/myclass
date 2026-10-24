@@ -101,6 +101,36 @@ object InkSpeedCheck {
                     return best
                 }
 
+                // 再画一条 S 形笔画，模拟真实书写的快慢/压力变化，用于确认不会再出现"蝌蚪"
+                val demo = AnnotationStroke(
+                    id = "demo",
+                    colorHex = "#D00000",
+                    width = PenSettings.width,
+                    isEraser = false
+                )
+                var demoX = 120f
+                for (i in 0..220) {
+                    val u = i / 220f
+                    val wave = kotlin.math.sin(Math.PI * u).toFloat()
+                    demoX += (0.2f + 2.2f * wave) * 8f
+                    val demoY = 520f + 110f * kotlin.math.sin(u * Math.PI * 2).toFloat()
+                    demo.points.add(
+                        AnnotationPoint(
+                            (demoX / width).coerceIn(0f, 1f),
+                            (demoY / height).coerceIn(0f, 1f),
+                            i * 8,
+                            0.2f + 0.7f * wave
+                        )
+                    )
+                }
+                view.replaceStrokes(listOf(demo))
+                val demoOutput = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                view.draw(Canvas(demoOutput))
+                runCatching {
+                    java.io.File(test.targetContext.cacheDir, "ink-demo.png").outputStream().use {
+                        demoOutput.compress(Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                }
                 val slow = thickness(120)
                 val fast = thickness(900)
                 val tip = thickness(104)
@@ -117,7 +147,8 @@ object InkSpeedCheck {
                 } ?: "管线为空"
 
                 check(slow >= 4) { "慢写段没有墨迹: $slow ($debug)" }
-                check(slow > fast * 1.3) { "快写段没有变细: 慢=$slow 快=$fast ($debug)" }
+                check(slow > fast) { "快写段没有变细: 慢=$slow 快=$fast ($debug)" }
+                check(slow <= fast * 2.0f) { "快慢段粗细相差过大: 慢=$slow 快=$fast ($debug)" }
                 // 起笔是圆珠笔式的圆头：比行笔略细，但不能细成一个尖
                 check(tip >= slow * 0.4f) { "起笔不是圆头（太尖）: 起笔=$tip 慢写=$slow ($debug)" }
                 check(tip <= slow) { "起笔比行笔还粗: 起笔=$tip 慢写=$slow ($debug)" }
@@ -128,6 +159,7 @@ object InkSpeedCheck {
                         output.compress(Bitmap.CompressFormat.PNG, 100, it)
                     }
                 }
+
 
                 result.putString(
                     "stream",
@@ -144,3 +176,4 @@ object InkSpeedCheck {
         test.finish(if (failure == null) Activity.RESULT_OK else Activity.RESULT_CANCELED, result)
     }
 }
+

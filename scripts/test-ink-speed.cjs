@@ -64,15 +64,14 @@ function pdfFixture() {
       const image = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
       const thicknessAt = (cssX) => {
         const px = Math.round(cssX * dpr);
-        let best = 0;
-        let run = 0;
+        // 按 alpha 覆盖率累加，得到亚像素精度；整数游程在 4px 线宽上会四舍五入成一样粗
+        let coverage = 0;
         for (let y = 0; y < canvas.height; y += 1) {
           const index = (y * canvas.width + px) * 4;
-          const ink = image[index] > 90 && image[index + 3] > 100;
-          run = ink ? run + 1 : 0;
-          if (run > best) best = run;
+          const alpha = image[index + 3] / 255;
+          if (image[index] > 90 && alpha > 0.03) coverage += alpha;
         }
-        return best;
+        return Math.round(coverage * 100) / 100;
       };
       const videoRect = currentVideoContentRect();
       const at = (fraction) => videoRect.left - rect.left + videoRect.width * fraction;
@@ -86,7 +85,8 @@ function pdfFixture() {
     });
     assert.ok(measured.canvasWidth > 0, '标注画布未初始化');
     assert.ok(measured.slow >= 3, `慢写段没有墨迹: ${JSON.stringify(measured)}`);
-    assert.ok(measured.slow > measured.fast * 1.5, `快写段没有变细: ${JSON.stringify(measured)}`);
+    assert.ok(measured.slow > measured.fast, `快写段没有变细: ${JSON.stringify(measured)}`);
+    assert.ok(measured.slow <= measured.fast * 2, `快慢段粗细相差过大: ${JSON.stringify(measured)}`);
     assert.ok(measured.tip >= measured.slow * 0.4, `起笔不是圆头（太尖）: ${JSON.stringify(measured)}`);
     assert.ok(measured.tip <= measured.slow, `起笔比行笔还粗: ${JSON.stringify(measured)}`);
 
