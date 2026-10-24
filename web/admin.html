@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管理后台 - 上课投屏平台</title>
   <link rel="stylesheet" href="./style.css">
-  <link rel="stylesheet" href="./admin.css?v=20261022-online-teachers">
+  <link rel="stylesheet" href="./admin.css?v=20261024-courseware-table">
 </head>
 <body>
   <main class="admin-page">
@@ -141,14 +141,30 @@
             <button class="btn-secondary" id="refreshCoursewareButton">刷新</button>
           </div>
         </div>
+        <p class="courseware-hint">点击表头排序；拖动表头右侧的分隔线调整列宽，双击分隔线恢复默认宽度。</p>
         <div class="upload-progress" id="uploadProgress" hidden>
           <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
           <span id="progressText">上传中...</span>
         </div>
         <div class="table-scroll">
-          <table class="data-table">
+          <table class="data-table courseware-table" id="coursewareTable" aria-label="课件列表">
+            <colgroup>
+              <col data-col="title">
+              <col data-col="fileName">
+              <col data-col="owner" id="ownerCol">
+              <col data-col="size">
+              <col data-col="createdAt">
+              <col data-col="actions">
+            </colgroup>
             <thead>
-              <tr><th>标题</th><th>文件名</th><th id="ownerTh">所有者</th><th>大小</th><th>上传时间</th><th>操作</th></tr>
+              <tr>
+                <th data-col="title" data-sort-key="title" aria-sort="none"><button type="button" class="sort-button">标题</button><span class="column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整标题列宽" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th data-col="fileName" data-sort-key="fileName" aria-sort="none"><button type="button" class="sort-button">文件名</button><span class="column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整文件名列宽" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th data-col="owner" data-sort-key="owner" aria-sort="none" id="ownerTh"><button type="button" class="sort-button">所有者</button><span class="column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整所有者列宽" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th data-col="size" data-sort-key="size" aria-sort="none"><button type="button" class="sort-button">大小</button><span class="column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整大小列宽" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th data-col="createdAt" data-sort-key="createdAt" aria-sort="none"><button type="button" class="sort-button">上传时间</button><span class="column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整上传时间列宽" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th data-col="actions"><span>操作</span><span class="column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整操作列宽" title="拖动调整列宽，双击恢复默认"></span></th>
+              </tr>
             </thead>
             <tbody id="coursewareTableBody"></tbody>
           </table>
@@ -297,6 +313,6 @@
   </main>
 
   <script src="./studentRoster.js?v=20260919a"></script>
-  <script src="./admin.js?v=20261022-online-teachers"></script>
+  <script src="./admin.js?v=20261024-courseware-table"></script>
 </body>
 </html>

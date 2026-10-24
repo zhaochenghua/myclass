@@ -356,6 +356,116 @@
   background: #0c1a1f;
 }
 
+/* ---- 课件表格：表头排序 + 拖动调整列宽 ---- */
+.courseware-table {
+  table-layout: fixed;
+}
+
+.courseware-hint {
+  margin: -0.25rem 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.courseware-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #0c1a1f;
+  user-select: none;
+  overflow: visible;
+}
+
+.courseware-table .sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.courseware-table .sort-button:hover,
+.courseware-table th[aria-sort="ascending"] .sort-button,
+.courseware-table th[aria-sort="descending"] .sort-button {
+  color: var(--text);
+}
+
+.courseware-table .sort-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.courseware-table th[aria-sort="ascending"] .sort-button::after {
+  content: "▲";
+  font-size: 0.62em;
+  color: var(--accent);
+}
+
+.courseware-table th[aria-sort="descending"] .sort-button::after {
+  content: "▼";
+  font-size: 0.62em;
+  color: var(--accent);
+}
+
+.courseware-table .column-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 3;
+  width: 9px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.courseware-table .column-resizer::after {
+  content: "";
+  position: absolute;
+  top: 22%;
+  left: 50%;
+  width: 1px;
+  height: 56%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.18);
+  transition: background 0.15s, width 0.15s;
+}
+
+.courseware-table .column-resizer:hover::after,
+.courseware-table .column-resizer:focus-visible::after,
+.courseware-table.is-resizing .column-resizer::after {
+  width: 2px;
+  background: var(--accent);
+}
+
+.courseware-table .column-resizer:focus-visible {
+  outline: none;
+}
+
+body.is-col-resizing,
+body.is-col-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+@media (max-width: 600px) {
+  .courseware-table .column-resizer {
+    width: 13px;
+    right: -6px;
+  }
+}
+
 /* 管理后台内容较多，允许整页滚动（style.css 为投屏页禁用了滚动） */
 html,
 body {

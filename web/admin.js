@@ -13,6 +13,15 @@ let fontBusy = false;
 let fontRequest = 0;
 let fontSupported = false;
 
+const COURSEWARE_DEFAULT_WIDTHS = { title: 230, fileName: 180, owner: 100, size: 90, createdAt: 160, actions: 180 };
+const COURSEWARE_MIN_WIDTH = 64;
+const COURSEWARE_WIDTHS_KEY = 'myclass.admin.courseware.widths.v1';
+const COURSEWARE_SORT_KEY = 'myclass.admin.courseware.sort.v1';
+let coursewareItems = [];
+let coursewareSort = readCoursewareSort();
+let coursewareWidths = readCoursewareWidths();
+let coursewareResize = null;
+
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
@@ -589,6 +598,219 @@ $('#coursewareFileInput').addEventListener('change', (e) => {
   e.target.value = '';
 });
 
+function readCoursewareWidths() {
+  try {
+    const values = JSON.parse(localStorage.getItem(COURSEWARE_WIDTHS_KEY) || '{}');
+    const result = {};
+    for (const [key, width] of Object.entries(values || {})) {
+      if (Object.hasOwn(COURSEWARE_DEFAULT_WIDTHS, key) && Number.isFinite(width) && width >= COURSEWARE_MIN_WIDTH && width <= 2000) {
+        result[key] = Math.round(width);
+      }
+    }
+    return result;
+  } catch { return {}; }
+}
+
+function saveCoursewareWidths() {
+  try { localStorage.setItem(COURSEWARE_WIDTHS_KEY, JSON.stringify(coursewareWidths)); } catch { /* 隐私模式下忽略存储失败 */ }
+}
+
+function readCoursewareSort() {
+  try {
+    const value = JSON.parse(localStorage.getItem(COURSEWARE_SORT_KEY) || 'null');
+    if (value && Object.hasOwn(COURSEWARE_DEFAULT_WIDTHS, value.key) && value.key !== 'actions'
+      && (value.direction === 'asc' || value.direction === 'desc')) return value;
+  } catch { /* 忽略损坏的本地设置 */ }
+  return null;
+}
+
+function saveCoursewareSort() {
+  try {
+    if (coursewareSort) localStorage.setItem(COURSEWARE_SORT_KEY, JSON.stringify(coursewareSort));
+    else localStorage.removeItem(COURSEWARE_SORT_KEY);
+  } catch { /* 隐私模式下忽略存储失败 */ }
+}
+
+function updateCoursewareSortHeaders() {
+  $$('#coursewareTable thead th').forEach((th) => {
+    if (!th.dataset.sortKey) return;
+    const active = coursewareSort?.key === th.dataset.sortKey;
+    th.setAttribute('aria-sort', active ? (coursewareSort.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+  });
+}
+
+function coursewareSortValue(item, key) {
+  if (key === 'size') return Number(item.size) || 0;
+  if (key === 'createdAt') {
+    const time = Date.parse(item.createdAt);
+    return Number.isNaN(time) ? 0 : time;
+  }
+  if (key === 'owner') return item.owner || '';
+  return item[key] || '';
+}
+
+function sortedCoursewareItems() {
+  if (!coursewareSort) return coursewareItems;
+  const direction = coursewareSort.direction === 'asc' ? 1 : -1;
+  return [...coursewareItems].sort((a, b) => {
+    const left = coursewareSortValue(a, coursewareSort.key);
+    const right = coursewareSortValue(b, coursewareSort.key);
+    let result = typeof left === 'number' && typeof right === 'number'
+      ? left - right
+      : String(left).localeCompare(String(right), 'zh-CN', { numeric: true, sensitivity: 'base' });
+    if (!result) result = a._order - b._order;
+    return result * direction;
+  });
+}
+
+function toggleCoursewareSort(key) {
+  if (!key) return;
+  if (coursewareSort?.key === key) {
+    coursewareSort.direction = coursewareSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    // 大小和上传时间先看最新的/最大的，文字列先按升序，符合常见直觉
+    coursewareSort = { key, direction: key === 'size' || key === 'createdAt' ? 'desc' : 'asc' };
+  }
+  saveCoursewareSort();
+  updateCoursewareSortHeaders();
+  renderCoursewareRows();
+}
+
+function visibleCoursewareColumns() {
+  const table = $('#coursewareTable');
+  const visible = new Map();
+  if (!table) return visible;
+  [...table.tHead.rows[0].cells].forEach((th) => visible.set(th.dataset.col, !th.hidden));
+  return visible;
+}
+
+function applyCoursewareWidths() {
+  const table = $('#coursewareTable');
+  if (!table) return;
+  const visible = visibleCoursewareColumns();
+  let total = 0;
+  [...table.querySelectorAll('colgroup col')].forEach((col) => {
+    const key = col.dataset.col;
+    if (!visible.get(key)) {
+      col.style.display = 'none';
+      col.style.width = '';
+      return;
+    }
+    col.style.display = '';
+    const width = coursewareWidths[key] || COURSEWARE_DEFAULT_WIDTHS[key];
+    col.style.width = `${width}px`;
+    total += width;
+  });
+  const available = table.parentElement ? table.parentElement.clientWidth : 0;
+  table.style.width = total ? `${Math.max(total, available - 2)}px` : '';
+  $$('#coursewareTable thead th').forEach((th) => {
+    const handle = th.querySelector('.column-resizer');
+    if (!handle || th.hidden) return;
+    const width = th.getBoundingClientRect().width || coursewareWidths[th.dataset.col] || COURSEWARE_DEFAULT_WIDTHS[th.dataset.col];
+    handle.setAttribute('aria-valuenow', String(Math.round(width)));
+    handle.setAttribute('aria-valuemin', String(COURSEWARE_MIN_WIDTH));
+  });
+}
+
+function startColumnResize(event, th) {
+  if (event.pointerType === 'mouse' && event.button !== 0) return;
+  event.preventDefault();
+  const table = th.closest('table');
+  const key = th.dataset.col;
+  const col = table?.querySelector(`colgroup col[data-col="${key}"]`);
+  if (!col) return;
+  coursewareResize = {
+    table, th, col, key, handle: event.currentTarget, pointerId: event.pointerId,
+    startX: event.clientX, startWidth: th.getBoundingClientRect().width
+  };
+  table.classList.add('is-resizing');
+  document.body.classList.add('is-col-resizing');
+  window.addEventListener('pointermove', onColumnResizeMove);
+  window.addEventListener('pointerup', stopColumnResize);
+  window.addEventListener('pointercancel', stopColumnResize);
+}
+
+function onColumnResizeMove(event) {
+  const state = coursewareResize;
+  if (!state || event.pointerId !== state.pointerId) return;
+  const width = Math.max(COURSEWARE_MIN_WIDTH, Math.round(state.startWidth + event.clientX - state.startX));
+  coursewareWidths[state.key] = width;
+  applyCoursewareWidths();
+}
+
+function stopColumnResize(event) {
+  const state = coursewareResize;
+  if (!state || (event && event.pointerId !== undefined && event.pointerId !== state.pointerId)) return;
+  coursewareResize = null;
+  state.table.classList.remove('is-resizing');
+  document.body.classList.remove('is-col-resizing');
+  window.removeEventListener('pointermove', onColumnResizeMove);
+  window.removeEventListener('pointerup', stopColumnResize);
+  window.removeEventListener('pointercancel', stopColumnResize);
+  saveCoursewareWidths();
+  applyCoursewareWidths();
+}
+
+function handleColumnResizeKey(event, th) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  const key = th.dataset.col;
+  const current = coursewareWidths[key] || Math.round(th.getBoundingClientRect().width) || COURSEWARE_DEFAULT_WIDTHS[key];
+  coursewareWidths[key] = Math.max(COURSEWARE_MIN_WIDTH, current + (event.key === 'ArrowRight' ? 16 : -16));
+  saveCoursewareWidths();
+  applyCoursewareWidths();
+}
+
+function resetCoursewareColumnWidth(th) {
+  delete coursewareWidths[th.dataset.col];
+  saveCoursewareWidths();
+  applyCoursewareWidths();
+}
+
+function setupCoursewareTable() {
+  const table = $('#coursewareTable');
+  if (!table) return;
+  [...table.tHead.rows[0].cells].forEach((th) => {
+    th.querySelector('.sort-button')?.addEventListener('click', () => toggleCoursewareSort(th.dataset.sortKey));
+    const handle = th.querySelector('.column-resizer');
+    if (!handle) return;
+    handle.addEventListener('pointerdown', (event) => startColumnResize(event, th));
+    handle.addEventListener('keydown', (event) => handleColumnResizeKey(event, th));
+    handle.addEventListener('dblclick', () => resetCoursewareColumnWidth(th));
+  });
+  updateCoursewareSortHeaders();
+  applyCoursewareWidths();
+  window.addEventListener('resize', applyCoursewareWidths);
+}
+
+function renderCoursewareRows() {
+  const isAdmin = currentUser?.role === 'admin';
+  const tbody = $('#coursewareTableBody');
+  if (!coursewareItems.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="${isAdmin ? 6 : 5}">暂无课件</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = sortedCoursewareItems().map((c) => `
+    <tr>
+      <td>${escapeHtml(c.title)}${c.playbackProgress ? `<div class="muted">上次播放：第 ${Number(c.playbackProgress.page)} / ${Number(c.playbackProgress.pageCount)} 页</div><progress max="${Number(c.playbackProgress.pageCount)}" value="${Number(c.playbackProgress.page)}"></progress>` : ''}</td>
+      <td>${escapeHtml(c.fileName).substring(0, 30)}</td>
+      ${isAdmin ? `<td><span class="tag ${c.userId === 'admin' ? 'tag-public' : 'tag-private'}">${escapeHtml(c.owner || '未知')}</span></td>` : ''}
+      <td>${formatBytes(c.size)}</td>
+      <td>${formatDate(c.createdAt)}</td>
+      <td>
+        <button class="btn-secondary btn-sm" data-rename-cw="${c.id}" data-rename-title="${escapeHtml(c.title)}">重命名</button>
+        <button class="btn-danger" data-delete-cw="${c.id}">删除</button>
+      </td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('.btn-danger').forEach((btn) => {
+    btn.addEventListener('click', () => deleteCourseware(btn.dataset.deleteCw, btn));
+  });
+  tbody.querySelectorAll('[data-rename-cw]').forEach((btn) => {
+    btn.addEventListener('click', () => openRenameModal(btn.dataset.renameCw, btn.dataset.renameTitle));
+  });
+}
+
 async function loadCourseware() {
   const isAdmin = currentUser?.role === 'admin';
   // 普通用户不传 all=true，只看自己的课件
@@ -597,33 +819,17 @@ async function loadCourseware() {
   $('#ownerTh').hidden = !isAdmin;
   $('#shareLabel').style.display = isAdmin ? '' : 'none';
   $('#coursewareTitle').textContent = isAdmin ? '课件列表' : '我的课件';
+  if (!isAdmin && coursewareSort?.key === 'owner') {
+    coursewareSort = null;
+    saveCoursewareSort();
+  }
+  updateCoursewareSortHeaders();
 
   try {
     const data = await apiGet(url);
-    const tbody = $('#coursewareTableBody');
-    if (!data.items?.length) {
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="${isAdmin ? 6 : 5}">暂无课件</td></tr>`;
-      return;
-    }
-    tbody.innerHTML = data.items.map((c) => `
-      <tr>
-        <td>${escapeHtml(c.title)}${c.playbackProgress ? `<div class="muted">上次播放：第 ${Number(c.playbackProgress.page)} / ${Number(c.playbackProgress.pageCount)} 页</div><progress max="${Number(c.playbackProgress.pageCount)}" value="${Number(c.playbackProgress.page)}"></progress>` : ''}</td>
-        <td>${escapeHtml(c.fileName).substring(0, 30)}</td>
-        ${isAdmin ? `<td><span class="tag ${c.userId === 'admin' ? 'tag-public' : 'tag-private'}">${escapeHtml(c.owner || '未知')}</span></td>` : ''}
-        <td>${formatBytes(c.size)}</td>
-        <td>${formatDate(c.createdAt)}</td>
-        <td>
-          <button class="btn-secondary btn-sm" data-rename-cw="${c.id}" data-rename-title="${escapeHtml(c.title)}">重命名</button>
-          <button class="btn-danger" data-delete-cw="${c.id}">删除</button>
-        </td>
-      </tr>
-    `).join('');
-    tbody.querySelectorAll('.btn-danger').forEach((btn) => {
-      btn.addEventListener('click', () => deleteCourseware(btn.dataset.deleteCw, btn));
-    });
-    tbody.querySelectorAll('[data-rename-cw]').forEach((btn) => {
-      btn.addEventListener('click', () => openRenameModal(btn.dataset.renameCw, btn.dataset.renameTitle));
-    });
+    coursewareItems = (data.items || []).map((item, index) => ({ ...item, _order: index }));
+    renderCoursewareRows();
+    applyCoursewareWidths();
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -933,3 +1139,5 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+setupCoursewareTable();
