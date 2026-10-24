@@ -1505,6 +1505,21 @@ button.file-thumbnail { cursor: pointer; }
 #classroomError { margin: 0.4rem 0; color: #ffd166; }
 #menuClassroom { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---------- 用户管理菜单 ---------- */
+.user-menu-card { width: min(24rem, 100%); }
+.user-menu-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.85rem; }
+.user-menu-header h2 { margin: 0; }
+.user-menu-close { flex: 0 0 auto; width: 2.35rem; height: 2.35rem; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: rgba(255, 255, 255, 0.06); color: var(--muted); font: inherit; font-size: 1.35rem; line-height: 1; cursor: pointer; }
+.user-menu-close:active { background: rgba(255, 255, 255, 0.14); }
+.user-menu-list { display: grid; gap: 0.65rem; }
+.user-menu-item { display: flex; flex-direction: column; align-items: flex-start; gap: 0.18rem; width: 100%; min-height: 3.8rem; padding: 0.8rem 0.95rem; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, 0.06); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.user-menu-item:active { transform: scale(0.99); }
+.user-menu-item-title { font-size: 1.02rem; font-weight: 700; }
+.user-menu-item-hint { color: var(--muted); font-size: 0.8rem; line-height: 1.45; }
+#userMenuAdmin { border-color: rgba(101, 240, 200, 0.45); background: rgba(101, 240, 200, 0.1); }
+#userMenuAdmin .user-menu-item-title { color: var(--accent); }
+.user-menu-close:focus-visible, .user-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ---------- 版本更新弹窗 ---------- */
 .update-line { margin: 0.35rem 0; font-size: 0.95rem; color: var(--text); word-break: break-all; }
 .update-hint { margin: 0.6rem 0 0.9rem; font-size: 0.82rem; color: var(--muted); }

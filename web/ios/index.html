@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20261022-freehand" />
+    <link rel="stylesheet" href="./style.css?v=20261024-user-menu" />
   </head>
   <body>
     <div id="orientationRoot">
@@ -100,8 +100,8 @@
               <button class="btn btn-ghost" id="manageCoursewareButton" type="button">
                 课件管理
               </button>
-              <button class="btn btn-ghost" id="switchUserButton" type="button">
-                切换用户
+              <button class="btn btn-ghost" id="userManageButton" type="button" aria-haspopup="dialog" aria-controls="userMenuDialog" aria-expanded="false">
+                用户管理
               </button>
             </div>
           </div>
@@ -391,6 +391,25 @@
         </section>
         </div>
 
+    <div class="classroom-modal" id="userMenuDialog" hidden>
+      <section class="classroom-card user-menu-card" role="dialog" aria-modal="true" aria-labelledby="userMenuTitle">
+        <header class="user-menu-header">
+          <h2 id="userMenuTitle">用户管理</h2>
+          <button class="user-menu-close" id="userMenuClose" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="user-menu-list">
+          <button class="user-menu-item" id="userMenuAdmin" type="button">
+            <span class="user-menu-item-title">后台管理</span>
+            <span class="user-menu-item-hint">课件、班级、字体与账户设置</span>
+          </button>
+          <button class="user-menu-item" id="userMenuSwitch" type="button">
+            <span class="user-menu-item-title">切换用户</span>
+            <span class="user-menu-item-hint">退出当前账号并重新登录</span>
+          </button>
+        </div>
+      </section>
+    </div>
+
     <!-- 通用遮罩 -->
     <div class="overlay" id="overlay" hidden>
       <div class="overlay-card">
@@ -405,6 +424,6 @@
 
     <div class="toast" id="toast" hidden></div>
     </div>
-    <script type="module" src="./js/app.js?v=20261022-ink9"></script>
+    <script type="module" src="./js/app.js?v=20261024-user-menu"></script>
   </body>
 </html>

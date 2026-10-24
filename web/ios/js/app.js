@@ -307,6 +307,8 @@ function clearAuth() {
   storage.remove('token');
   storage.remove('username');
   state.coursewareClient?.setToken(null);
+  // 后台管理页使用独立的 admin_token，切换用户时一并清掉，避免用旧账号自动进入
+  try { localStorage.removeItem('admin_token'); } catch { /* 隐私模式下忽略 */ }
 }
 
 // ---------------------------------------------------------------- 认证
@@ -357,6 +359,38 @@ async function performAuth(isRegister) {
 function showAuth() {
   state.screen = 'Auth';
   showView('Auth');
+}
+
+function openUserMenu() {
+  $('userMenuDialog').hidden = false;
+  $('userManageButton').setAttribute('aria-expanded', 'true');
+  $('userMenuAdmin').focus();
+}
+
+function closeUserMenu({ restoreFocus = true } = {}) {
+  const dialog = $('userMenuDialog');
+  if (dialog.hidden) return;
+  dialog.hidden = true;
+  $('userManageButton').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) $('userManageButton').focus();
+}
+
+function openAdminConsole() {
+  // 后台管理页与 iOS 端使用不同的 localStorage 键；把当前登录态带过去，
+  // 老师不需要在后台再登录一次。返回时后台会回到本页（见 admin.js）。
+  try {
+    if (state.token) localStorage.setItem('admin_token', state.token);
+    else localStorage.removeItem('admin_token');
+  } catch { /* 隐私模式下忽略 */ }
+  closeUserMenu({ restoreFocus: false });
+  window.location.href = '../admin.html?from=ios';
+}
+
+function switchUserAccount() {
+  closeUserMenu({ restoreFocus: false });
+  disconnectAndBack();
+  clearAuth();
+  showAuth();
 }
 
 function showConnect() {
@@ -3394,11 +3428,19 @@ function bindStaticEvents() {
   $('roomCodeInput').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') connectToRoom($('roomCodeInput').value.trim());
   });
-  $('switchUserButton').addEventListener('click', () => {
-    disconnectAndBack();
-    clearAuth();
-    showAuth();
+  $('userManageButton').addEventListener('click', openUserMenu);
+  $('userMenuClose').addEventListener('click', () => closeUserMenu());
+  $('userMenuDialog').addEventListener('click', (event) => {
+    if (event.target === $('userMenuDialog')) closeUserMenu();
   });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('userMenuDialog').hidden) {
+      event.preventDefault();
+      closeUserMenu();
+    }
+  });
+  $('userMenuAdmin').addEventListener('click', openAdminConsole);
+  $('userMenuSwitch').addEventListener('click', switchUserAccount);
   $('manageCoursewareButton').addEventListener('click', () => loadServerCourseware({ forManage: true }));
 
   $('menuCamera').addEventListener('click', () => openCameraLive());

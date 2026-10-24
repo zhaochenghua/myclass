@@ -161,7 +161,9 @@ $('#homeButton').addEventListener('click', () => {
   token = '';
   currentUser = null;
   localStorage.removeItem('admin_token');
-  window.location.href = './index.html';
+  // 从 iPhone 网页版进入后台时，回到 iOS 端（iOS 的登录态仍在 myclass.ios.token）
+  const fromIos = new URLSearchParams(window.location.search).get('from') === 'ios';
+  window.location.href = fromIos ? './ios/' : './index.html';
 });
 
 // --- 登录/注册面板切换 ---
