@@ -77,6 +77,8 @@ class MainActivity : Activity() {
     private var drawMode = "number"
     private var drawCount = 50
     private var drawing = false
+    /** 每次 offer / 首帧 / 结束时递增，用于作废「10 秒仍未收到画面」的提示。 */
+    private var videoWaitTicket = 0
     private val drawn = mutableMapOf<String, MutableSet<String>>()
     private var dialog: AlertDialog? = null
     private var stopped = false
@@ -98,6 +100,7 @@ class MainActivity : Activity() {
         buildUi()
         receiver = TvReceiver(applicationContext, surface, ::signal, ::connectionStatus) {
             if (kind == "live") {
+                ++videoWaitTicket
                 surface.visibility = View.VISIBLE; waiting.visibility = View.GONE
                 notice.visibility = View.GONE
                 setToolbar(false)
@@ -120,7 +123,10 @@ class MainActivity : Activity() {
         stage = FrameLayout(this)
         root.addView(stage, FrameLayout.LayoutParams(-1, -1))
         surface = SurfaceViewRenderer(this).apply { visibility = View.GONE }
-        stage.addView(surface, FrameLayout.LayoutParams(-1, -1))
+        // 不能用 MATCH_PARENT：SurfaceViewRenderer 只有在「非 EXACTLY」测量时才会按视频
+        // 宽高比调整自身尺寸。MATCH_PARENT 会把它撑满整屏，竖屏手机投屏 / 4:3 摄像头画面
+        // 被横向拉伸。WRAP_CONTENT + 居中让 WebRTC 自己按比例定尺寸，多余区域保留黑边。
+        stage.addView(surface, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         video = VideoView(this).apply { visibility = View.GONE }
         stage.addView(video, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         picture = PresentationView(this).apply { visibility = View.GONE; contentDescription = "课件画面" }
@@ -332,7 +338,16 @@ class MainActivity : Activity() {
             }
             "webrtc.offer" -> {
                 endPresentation(false); kind = "live"; status.text = "正在建立视频连接…"
+                // 收到 offer 后画面层是黑的：先给出等待提示，避免用户只看到黑屏无法判断。
+                val waitTicket = ++videoWaitTicket
+                notice.text = "正在接收视频画面…"; notice.visibility = View.VISIBLE
                 updateControls(); receiver.offer(message.optString("sdp"))
+                main.postDelayed({
+                    if (waitTicket == videoWaitTicket && kind == "live" && surface.visibility != View.VISIBLE) {
+                        notice.text = "尚未收到视频画面，请检查发送端网络或重新开始投屏"
+                        notice.visibility = View.VISIBLE
+                    }
+                }, 10000)
             }
             "webrtc.ice-candidate" -> message.optJSONObject("candidate")?.let { receiver.candidate(it) }
             "courseware.open" -> openPresentation(message)
@@ -444,6 +459,7 @@ class MainActivity : Activity() {
     }
 
     private fun endPresentation(notify: Boolean) {
+        ++videoWaitTicket
         if (::embedded.isInitialized) embedded.context("", 1)
         ++loadId; ++renderId
         if (::loader.isInitialized) loader.cancel()

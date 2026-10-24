@@ -3,6 +3,7 @@ package cn.edu.nb3.myclass.tv
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
@@ -36,6 +37,18 @@ class TvReceiver(
     private var track: VideoTrack? = null
     private var mediaGeneration = 0
     private val pendingIce = mutableListOf<IceCandidate>()
+    /** 首帧真正解码出来后才通知上层，避免「轨道已添加但解码失败」时一直黑屏无提示。 */
+    @Volatile
+    private var firstFrameDelivered = false
+    private val frameSink = object : VideoSink {
+        override fun onFrame(frame: VideoFrame) {
+            renderer.onFrame(frame)
+            if (!firstFrameDelivered) {
+                firstFrameDelivered = true
+                main.post { if (!stopped) onVideo() }
+            }
+        }
+    }
 
     fun start(endpoint: String, fresh: Boolean = false) {
         stop()
@@ -149,8 +162,9 @@ class TvReceiver(
                     main.post {
                         if (peer == null || mediaTicket != mediaGeneration) return@post
                         if (incoming is VideoTrack) {
-                            track?.removeSink(renderer); track = incoming
-                            incoming.addSink(renderer); onVideo()
+                            track?.removeSink(frameSink); track = incoming
+                            firstFrameDelivered = false
+                            incoming.addSink(frameSink)
                         }
                         if (incoming is AudioTrack) incoming.setEnabled(true)
                     }
@@ -173,6 +187,10 @@ class TvReceiver(
             created.setRemoteDescription(observer(created) {
                 remoteReady = true
                 pendingIce.forEach { created.addIceCandidate(it) }; pendingIce.clear()
+                // 电视端只声明 VP8：摄像头本来就强制 VP8，屏幕共享在旧版手机端没有强制，
+                // 若协商到 H.264，部分老电视在 1080p 以上解码失败就是黑屏。
+                // 在 answer 里只保留 VP8 后，即使手机端不更新也必须用 VP8 发送。
+                preferVp8(created, sdp)
                 created.createAnswer(object : SdpObserver {
                     override fun onCreateSuccess(description: SessionDescription) {
                         main.post {
@@ -190,6 +208,23 @@ class TvReceiver(
         } catch (e: Exception) { onStatus("设备无法初始化视频解码：${e.message}") }
     }
 
+    /** 把视频收发器的编解码器限制为 VP8；电视端软件解码兼容性最好，也绕开老 H.264 硬解限制。 */
+    private fun preferVp8(peer: PeerConnection, offerSdp: String) {
+        // 发送端 offer 没有 VP8 时保持原样，避免把原本能协商的 H.264 也拒绝掉。
+        if (!offerSdp.contains("VP8/90000", ignoreCase = true)) return
+        val factory = factory ?: return
+        val mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO
+        val vp8 = runCatching { factory.getRtpReceiverCapabilities(mediaType).codecs }
+            .getOrNull()
+            ?.filter { it.name.equals("VP8", ignoreCase = true) }
+            ?: return
+        if (vp8.isEmpty()) return
+        peer.transceivers.filter { it.mediaType == mediaType }.forEach { transceiver ->
+            runCatching { transceiver.setCodecPreferences(vp8) }
+                .onFailure { Log.w("MyClassTV", "VP8 codec preference failed: ${it.message}") }
+        }
+    }
+
     private fun observer(expected: PeerConnection, success: () -> Unit) = object : SdpObserver {
         override fun onSetSuccess() { main.post { if (peer === expected) success() } }
         override fun onSetFailure(error: String) { main.post { if (peer === expected) onStatus("视频协商失败") } }
@@ -204,7 +239,8 @@ class TvReceiver(
 
     fun closeVideo() {
         ++mediaGeneration
-        track?.removeSink(renderer); track = null
+        track?.removeSink(frameSink); track = null
+        firstFrameDelivered = false
         peer?.close(); peer?.dispose(); peer = null
         remoteReady = false; pendingIce.clear()
         renderer.clearImage()

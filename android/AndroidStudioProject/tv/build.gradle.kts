@@ -10,8 +10,8 @@ android {
         applicationId = "cn.edu.nb3.myclass.tv"
         minSdk = 21
         targetSdk = 35
-        versionCode = 20261020
-        versionName = "1.0.3"
+        versionCode = 20261024
+        versionName = "1.0.4-20261024"
         val endpoint = providers.gradleProperty("MYCLASS_TV_SERVER_URL")
             .orElse("https://sz.imst.xyz/myclass/").get()
         buildConfigField("String", "SERVER_BASE_URL", "\"${endpoint.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
