@@ -4908,14 +4908,15 @@ function drawBlackboardFreehand(ctx, stroke) {
 }
 
 /**
- * 笔迹线宽 = 内容宽度的千分比：4/6/9 → 0.4%/0.6%/0.9%，板擦固定 2%。
+ * 笔迹线宽 = 内容宽度的千分比：4/6/9 → 0.27%/0.4%/0.6%，板擦固定 2%。
+ * 上一版是 0.4/0.6/0.9——整体细 1/3 后，原来的"中档"(0.6%) 成了最大档。
  *
  * 这样手机、iPad、大屏看到的线宽与页面的比例完全一致（以前 Android 用 dp×density、
  * 大屏和 iPad 用 CSS px，手机相对页面粗 3~5 倍）。内容矩形的宽度本身已经包含缩放，
  * 所以放大时线自动变粗、缩小时自动变细，不需要再乘缩放倍率。
  */
 function annotationInkWidth(stroke, contentWidth) {
-  const ratio = stroke.isEraser ? 0.02 : (Number(stroke.width) || 4) / 1000;
+  const ratio = stroke.isEraser ? 0.02 : (Number(stroke.width) || 4) / 1500;
   return Math.max(0.8, ratio * Math.max(1, Number(contentWidth) || 1));
 }
 
@@ -6399,3 +6400,4 @@ function drawSelectionBBox(ctx, bbox) {
   }
   ctx.restore();
 }
+

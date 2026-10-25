@@ -175,13 +175,13 @@ object InkSpeedCheck {
                 val fast = thickness(900)
                 val tip = thickness(104)
 
-                // 诊断信息：管线输出规模与线宽区间
-                val density = view.resources.displayMetrics.density
+                // 诊断信息：管线输出规模与线宽区间（宽度口径与 drawStroke 一致：内容宽度的千分比）
+                val inkWidth = PenSettings.width / 1500f * width
                 val prepared = InkRenderer.prepare(points.map {
                     InkRenderer.Point(it.x * width, it.y * height, it.p, it.t.toFloat())
-                }, PenSettings.width * density)
+                }, inkWidth)
                 val debug = prepared?.let {
-                    "管线 source=${it.source.size} size=${"%.1f".format(it.size)} " +
+                    "管线 source=${it.source.size} " +
                         "w=${"%.1f".format(it.widths.min())}..${"%.1f".format(it.widths.max())} " +
                         "w120=${"%.1f".format(it.widths.getOrNull(120) ?: -1f)} w900=${"%.1f".format(it.widths.getOrNull(900) ?: -1f)}"
                 } ?: "管线为空"

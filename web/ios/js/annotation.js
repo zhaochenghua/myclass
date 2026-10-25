@@ -468,9 +468,9 @@ export class AnnotationBoard {
   #drawStroke(ctx, stroke, content) {
     const rect = content || this.#contentRect();
     if (!rect || stroke.points.length === 0) return;
-    // 线宽 = 内容宽度的千分比：4/6/9 → 0.4%/0.6%/0.9%，板擦 2%。
+    // 线宽 = 内容宽度的千分比：4/6/9 → 0.27%/0.4%/0.6%，板擦 2%（比上一版整体细 1/3）。
     // 与大屏 / Android 同一口径，内容矩形已含缩放，放大时线自动变粗。
-    const ratio = stroke.isEraser ? 0.02 : (Number(stroke.width) || PEN_WIDTH) / 1000;
+    const ratio = stroke.isEraser ? 0.02 : (Number(stroke.width) || PEN_WIDTH) / 1500;
     const width = Math.max(0.8, ratio * Math.max(1, rect.width));
 
     ctx.save();
@@ -718,3 +718,4 @@ export class AnnotationBoard {
     });
   }
 }
+

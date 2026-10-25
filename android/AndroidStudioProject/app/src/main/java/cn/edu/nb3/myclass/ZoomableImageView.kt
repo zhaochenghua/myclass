@@ -1116,10 +1116,10 @@ class ZoomableImageView(context: Context) : View(context) {
         val rect = imageDisplayRect() ?: return
         val points = stroke.points
         if (points.isEmpty()) return
-        // 线宽 = 内容宽度的千分比：4/6/9 → 0.4%/0.6%/0.9%，板擦 2%。
+        // 线宽 = 内容宽度的千分比：4/6/9 → 0.27%/0.4%/0.6%，板擦 2%（比上一版整体细 1/3）。
         // 手机、iPad、大屏因此与页面保持同样的粗细比例；rect 已含缩放，放大时线自然变粗。
         // 以前用 dp×density，手机相对页面比大屏粗 3~5 倍。
-        val inkRatio = if (stroke.isEraser) 0.02f else stroke.width / 1000f
+        val inkRatio = if (stroke.isEraser) 0.02f else stroke.width / 1500f
         val baseWidth = (inkRatio * rect.width()).coerceAtLeast(0.8f)
         val targetPaint = if (stroke.isEraser) eraserPaint else strokePaint
         if (!stroke.isEraser) {
@@ -1172,7 +1172,7 @@ class ZoomableImageView(context: Context) : View(context) {
      * 手写轮廓：InkRenderer 负责「像素去重 → 位置平滑 → 速度/压力线宽 → 等距重采样」，
      * 这里按每个点的线宽生成左右两条边，一次 drawPath 填充。
      *
-     * 没有沿用 PerfectFreehand.kt 的移植版：它缺上游的轮廓抽稀与端帽，密集采样时
+     * 不用 Kotlin 版 perfect-freehand 的移植轮廓：它缺上游的轮廓抽稀与端帽，密集采样时
      * 多边形会自交成一串"串珠"；而按 1px 重采样后的点直接做法线偏移，边缘是连续的，
      * 与网页端 traceInkOutline 的兜底轮廓同源。
      */
@@ -1353,4 +1353,5 @@ class ZoomableImageView(context: Context) : View(context) {
         private const val STYLUS_GUARD_MS = 500L
     }
 }
+
 

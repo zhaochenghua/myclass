@@ -35,21 +35,16 @@ object InkRenderer {
     /** 起收笔收尖长度 = 线宽 × 2.2；下限 0.55，收笔像圆珠笔的圆头而不是毛笔尖 */
     private const val TAPER_RATIO = 2.2f
     private const val TAPER_MIN = 0.55f
-    /** perfect-freehand 的 size 与画笔宽度的比例 */
+    /** 线宽基准与画笔宽度的比例 */
     const val SIZE_SCALE = 1.25f
-    /** 交给 PerfectFreehand 的 thinning（与压力反解配套） */
-    const val THINNING = 0.95f
-    /** PerfectFreehand.strokeRadius 内部把 thinning 夹到 0.05 下限 */
-    private const val THINNING_FLOOR = 0.05f
     private const val MIN_WIDTH_SCALE = 0.2f
     private const val MAX_WIDTH_SCALE = 2.6f
 
     /** 画布像素坐标 + 压力 + 相对起笔毫秒 */
     data class Point(val x: Float, val y: Float, val p: Float, val t: Float)
 
+    /** 渲染结果：每点线宽 + 调理后的中心线（Android 自己按法线生成轮廓） */
     data class Prepared(
-        val points: List<PerfectFreehand.Input>,
-        val size: Float,
         val widths: FloatArray,
         val source: List<Point>
     )
@@ -207,23 +202,11 @@ object InkRenderer {
         return out
     }
 
-    /** 一次算完：点调理 → 等距重采样 → 线宽 → PerfectFreehand 输入 */
+    /** 一次算完：点调理 → 等距重采样 → 每点线宽 */
     fun prepare(points: List<Point>, width: Float): Prepared? {
         val conditioned = resample(condition(points), 1f)
         if (conditioned.isEmpty()) return null
-        val strokeWidths = widths(conditioned, width)
-        var maxWidth = 0f
-        for (value in strokeWidths) if (value > maxWidth) maxWidth = value
-        if (maxWidth <= 0f) maxWidth = max(0.5f, width)
-        val span = THINNING - THINNING_FLOOR
-        val inputs = conditioned.mapIndexed { index, point ->
-            PerfectFreehand.Input(
-                point.x,
-                point.y,
-                ((strokeWidths[index] / maxWidth - THINNING_FLOOR) / span).coerceIn(0f, 1f)
-            )
-        }
-        return Prepared(inputs, maxWidth, strokeWidths, conditioned)
+        return Prepared(widths(conditioned, width), conditioned)
     }
 }
 
