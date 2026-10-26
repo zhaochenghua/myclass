@@ -14,10 +14,12 @@ async function writeFixture(t, name, files) {
   return filename;
 }
 
-test('PPTX theme and run fonts are extracted while theme references are ignored', async t => {
+test('PPTX theme and run fonts are extracted while theme references and unused script fallbacks are ignored', async t => {
   const file = await writeFixture(t, 'lesson.pptx', {
     'ppt/theme/theme1.xml': '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:fontScheme><a:majorFont>' +
       '<a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:font script="Hans" typeface="等线"/>' +
+      '<a:font script="Hant" typeface="新細明體"/><a:font script="Thai" typeface="Angsana New"/>' +
+      '<a:font script="Devanagari" typeface="Mangal"/>' +
       '</a:majorFont><a:minorFont><a:latin typeface="Calibri"/></a:minorFont></a:fontScheme></a:theme>',
     'ppt/slides/slide1.xml': '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:rPr lang="zh-CN">' +
       '<a:latin typeface="微软雅黑"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:rPr></p:sld>',
@@ -35,12 +37,15 @@ test('DOCX run fonts, embedded font table and theme fonts are extracted once', a
       '<w:font w:name="Times New Roman"/><w:font w:name="A&amp;B 字体"/></w:fonts>',
     'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:rPr>' +
       '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="宋体" w:cs="Arial"/></w:rPr></w:r></w:document>',
-    'word/theme/theme1.xml': '<a:latin xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" typeface="Cambria"/>',
+    'word/theme/theme1.xml': '<a:latin xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" typeface="Cambria"/>' +
+      '<a:font xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" script="Hans" typeface="等线"/>' +
+      '<a:font xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" script="Hant" typeface="新細明體"/>' +
+      '<a:font xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" script="Thai" typeface="Angsana New"/>',
     'word/styles.xml': '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
   });
   const result = await extractDocumentFonts(file, '.docx');
   assert.equal(result.supported, true);
-  assert.deepEqual([...result.fonts].sort(), ['A&B 字体', 'Arial', 'Cambria', 'Times New Roman', '宋体'].sort());
+  assert.deepEqual([...result.fonts].sort(), ['A&B 字体', 'Arial', 'Cambria', 'Times New Roman', '宋体', '等线'].sort());
 });
 
 test('legacy Office binaries are reported as unsupported and damaged packages reject', async t => {

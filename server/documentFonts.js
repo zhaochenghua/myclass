@@ -6,6 +6,9 @@ const yauzl = require('yauzl');
 const { isFontReference, normalizeFontFamily } = require('./fontNames');
 
 const PREFIX = { '.pptx': 'ppt/', '.docx': 'word/' };
+// Bump when the extraction rules change so cached per-courseware font lists
+// are recomputed on the next scan.
+const FONT_DETECTION_VERSION = 2;
 const MAX_ENTRIES = 10000;
 const MAX_PART_BYTES = 16 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
@@ -29,8 +32,27 @@ function attributes(xml, pattern) {
   return values;
 }
 
+// DrawingML fonts live on a:latin/a:ea/a:cs/a:sym and on theme a:font entries.
+// Theme font tables also carry fallbacks for every script (Thai, Indic, ...);
+// those are not used by the documents this platform handles and previously
+// produced dozens of false "missing font" prompts, so only the Hans fallback
+// (Simplified Chinese) is considered.
+function drawingFonts(xml) {
+  const names = [];
+  for (const tag of xml.matchAll(/<a:(latin|ea|cs|sym|font)\b[^>]*>/gu)) {
+    const typeface = tag[0].match(/\btypeface\s*=\s*(?:"([^"]*)"|'([^']*)')/u);
+    if (!typeface) continue;
+    if (tag[1].toLowerCase() === 'font') {
+      const script = tag[0].match(/\bscript\s*=\s*(?:"([^"]*)"|'([^']*)')/u);
+      if (!/^hans$/iu.test(script?.[1] ?? script?.[2] ?? '')) continue;
+    }
+    names.push(typeface[1] ?? typeface[2] ?? '');
+  }
+  return names;
+}
+
 function fontsInXml(xml, ext) {
-  const names = attributes(xml, /\btypeface\s*=\s*(?:"([^"]*)"|'([^']*)')/gu);
+  const names = drawingFonts(xml);
   if (ext === '.docx') {
     // Word runs and styles point at fonts through w:rFonts; fontTable declares
     // every face the package references, including unused theme faces.
@@ -136,4 +158,4 @@ async function extractDocumentFonts(filename, extension) {
   return { supported: true, fonts: [...found.values()].sort((a, b) => a.localeCompare(b, 'zh-CN')) };
 }
 
-module.exports = { extractDocumentFonts };
+module.exports = { extractDocumentFonts, FONT_DETECTION_VERSION };

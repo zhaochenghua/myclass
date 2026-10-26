@@ -49,8 +49,10 @@ const { startTestServer } = require('../server/testSupport');
       if (request.method() === 'POST') {
         return route.fulfill({ status: 201, json: { duplicate: false, faces: [{ family: '方正小标宋简体', style: 'Regular' }] } });
       }
+      const currentScanPending = scanPending;
+      scanPending = Math.max(0, scanPending - 1);
       return route.fulfill({ json: { supported: true, maxBytes: 64 * 1024 * 1024, items: fontItems,
-        missingFonts: missing, missingCourseware: missing.length ? 2 : 0, pendingRegeneration, scanPending } });
+        missingFonts: missing, missingCourseware: missing.length ? 2 : 0, pendingRegeneration, scanPending: currentScanPending } });
     });
 
     await page.goto(`${server.base}/admin.html`);
@@ -69,8 +71,9 @@ const { startTestServer } = require('../server/testSupport');
     assert.match(await page.locator('#regenerateFontsButton').innerText(), /重新生成待更新课件（2）/);
     assert.match(await page.locator('#fontScanStatus').innerText(), /还有 3 个旧课件待检查字体/);
     await page.screenshot({ path: path.join(output, 'fonts-missing.png'), fullPage: true });
+    // Legacy scanning continues automatically until the pending count reaches 0.
+    await page.waitForFunction(() => document.getElementById('fontScanStatus').hidden, null, { timeout: 15000 });
 
-    scanPending = 0;
     await page.locator('#fontFileInput').setInputFiles({ name: '方正小标宋简体.ttf', mimeType: 'font/ttf', buffer: Buffer.from('fixture') });
     await page.locator('#uploadFontsButton').click();
     await page.waitForFunction(() => document.getElementById('fontRegenerateStatus').textContent.includes('已重新生成 2 个课件'));

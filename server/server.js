@@ -16,8 +16,8 @@ const { createClassStore } = require('./classStore');
 const { createUsageStore, chinaDay } = require('./usageStore');
 const { createFontStore } = require('./fontStore');
 const { mountFontRoutes } = require('./fontHttp');
-const { extractDocumentFonts } = require('./documentFonts');
-const { normalizeFontFamily } = require('./fontNames');
+const { extractDocumentFonts, FONT_DETECTION_VERSION } = require('./documentFonts');
+const { isFamilyInstalled } = require('./fontNames');
 const { createFontRegeneration } = require('./fontRegeneration');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
@@ -185,7 +185,7 @@ async function detectMissingFonts(file, ext) {
   if (!families) return null;
   const { supported, fonts } = await extractDocumentFonts(file, ext);
   if (!supported) return null;
-  return fonts.filter(name => !families.has(normalizeFontFamily(name)));
+  return fonts.filter(name => !isFamilyInstalled(name, families));
 }
 
 const coursewareStore = createCoursewareStore({
@@ -193,6 +193,7 @@ const coursewareStore = createCoursewareStore({
   prefix: PATH_PREFIX,
   convertOfficeToPdf,
   detectMissingFonts,
+  fontDetectionVersion: FONT_DETECTION_VERSION,
   officeProfile: ext => {
     const base = PPT_ANIMATION_MODE === 'expand' && ['.ppt', '.pptx'].includes(ext) ? ANIMATION_PROFILE : '';
     return fontStore.revision() ? `${base || 'office'}-f${fontStore.revision()}` : base;

@@ -17,6 +17,9 @@ let fontMissingCourseware = 0;
 let fontRegeneratePending = 0;
 let fontRegenerating = false;
 let fontScanPending = 0;
+let fontScanTimer = null;
+let fontScanRounds = 0;
+let fontScanLastPending = -1;
 let drawLogRequest = 0;
 
 const COURSEWARE_DEFAULT_WIDTHS = { title: 230, fileName: 180, owner: 100, size: 90, createdAt: 160, actions: 180 };
@@ -56,6 +59,10 @@ function showLogin() {
   fontRegeneratePending = 0;
   fontRegenerating = false;
   fontScanPending = 0;
+  clearTimeout(fontScanTimer);
+  fontScanTimer = null;
+  fontScanRounds = 0;
+  fontScanLastPending = -1;
   $('#fontTableBody').replaceChildren();
   $('#fontUploadResults').replaceChildren();
   $('#fontStatus').textContent = '';
@@ -955,7 +962,7 @@ function renderFontMissing() {
   $('#fontMissingHelp').hidden = !fontMissing.length && !pending;
   const scan = $('#fontScanStatus');
   scan.hidden = !fontScanPending;
-  scan.textContent = fontScanPending ? `还有 ${fontScanPending} 个旧课件待检查字体，刷新本页可继续检查。` : '';
+  scan.textContent = fontScanPending ? `还有 ${fontScanPending} 个旧课件待检查字体，页面会自动分批检查。` : '';
   $('#fontMissingCount').textContent = fontMissing.length ? `（${fontMissing.length} 种，影响 ${fontMissingCourseware} 个课件）` : '';
   $('#regenerateFontsButton').hidden = !pending;
   $('#regenerateFontsButton').textContent = pending ? `重新生成待更新课件（${fontRegeneratePending}）` : '重新生成待更新课件';
@@ -991,8 +998,14 @@ async function fontApi(route = '', options = {}) {
   return data;
 }
 
-async function loadFonts({ preserveStatus = false } = {}) {
+async function loadFonts({ preserveStatus = false, autoScan = false } = {}) {
   if (fontBusy && !preserveStatus) return;
+  if (!autoScan) {
+    clearTimeout(fontScanTimer);
+    fontScanTimer = null;
+    fontScanRounds = 0;
+    fontScanLastPending = -1;
+  }
   const request = ++fontRequest;
   if (!preserveStatus) { $('#fontStatus').textContent = '正在读取字体...'; $('#fontStatus').classList.remove('is-error'); }
   try {
@@ -1006,6 +1019,7 @@ async function loadFonts({ preserveStatus = false } = {}) {
     fontScanPending = Number(data.scanPending) || 0;
     if (!preserveStatus || !data.supported) $('#fontStatus').textContent = data.message || '';
     renderFonts();
+    scheduleFontScan(autoScan);
   } catch (error) {
     if (request !== fontRequest) return;
     fontSupported = false;
@@ -1017,6 +1031,24 @@ async function loadFonts({ preserveStatus = false } = {}) {
     $('#fontStatus').classList.add('is-error');
     renderFontMissing();
   } finally { if (request === fontRequest) setFontControls(); }
+}
+
+// Old courseware is inspected in small batches so the fonts request stays
+// fast. Keep asking while the batch makes progress; stop when the count no
+// longer drops (unreadable originals) or when the user leaves the tab.
+function scheduleFontScan(autoScan) {
+  clearTimeout(fontScanTimer);
+  fontScanTimer = null;
+  if (!fontScanPending || fontScanRounds >= 30) return;
+  if (autoScan && fontScanPending >= fontScanLastPending) return;
+  fontScanLastPending = fontScanPending;
+  fontScanRounds++;
+  fontScanTimer = setTimeout(() => {
+    fontScanTimer = null;
+    const tab = $('#tab-fonts');
+    if (!token || fontBusy || fontRegenerating || (tab && tab.hidden)) return;
+    loadFonts({ preserveStatus: true, autoScan: true });
+  }, 250);
 }
 
 $('#fontSearch').addEventListener('input', () => { fontPage = 0; renderFonts(); });

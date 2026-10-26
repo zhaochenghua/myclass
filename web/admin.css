@@ -237,7 +237,7 @@
 .font-missing-header h3 { margin: 0; font-size: 1rem; color: #ffcf7a; }
 .font-missing-header .btn-secondary { margin-left: auto; }
 .font-missing-count { color: var(--muted); font-size: 0.9rem; font-weight: 400; }
-.font-missing-list { margin: 0.6rem 0 0; padding-left: 1.2rem; line-height: 1.7; overflow-wrap: anywhere; }
+.font-missing-list { margin: 0.6rem 0 0; padding-left: 1.2rem; line-height: 1.7; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
 .font-missing-titles { color: var(--muted); font-size: 0.9rem; }
 .font-missing-panel .class-help { margin: 0.4rem 0 0; }
 #fontRegenerateStatus:not(:empty) { margin-top: 0.6rem; }

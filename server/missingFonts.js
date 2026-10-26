@@ -2,7 +2,7 @@
 // records store the families that were absent when their PDF was generated;
 // the installed font set only grows, so the prompt is recomputed on every read
 // and already-installed fonts disappear without waiting for a regeneration.
-const { normalizeFontFamily, isFontReference } = require('./fontNames');
+const { normalizeFontFamily, isFontReference, isFamilyInstalled } = require('./fontNames');
 
 function visibleTo(item, userId, isAdmin) {
   if (isAdmin) return true;
@@ -11,14 +11,14 @@ function visibleTo(item, userId, isAdmin) {
 
 function stillMissing(item, families) {
   if (!Array.isArray(item.missingFonts) || !families) return [];
-  return item.missingFonts.filter(name => isFontReference(name) && !families.has(normalizeFontFamily(name)));
+  return item.missingFonts.filter(name => isFontReference(name) && !isFamilyInstalled(name, families));
 }
 
 // True when at least one font recorded as missing has since been installed, so
 // converting the original again can improve the published PDF.
 function needsRegeneration(item, families) {
   return Boolean(families) && Array.isArray(item.missingFonts) &&
-    item.missingFonts.some(name => isFontReference(name) && families.has(normalizeFontFamily(name)));
+    item.missingFonts.some(name => isFontReference(name) && isFamilyInstalled(name, families));
 }
 
 function summarizeMissingFonts(items, families, { userId, isAdmin = false, titleLimit = 5 } = {}) {
@@ -39,7 +39,10 @@ function summarizeMissingFonts(items, families, { userId, isAdmin = false, title
   }
   return {
     coursewareCount,
-    fonts: [...grouped.values()].sort((a, b) => a.family.localeCompare(b.family, 'zh-CN'))
+    // Most widely missing fonts first: the admin should upload the ones that
+    // fix the most courseware before the long tail.
+    fonts: [...grouped.values()].sort((a, b) =>
+      b.coursewareCount - a.coursewareCount || a.family.localeCompare(b.family, 'zh-CN'))
   };
 }
 

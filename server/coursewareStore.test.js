@@ -332,6 +332,21 @@ test('font scanning is bounded per call and legacy regeneration reuses the store
   assert.equal(await fs.readFile(path.join(f.root, 'legacy1.pptx'), 'utf8'), 'one');
 });
 
+test('cached font metadata is rescanned when the extraction rules change', async t => {
+  const f = await fixture(t, { fontDetectionVersion: 1, detectMissingFonts: async () => ['Old Font'] });
+  const item = await f.upload('lesson.pptx');
+  assert.equal(item.fontDetection, 1);
+  assert.deepEqual(item.missingFonts, ['Old Font']);
+  const reopened = createCoursewareStore({ root: f.root, prefix: '/myclass', fontDetectionVersion: 2,
+    detectMissingFonts: async () => ['New Font'],
+    convertOfficeToPdf: async (source, ext, output) => fs.writeFile(output, 'pdf') });
+  assert.deepEqual(await reopened.scanMissingFonts(10), { scanned: 1, pending: 0 });
+  const [stored] = await reopened.list('alice');
+  assert.equal(stored.fontDetection, 2);
+  assert.deepEqual(stored.missingFonts, ['New Font']);
+  assert.deepEqual(await reopened.scanMissingFonts(10), { scanned: 0, pending: 0 });
+});
+
 test('playback progress persists per teacher, survives restart and stays private', async t => {
   const f = await fixture(t);
   const shared = await f.upload('shared.pdf', 'admin');

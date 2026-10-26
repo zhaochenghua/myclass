@@ -21,7 +21,7 @@ function normalizeLink(url) {
 // One store per server process. All index mutations (including file publication
 // and removal) share this queue; readers see either the old or the new index.
 function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0, officeProfile = () => '',
-  detectMissingFonts = null }) {
+  detectMissingFonts = null, fontDetectionVersion = 1 }) {
   root = path.resolve(root);
   const indexPath = path.join(root, 'index.json');
   const objectsRoot = path.join(root, '.objects');
@@ -156,6 +156,11 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     return null;
   }
 
+  // Re-scan when font detection has never run or the extraction rules changed.
+  function needsFontScan(item) {
+    return item.missingFonts === undefined || item.fontDetection !== fontDetectionVersion;
+  }
+
   // The object bundle is authoritative, but an alias may outlive a manually
   // pruned object directory; try both before declaring the original missing.
   async function resolveOriginal(item, ext) {
@@ -262,6 +267,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
         if (uploadRequestId) result.uploadRequestId = uploadRequestId;
         if (OFFICE.has(ext)) {
           result.missingFonts = missingFonts;
+          result.fontDetection = fontDetectionVersion;
           try { result.conversion = JSON.parse(await fs.promises.readFile(path.join(bundle, 'conversion.json'), 'utf8')); }
           catch (error) { if (error.code !== 'ENOENT') throw error; }
         }
@@ -388,7 +394,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
   async function scanMissingFonts(limit = 20) {
     if (!detectMissingFonts) return { scanned: 0, pending: 0 };
     const pendingItems = (await readIndex())
-      .filter(item => item.missingFonts === undefined && officeExtensionFor(item));
+      .filter(item => officeExtensionFor(item) && needsFontScan(item));
     const updates = [];
     for (const item of pendingItems.slice(0, Math.max(0, Math.trunc(limit)))) {
       const ext = officeExtensionFor(item);
@@ -410,14 +416,15 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
         const at = new Date().toISOString();
         for (const update of updates) {
           const current = items.find(entry => entry.id === update.id);
-          if (!current || current.missingFonts !== undefined) continue;
+          if (!current || !needsFontScan(current)) continue;
           current.missingFonts = update.missing;
+          current.fontDetection = fontDetectionVersion;
           current.fontsScannedAt = at;
         }
         await saveIndex(items);
       });
     }
-    const pending = (await readIndex()).filter(item => item.missingFonts === undefined && officeExtensionFor(item)).length;
+    const pending = (await readIndex()).filter(item => officeExtensionFor(item) && needsFontScan(item)).length;
     return { scanned: updates.length, pending };
   }
 
@@ -484,6 +491,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
               current.storageKey = storageKey;
               current.size = previewStat.size;
               current.missingFonts = missingFonts;
+              current.fontDetection = fontDetectionVersion;
               current.regeneratedAt = new Date().toISOString();
               if (conversion) current.conversion = conversion;
               else delete current.conversion;

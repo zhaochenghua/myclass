@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { summarizeMissingFonts, needsRegeneration, stillMissing } = require('./missingFonts');
-const { normalizeFontFamily, fontFamilyAliases, isFontReference } = require('./fontNames');
+const { normalizeFontFamily, fontFamilyAliases, familyLookupNames, isFamilyInstalled, isFontReference } = require('./fontNames');
 
 const items = [
   { id: 'a', userId: 'alice', title: '语文课件', missingFonts: ['方正小标宋简体', 'Calibri'] },
@@ -20,6 +20,18 @@ test('font names normalize fontconfig aliases and vertical variants', () => {
   assert.equal(isFontReference('+mn-lt'), false);
   assert.equal(isFontReference('  '), false);
   assert.equal(isFontReference('微软雅黑'), true);
+});
+
+test('family matching ignores weight/style words encoded in the family name', () => {
+  assert.deepEqual(familyLookupNames('Source Han Sans CN Bold Italic'),
+    ['source han sans cn bold italic', 'source han sans cn bold', 'source han sans cn']);
+  assert.equal(isFamilyInstalled('思源黑体 CN Bold', new Set([normalizeFontFamily('思源黑体 CN')])), true);
+  assert.equal(isFamilyInstalled('思源黑体 CN Regular', new Set([normalizeFontFamily('思源黑体 CN')])), true);
+  assert.equal(isFamilyInstalled('Montserrat Bold', new Set([normalizeFontFamily('思源黑体 CN')])), false);
+  assert.equal(isFamilyInstalled('Montserrat', null), false);
+  const known = new Set([normalizeFontFamily('思源黑体 CN')]);
+  assert.deepEqual(stillMissing({ missingFonts: ['思源黑体 CN Bold', 'Montserrat'] }, known), ['Montserrat']);
+  assert.equal(needsRegeneration({ missingFonts: ['思源黑体 CN Bold'] }, known), true);
 });
 
 test('missing fonts are grouped per teacher scope and drop installed families', () => {
