@@ -54,7 +54,7 @@ test('upload, missing-font prompt and automatic regeneration work together', asy
   // Installing the font bumps the conversion profile, exactly like server.js.
   known.add(normalizeFontFamily('Missing Display'));
   profile = 'office-fabc123';
-  const regenerated = await service.regenerate();
+  const regenerated = await service.regenerate({ user: { id: 'alice', role: 'user' } });
   assert.equal(regenerated.supported, true);
   assert.deepEqual(regenerated.regenerated.map(item => item.id), [published.id]);
   assert.equal(regenerated.remaining, 0);

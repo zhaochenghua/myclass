@@ -2,7 +2,7 @@
 // the server lacks, then re-convert the affected Office originals after a font
 // is installed. Kept separate from server.js so the sequencing (limits, retries
 // and serialization) can be tested without LibreOffice or fontconfig.
-const { summarizeMissingFonts, needsRegeneration } = require('./missingFonts');
+const { summarizeMissingFonts, needsRegeneration, ownedBy } = require('./missingFonts');
 
 function integer(value, fallback, minimum) {
   const number = Number(value);
@@ -14,9 +14,10 @@ function createFontRegeneration({ fontStore, coursewareStore, limit = 10, scanLi
   const batchScan = integer(scanLimit, 10, 0);
   let queue = Promise.resolve();
 
-  // Missing state is per requester (teachers only see their own courseware);
-  // the pending regeneration count is global because installing a font on the
-  // server benefits every teacher's copy.
+  // Missing state and pending work are scoped to the requester's own
+  // courseware (administrators also see the shared/legacy platform bucket).
+  // Installing a font is still server-wide, but one teacher must not rewrite
+  // another teacher's published PDFs.
   async function state(user) {
     const families = await fontStore.knownFamilies();
     if (!families) return { missingFonts: [], missingCourseware: 0, pendingRegeneration: 0, scanPending: 0 };
@@ -30,22 +31,25 @@ function createFontRegeneration({ fontStore, coursewareStore, limit = 10, scanLi
       scanPending = Number(scan?.pending) || 0;
     }
     const items = await coursewareStore.readIndex();
-    const summary = summarizeMissingFonts(items, families, { userId: user?.id, isAdmin: user?.role === 'admin' });
+    const isAdmin = user?.role === 'admin';
+    const summary = summarizeMissingFonts(items, families, { userId: user?.id, isAdmin });
     return {
       missingFonts: summary.fonts,
       missingCourseware: summary.coursewareCount,
-      pendingRegeneration: items.filter(item => needsRegeneration(item, families)).length,
+      pendingRegeneration: items.filter(item => needsRegeneration(item, families) && ownedBy(item, user?.id, isAdmin)).length,
       scanPending
     };
   }
 
-  async function run({ force = false } = {}) {
+  async function run({ force = false, user } = {}) {
     const families = await fontStore.knownFamilies();
     if (!families) return { supported: false, regenerated: [], failed: [], remaining: 0 };
-    const pending = (await coursewareStore.readIndex()).filter(item => needsRegeneration(item, families));
+    const isAdmin = user?.role === 'admin';
+    const owned = (await coursewareStore.readIndex())
+      .filter(item => ownedBy(item, user?.id, isAdmin) && needsRegeneration(item, families));
     // A previous failure is retried only on explicit request, so the automatic
     // pass after an upload cannot hammer the same broken document.
-    const targets = (force ? pending : pending.filter(item => !item.regenerateError)).slice(0, batchLimit);
+    const targets = (force ? owned : owned.filter(item => !item.regenerateError)).slice(0, batchLimit);
     const regenerated = [];
     const failed = [];
     for (const item of targets) {
@@ -58,7 +62,8 @@ function createFontRegeneration({ fontStore, coursewareStore, limit = 10, scanLi
         failed.push({ id: item.id, title: item.title || item.fileName || item.id, error: error.message || '重新生成失败' });
       }
     }
-    const remaining = (await coursewareStore.readIndex()).filter(item => needsRegeneration(item, families)).length;
+    const remaining = (await coursewareStore.readIndex())
+      .filter(item => ownedBy(item, user?.id, isAdmin) && needsRegeneration(item, families)).length;
     return { supported: true, regenerated, failed, remaining };
   }
 

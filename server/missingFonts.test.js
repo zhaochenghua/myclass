@@ -9,7 +9,10 @@ const items = [
   { id: 'c', userId: 'bob', title: '别人的课件', missingFonts: ['方正小标宋简体'] },
   { id: 'd', userId: 'admin', title: '共享课件', missingFonts: ['Source Han Serif'] },
   { id: 'e', userId: 'alice', title: '无缺失', missingFonts: [] },
-  { id: 'f', userId: 'alice', title: '未扫描' }
+  { id: 'f', userId: 'alice', title: '未扫描' },
+  { id: 'g', userId: 'root', title: '管理员课件', missingFonts: ['Admin Own'] },
+  { id: 'h', userId: 'legacy', title: '旧版课件', missingFonts: ['Legacy Font'] },
+  { id: 'i', title: '未归属课件', missingFonts: ['Unowned Font'] }
 ];
 
 test('font names normalize fontconfig aliases and vertical variants', () => {
@@ -34,22 +37,27 @@ test('family matching ignores weight/style words encoded in the family name', ()
   assert.equal(needsRegeneration({ missingFonts: ['思源黑体 CN Bold'] }, known), true);
 });
 
-test('missing fonts are grouped per teacher scope and drop installed families', () => {
+test('each teacher only sees their own courseware; administrators also see shared and legacy uploads', () => {
   const known = new Set([normalizeFontFamily('Calibri')]);
   const alice = summarizeMissingFonts(items, known, { userId: 'alice' });
-  assert.equal(alice.coursewareCount, 3);
-  assert.deepEqual(alice.fonts.map(font => font.family).sort(), ['Source Han Serif', '方正小标宋简体'].sort());
-  const fangzheng = alice.fonts.find(font => font.family === '方正小标宋简体');
+  assert.equal(alice.coursewareCount, 2);
+  assert.deepEqual(alice.fonts.map(font => font.family), ['方正小标宋简体']);
+  const fangzheng = alice.fonts[0];
   assert.equal(fangzheng.coursewareCount, 2);
   assert.deepEqual(fangzheng.titles, ['语文课件', '数学课件']);
 
   const bob = summarizeMissingFonts(items, known, { userId: 'bob' });
-  assert.equal(bob.coursewareCount, 2);
-  assert.deepEqual(bob.fonts.map(font => font.family).sort(), ['Source Han Serif', '方正小标宋简体'].sort());
+  assert.equal(bob.coursewareCount, 1);
+  assert.deepEqual(bob.fonts.map(font => font.family), ['方正小标宋简体']);
 
+  // The administrator's own uploads plus the shared/legacy platform bucket,
+  // never another teacher's private courseware.
   const admin = summarizeMissingFonts(items, known, { userId: 'root', isAdmin: true });
   assert.equal(admin.coursewareCount, 4);
-  assert.equal(admin.fonts.find(font => font.family === '方正小标宋简体').coursewareCount, 3);
+  assert.deepEqual(admin.fonts.map(font => font.family).sort(),
+    ['Admin Own', 'Legacy Font', 'Source Han Serif', 'Unowned Font'].sort());
+  assert.equal(admin.fonts.some(font => font.family === '方正小标宋简体'), false);
+  assert.equal(admin.fonts.some(font => font.titles.includes('语文课件') || font.titles.includes('数学课件')), false);
 });
 
 test('an item needs regeneration only when a recorded missing font is now installed', () => {

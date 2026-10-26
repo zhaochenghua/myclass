@@ -4,9 +4,14 @@
 // and already-installed fonts disappear without waiting for a regeneration.
 const { normalizeFontFamily, isFontReference, isFamilyInstalled } = require('./fontNames');
 
-function visibleTo(item, userId, isAdmin) {
-  if (isAdmin) return true;
-  return !item.userId || item.userId === 'admin' || item.userId === 'legacy' || item.userId === userId;
+// Each teacher is responsible for their own uploads. Shared platform uploads
+// use the literal 'admin' owner and old installations use 'legacy'/no owner;
+// keep those manageable by administrators without exposing another teacher's
+// private courseware.
+function ownedBy(item, userId, isAdmin = false) {
+  if (!item || !userId) return false;
+  if (item.userId === userId) return true;
+  return Boolean(isAdmin) && (!item.userId || item.userId === 'admin' || item.userId === 'legacy');
 }
 
 function stillMissing(item, families) {
@@ -25,7 +30,7 @@ function summarizeMissingFonts(items, families, { userId, isAdmin = false, title
   const grouped = new Map();
   let coursewareCount = 0;
   for (const item of items) {
-    if (!item || typeof item !== 'object' || !visibleTo(item, userId, isAdmin)) continue;
+    if (!item || typeof item !== 'object' || !ownedBy(item, userId, isAdmin)) continue;
     const missing = stillMissing(item, families);
     if (!missing.length) continue;
     coursewareCount++;
@@ -46,4 +51,4 @@ function summarizeMissingFonts(items, families, { userId, isAdmin = false, title
   };
 }
 
-module.exports = { summarizeMissingFonts, needsRegeneration, stillMissing, visibleTo };
+module.exports = { summarizeMissingFonts, needsRegeneration, stillMissing, ownedBy };

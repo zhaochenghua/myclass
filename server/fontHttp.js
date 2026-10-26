@@ -23,7 +23,7 @@ function mountFontRoutes(app, { prefix, requireAuth, store, tempRoot, missingSta
     // courseware whose missing fonts were just installed.
     app.post(`${prefix}/api/fonts/regenerate`, requireAuth, async (req, res, next) => {
       res.setHeader('Cache-Control', 'no-store');
-      try { res.json(await regenerate({ force: req.query.force === '1' })); }
+      try { res.json(await regenerate({ force: req.query.force === '1', user: req.user })); }
       catch (error) { next(error); }
     });
   }

@@ -69,8 +69,9 @@ test('missing-font state is merged into the list and regeneration is exposed as 
       if (broken) throw new Error('fontconfig unavailable');
       return { missingFonts: [{ family: 'Lack', coursewareCount: 1, titles: ['课件'] }], missingCourseware: 1, pendingRegeneration: 1, checkedUser: user.id };
     },
-    regenerate: async ({ force }) => {
+    regenerate: async ({ force, user }) => {
       regenerated++;
+      assert.equal(user.id, 'alice');
       return { supported: true, regenerated: [{ id: 'a', title: '课件' }], failed: [], remaining: 0, force };
     }
   });
