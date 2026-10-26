@@ -57,6 +57,54 @@ test('Excel paste supports headers and whitespace, rejects duplicate or malforme
   assert.deepEqual(candidates(null, 'name', 3).map(item => item.text), ['01', '02', '03']);
 });
 
+test('draw history is recorded per class, hidden from list responses and clearable without resetting progress', async t => {
+  const store = await fixture(t);
+  const item = await store.create('alice', { name: '一班' });
+  const students = [{ number: '01', name: '张三' }, { number: '02', name: '李四' }];
+  await store.update('alice', item.id, { name: item.name, students, revision: 1 });
+  const first = await store.draw('alice', item.id, 'name');
+  const second = await store.draw('alice', item.id, 'number');
+  const log = await store.drawLog('alice', item.id);
+  assert.equal(log.total, 2);
+  assert.deepEqual(log.items.map(entry => entry.number), [second.candidate.id, first.candidate.id]);
+  assert.equal(log.items[0].mode, 'number');
+  assert.equal(log.items[0].name, students.find(student => student.number === log.items[0].number).name);
+  assert.ok(log.items.every(entry => Date.parse(entry.at) > 0));
+  assert.equal('drawLog' in (await store.list('alice'))[0], false);
+  assert.equal('drawLog' in await store.get('alice', item.id), false);
+  await assert.rejects(store.drawLog('bob', item.id), { status: 404 });
+  await assert.rejects(store.clearDrawLog('bob', item.id), { status: 404 });
+  const third = await store.draw('alice', item.id, 'name');
+  assert.equal(third.round, 2);
+  assert.deepEqual((await store.drawLog('alice', item.id)).items.map(entry => entry.number),
+    [third.candidate.id, second.candidate.id, first.candidate.id]);
+  assert.deepEqual(await store.clearDrawLog('alice', item.id), { cleared: 3 });
+  assert.deepEqual(await store.drawLog('alice', item.id), { items: [], total: 0 });
+});
+
+test('draw history keeps only the newest 500 entries and clamps the requested page size', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'myclass-draw-log-test-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, 'classes.json');
+  const store = createClassStore(filename);
+  const item = await store.create('alice', { name: '一班' });
+  await store.update('alice', item.id, { name: '一班', students: [{ number: '01', name: '张三' }], revision: 1 });
+  const data = JSON.parse(await fs.readFile(filename, 'utf8'));
+  data[0].drawLog = Array.from({ length: 600 }, (_, index) => ({
+    number: '01', name: '张三', mode: 'name', round: 1, remaining: 0, total: 1,
+    at: new Date(index).toISOString()
+  }));
+  await fs.writeFile(filename, JSON.stringify(data));
+  await store.draw('alice', item.id, 'name');
+  const saved = JSON.parse(await fs.readFile(filename, 'utf8'))[0].drawLog;
+  assert.equal(saved.length, 500);
+  assert.ok(Date.parse(saved[saved.length - 1].at) > Date.parse(saved[saved.length - 2].at),
+    'the new draw must be the newest entry');
+  const page = await store.drawLog('alice', item.id, { limit: 999 });
+  assert.equal(page.items.length, 500);
+  assert.equal(page.total, 500);
+});
+
 test('removing a teacher removes only that teacher’s rosters', async t => {
   const store = await fixture(t);
   await store.create('alice', { name: '一班' });

@@ -16,6 +16,9 @@ const { createClassStore } = require('./classStore');
 const { createUsageStore, chinaDay } = require('./usageStore');
 const { createFontStore } = require('./fontStore');
 const { mountFontRoutes } = require('./fontHttp');
+const { extractDocumentFonts } = require('./documentFonts');
+const { normalizeFontFamily } = require('./fontNames');
+const { createFontRegeneration } = require('./fontRegeneration');
 
 const SERVER_IP = process.env.SERVER_IP || '10.30.13.1';
 const HOST = process.env.HOST || '0.0.0.0';
@@ -169,10 +172,27 @@ if (!['expand', 'static'].includes(PPT_ANIMATION_MODE)) throw new Error('PPT_ANI
 const fontStore = createFontStore();
 const fontsReady = fontStore.initialize();
 fontsReady.catch(error => console.error('Font storage unavailable:', error.message));
+// Cap expensive re-conversions per request; the admin page asks again while
+// courseware remains, so a long batch never blocks one HTTP response for long.
+const FONT_REGENERATE_LIMIT = Math.max(1, Number(process.env.FONT_REGENERATE_LIMIT || 10));
+const FONT_SCAN_LIMIT = Math.max(0, Number(process.env.FONT_SCAN_LIMIT || 10));
+
+// Detect fonts the document needs but the server cannot render. Returns an
+// array of missing family names, or null when the platform cannot query fonts.
+async function detectMissingFonts(file, ext) {
+  if (!['.pptx', '.docx'].includes(ext)) return [];
+  const families = await fontStore.knownFamilies();
+  if (!families) return null;
+  const { supported, fonts } = await extractDocumentFonts(file, ext);
+  if (!supported) return null;
+  return fonts.filter(name => !families.has(normalizeFontFamily(name)));
+}
+
 const coursewareStore = createCoursewareStore({
   root: coursewareRoot,
   prefix: PATH_PREFIX,
   convertOfficeToPdf,
+  detectMissingFonts,
   officeProfile: ext => {
     const base = PPT_ANIMATION_MODE === 'expand' && ['.ppt', '.pptx'].includes(ext) ? ANIMATION_PROFILE : '';
     return fontStore.revision() ? `${base || 'office'}-f${fontStore.revision()}` : base;
@@ -186,6 +206,12 @@ const {
   rename: renameStoredCourseware,
   readIndex: readCoursewareIndex
 } = coursewareStore;
+
+// The admin font page shows which fonts courseware still lacks and re-converts
+// affected Office files once an installed font can be applied.
+const fontRegeneration = createFontRegeneration({
+  fontStore, coursewareStore, limit: FONT_REGENERATE_LIMIT, scanLimit: FONT_SCAN_LIMIT
+});
 
 server.requestTimeout = COURSEWARE_REQUEST_TIMEOUT_MS;
 server.timeout = COURSEWARE_REQUEST_TIMEOUT_MS;
@@ -221,7 +247,8 @@ app.use((req, res, next) => {
   next();
 });
 
-mountFontRoutes(app, { prefix: PATH_PREFIX, requireAuth, store: fontStore, tempRoot });
+mountFontRoutes(app, { prefix: PATH_PREFIX, requireAuth, store: fontStore, tempRoot,
+  missingState: fontRegeneration.state, regenerate: fontRegeneration.regenerate });
 
 app.get('/', (req, res) => {
   res.redirect(`${PATH_PREFIX}/`);
@@ -529,6 +556,17 @@ app.get(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) =>
 });
 app.post(`${PATH_PREFIX}/api/classes/:id/draw`, requireAuth, async (req, res, next) => {
   try { res.set('Cache-Control', 'no-store').json(await classStore.draw(req.user.id, req.params.id, req.body?.mode)); }
+  catch (error) { next(error); }
+});
+// 已抽学生记录：供教师在班级管理中回顾课堂提问情况
+app.get(`${PATH_PREFIX}/api/classes/:id/draw-log`, requireAuth, async (req, res, next) => {
+  try {
+    const limit = Number.parseInt(req.query.limit, 10);
+    res.set('Cache-Control', 'no-store').json(await classStore.drawLog(req.user.id, req.params.id, { limit }));
+  } catch (error) { next(error); }
+});
+app.delete(`${PATH_PREFIX}/api/classes/:id/draw-log`, requireAuth, async (req, res, next) => {
+  try { res.json(await classStore.clearDrawLog(req.user.id, req.params.id)); }
   catch (error) { next(error); }
 });
 app.get(`${PATH_PREFIX}/api/classes/:id/touch-calibration`, requireAuth, async (req, res, next) => {

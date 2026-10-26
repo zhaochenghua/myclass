@@ -176,12 +176,22 @@
           <h2>服务器字体</h2>
           <button class="btn-secondary" id="refreshFontsButton" type="button">刷新</button>
         </div>
+        <section class="font-missing-panel" id="fontMissingPanel" hidden aria-live="polite">
+          <div class="font-missing-header">
+            <h3>课件缺少的字体 <span id="fontMissingCount" class="font-missing-count"></span></h3>
+            <button class="btn-secondary" id="regenerateFontsButton" type="button" hidden>重新生成待更新课件</button>
+          </div>
+          <p class="class-help" id="fontMissingHelp">上传下列字体后，系统会自动重新生成使用这些字体的课件，无需重新上传课件。</p>
+          <p class="class-help" id="fontScanStatus" hidden></p>
+          <ul id="fontMissingList" class="font-missing-list"></ul>
+          <p class="class-help" id="fontRegenerateStatus" role="status"></p>
+        </section>
         <form id="fontUploadForm" class="font-upload-form">
           <label for="fontFileInput">字体文件</label>
           <input id="fontFileInput" type="file" accept=".ttf,.otf,.ttc" multiple required disabled>
           <button class="btn-secondary" id="uploadFontsButton" type="submit" disabled>上传并安装</button>
         </form>
-        <p class="class-help">TTF / OTF / TTC，单个不超过 64MB。请使用有权在服务器使用的字体；已有课件需重新上传后生效。</p>
+        <p class="class-help">TTF / OTF / TTC，单个不超过 64MB。请使用有权在服务器使用的字体；上传后会自动重新生成缺少这些字体的课件。</p>
         <p id="fontStatus" role="status" aria-live="polite"></p>
         <ul id="fontUploadResults" class="font-upload-results" aria-live="polite"></ul>
         <label class="font-search" for="fontSearch">搜索字体 <input id="fontSearch" type="search" placeholder="字体名称或字重" maxlength="100"></label>
@@ -227,6 +237,18 @@
                 <button class="btn-danger" id="deleteClassButton" type="button">删除班级</button>
               </div>
             </form>
+            <section class="class-draw-log" id="classDrawLog" hidden aria-live="polite">
+              <div class="class-draw-log-header">
+                <h3>已抽学生记录 <span id="classDrawLogCount" class="muted"></span></h3>
+                <div class="class-draw-log-actions">
+                  <button class="btn-secondary" id="refreshDrawLogButton" type="button">刷新记录</button>
+                  <button class="btn-danger" id="clearDrawLogButton" type="button">清空记录</button>
+                </div>
+              </div>
+              <p class="class-help">上课时抽中的学生会自动记录在这里，方便课后回顾课堂提问情况；最多保留最近 500 条，清空记录不会重置抽取进度。</p>
+              <ol id="classDrawLogList" class="class-draw-log-list"></ol>
+              <p class="class-help" id="classDrawLogEmpty">暂无抽取记录。</p>
+            </section>
           </div>
         </div>
       </div>

@@ -226,6 +226,112 @@ test('animation profiles do not reuse static previews; cached metadata and refer
 });
 
 
+test('courseware records detected missing fonts and regenerates in place after they are installed', async t => {
+  let profile = '';
+  let conversions = 0;
+  let missing = ['Demo CJK'];
+  const f = await fixture(t, {
+    officeProfile: () => profile,
+    detectMissingFonts: async () => missing,
+    convertOfficeToPdf: async (source, ext, output) => {
+      conversions++;
+      await fs.writeFile(output, `preview-${profile || 'base'}`);
+    }
+  });
+  const item = await f.upload('lesson.pptx');
+  assert.deepEqual(item.missingFonts, ['Demo CJK']);
+  assert.equal(await fs.readFile(f.local(item), 'utf8'), 'preview-base');
+  const url = item.url;
+  profile = 'office-fabcd1234';
+  missing = [];
+  const result = await f.store.regenerate(item.id);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.missingFonts, []);
+  assert.equal(conversions, 2);
+  const [stored] = await f.store.list('alice');
+  assert.equal(stored.url, url);
+  assert.deepEqual(stored.missingFonts, []);
+  assert.notEqual(stored.storageKey, item.storageKey);
+  assert.equal(await fs.readFile(f.local(stored), 'utf8'), 'preview-office-fabcd1234');
+  await assert.rejects(fs.access(f.bundle(item)), { code: 'ENOENT' });
+  await fs.access(f.bundle(stored));
+});
+
+test('a failed font regeneration keeps the published preview and records a retryable error', async t => {
+  let profile = '';
+  let fail = false;
+  const f = await fixture(t, {
+    officeProfile: () => profile,
+    detectMissingFonts: async () => ['Demo'],
+    convertOfficeToPdf: async (source, ext, output) => {
+      if (fail) throw Object.assign(new Error('font conversion failed'), { publicMessage: '字体转换失败' });
+      await fs.writeFile(output, 'preview');
+    }
+  });
+  const item = await f.upload('lesson.pptx');
+  profile = 'office-f1';
+  fail = true;
+  const result = await f.store.regenerate(item.id);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, '字体转换失败');
+  assert.equal(await fs.readFile(f.local(item), 'utf8'), 'preview');
+  const [stored] = await f.store.list('alice');
+  assert.equal(stored.storageKey, item.storageKey);
+  assert.equal(stored.regenerateError, '字体转换失败');
+  fail = false;
+  const retried = await f.store.regenerate(item.id);
+  assert.equal(retried.ok, true);
+  assert.equal((await f.store.list('alice'))[0].regenerateError, undefined);
+});
+
+test('legacy courseware is scanned once for missing fonts and a missing original is not retried forever', async t => {
+  let scans = 0;
+  const f = await fixture(t, { detectMissingFonts: async () => { scans++; return ['Old Font']; } });
+  await fs.writeFile(path.join(f.root, 'index.json'), JSON.stringify([
+    { id: 'old1', userId: 'alice', title: 'old', fileName: 'old.pptx',
+      url: '/myclass/public/courseware/old1.pdf', originalUrl: '/myclass/public/courseware/old1.pptx' },
+    { id: 'gone', userId: 'alice', title: 'gone', fileName: 'gone.docx',
+      url: '/myclass/public/courseware/gone.pdf', originalUrl: '/myclass/public/courseware/gone.docx' }
+  ]));
+  await fs.writeFile(path.join(f.root, 'old1.pptx'), 'legacy original');
+  const first = await f.store.scanMissingFonts(10);
+  assert.equal(first.scanned, 2);
+  assert.equal(first.pending, 0);
+  assert.equal(scans, 1);
+  const index = await f.store.readIndex();
+  assert.deepEqual(index.find(entry => entry.id === 'old1').missingFonts, ['Old Font']);
+  assert.deepEqual(index.find(entry => entry.id === 'gone').missingFonts, []);
+  const second = await f.store.scanMissingFonts(10);
+  assert.equal(second.scanned, 0);
+  assert.equal(scans, 1);
+});
+
+test('font scanning is bounded per call and legacy regeneration reuses the stored original', async t => {
+  let profile = '';
+  const scans = [];
+  const f = await fixture(t, {
+    officeProfile: () => profile,
+    detectMissingFonts: async file => { scans.push(path.basename(file)); return ['Demo']; },
+    convertOfficeToPdf: async (source, ext, output) => { await fs.writeFile(output, `pdf-${profile}`); }
+  });
+  await fs.writeFile(path.join(f.root, 'index.json'), JSON.stringify([
+    { id: 'legacy1', userId: 'alice', title: 'legacy', fileName: 'legacy.pptx',
+      url: '/myclass/public/courseware/legacy1.pdf', originalUrl: '/myclass/public/courseware/legacy1.pptx' },
+    { id: 'legacy2', userId: 'alice', title: 'legacy2', fileName: 'legacy2.docx',
+      url: '/myclass/public/courseware/legacy2.pdf', originalUrl: '/myclass/public/courseware/legacy2.docx' }
+  ]));
+  await fs.writeFile(path.join(f.root, 'legacy1.pptx'), 'one');
+  await fs.writeFile(path.join(f.root, 'legacy2.docx'), 'two');
+  assert.deepEqual(await f.store.scanMissingFonts(1), { scanned: 1, pending: 1 });
+  assert.equal(scans.length, 1);
+  assert.deepEqual(await f.store.scanMissingFonts(10), { scanned: 1, pending: 0 });
+  profile = 'office-f9';
+  const regenerated = await f.store.regenerate('legacy1');
+  assert.equal(regenerated.ok, true);
+  assert.equal(await fs.readFile(path.join(f.root, 'legacy1.pdf'), 'utf8'), 'pdf-office-f9');
+  assert.equal(await fs.readFile(path.join(f.root, 'legacy1.pptx'), 'utf8'), 'one');
+});
+
 test('playback progress persists per teacher, survives restart and stays private', async t => {
   const f = await fixture(t);
   const shared = await f.upload('shared.pdf', 'admin');

@@ -5,6 +5,10 @@ const { validateProfile } = require('../web/touchCalibrationMath');
 const { candidates, nextDraw } = require('../web/studentRoster');
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
+// Keep enough history to review a whole term without letting a long-lived
+// class file grow without bound.
+const DRAW_LOG_LIMIT = 500;
+const DRAW_LOG_DEFAULT_LIMIT = 100;
 
 function textField(value, label, maxLength) {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > maxLength || /[\x00-\x1f\x7f]/.test(value)) {
@@ -60,14 +64,27 @@ function createClassStore(filename) {
     writes = result.catch(() => {});
     return result;
   }
+  // Read-only access still waits for pending writes, so a draw that just
+  // happened is visible without rewriting classes.json for every GET.
+  async function inspect(operation) {
+    await writes;
+    return operation(await load());
+  }
   function find(items, ownerId, id) {
     const item = items.find(item => item.id === id && item.ownerId === ownerId);
     if (!item) throw fail(404, '班级不存在或无权访问');
     return item;
   }
+  // Draw history can hold 500 entries per class; list/detail responses only
+  // need roster metadata, so the log has its own endpoint.
+  function publicItem(item) {
+    if (!item || typeof item !== 'object') return item;
+    const { drawLog, ...rest } = item;
+    return rest;
+  }
   return {
-    async list(ownerId) { return (await load()).filter(item => item.ownerId === ownerId); },
-    async get(ownerId, id) { return find(await load(), ownerId, id); },
+    async list(ownerId) { return (await load()).filter(item => item.ownerId === ownerId).map(publicItem); },
+    async get(ownerId, id) { return publicItem(find(await load(), ownerId, id)); },
     draw(ownerId, id, mode) {
       if (!['name', 'number'].includes(mode)) throw fail(400, '抽取方式无效');
       return change(items => {
@@ -75,7 +92,30 @@ function createClassStore(filename) {
         if (!item.students.length) throw fail(400, '这个班级还没有学生，请先在管理界面录入名单');
         const { state, ...outcome } = nextDraw(candidates(item, mode), item.studentDraw);
         item.studentDraw = state;
+        const student = item.students.find(entry => entry.number === outcome.candidate.id);
+        item.drawLog = [...(Array.isArray(item.drawLog) ? item.drawLog : []), {
+          number: String(outcome.candidate.id),
+          name: student?.name || String(outcome.candidate.text || ''),
+          mode, round: outcome.round, remaining: outcome.remaining, total: outcome.total,
+          at: new Date().toISOString()
+        }].slice(-DRAW_LOG_LIMIT);
         return outcome;
+      });
+    },
+    drawLog(ownerId, id, { limit = DRAW_LOG_DEFAULT_LIMIT } = {}) {
+      const size = Number.isSafeInteger(limit) ? Math.min(DRAW_LOG_LIMIT, Math.max(1, limit)) : DRAW_LOG_DEFAULT_LIMIT;
+      return inspect(items => {
+        const item = find(items, ownerId, id);
+        const entries = Array.isArray(item.drawLog) ? item.drawLog : [];
+        return { items: entries.slice(-size).reverse(), total: entries.length };
+      });
+    },
+    clearDrawLog(ownerId, id) {
+      return change(items => {
+        const item = find(items, ownerId, id);
+        const cleared = Array.isArray(item.drawLog) ? item.drawLog.length : 0;
+        item.drawLog = [];
+        return { cleared };
       });
     },
     setCalibration(ownerId, id, body) {
@@ -108,7 +148,7 @@ function createClassStore(filename) {
         if (body.revision !== item.revision) throw fail(409, '班级已在其他页面修改，请刷新后重新编辑');
         if (items.some(other => other.id !== id && other.ownerId === ownerId && other.name === name)) throw fail(409, '已存在同名班级');
         Object.assign(item, { name, students, revision: item.revision + 1, updatedAt: new Date().toISOString() });
-        return item;
+        return publicItem(item);
       });
     },
     remove(ownerId, id, revision) {

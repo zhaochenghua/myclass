@@ -2,12 +2,31 @@ const fs = require('node:fs/promises');
 const multer = require('multer');
 const { MAX_FONT_BYTES } = require('./fontStore');
 
-function mountFontRoutes(app, { prefix, requireAuth, store, tempRoot }) {
+function mountFontRoutes(app, { prefix, requireAuth, store, tempRoot, missingState, regenerate }) {
   const upload = multer({ dest: tempRoot, limits: { fileSize: MAX_FONT_BYTES, files: 1, fields: 0 } });
   app.get(`${prefix}/api/fonts`, requireAuth, async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
-    try { res.json(await store.list()); } catch (error) { next(error); }
+    try {
+      const list = await store.list();
+      // Missing-font state must never prevent browsing the installed fonts.
+      const state = missingState
+        ? await missingState(req.user).catch(error => {
+          console.warn('缺少字体统计不可用:', error.message);
+          return null;
+        })
+        : null;
+      res.json(state ? { ...list, ...state } : list);
+    } catch (error) { next(error); }
   });
+  if (regenerate) {
+    // Called by the admin page after a batch of uploads; re-converts the
+    // courseware whose missing fonts were just installed.
+    app.post(`${prefix}/api/fonts/regenerate`, requireAuth, async (req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store');
+      try { res.json(await regenerate({ force: req.query.force === '1' })); }
+      catch (error) { next(error); }
+    });
+  }
   app.post(`${prefix}/api/fonts`, requireAuth, (req, res, next) => {
     upload.single('file')(req, res, async error => {
       try {

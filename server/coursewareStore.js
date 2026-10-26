@@ -20,7 +20,8 @@ function normalizeLink(url) {
 
 // One store per server process. All index mutations (including file publication
 // and removal) share this queue; readers see either the old or the new index.
-function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0, officeProfile = () => '' }) {
+function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0, officeProfile = () => '',
+  detectMissingFonts = null }) {
   root = path.resolve(root);
   const indexPath = path.join(root, 'index.json');
   const objectsRoot = path.join(root, '.objects');
@@ -140,6 +141,71 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     return hash.digest('hex');
   }
 
+  // Office records keep the original next to the generated PDF; derive its
+  // location from the stored record so regeneration also works for legacy
+  // entries that predate storage keys.
+  function officeExtensionFor(item) {
+    if (!item || item.linkUrl) return null;
+    for (const value of [item.originalUrl, item.fileName, item.url]) {
+      if (typeof value !== 'string' || !value) continue;
+      let pathname;
+      try { pathname = new URL(value, 'http://localhost').pathname; } catch { pathname = value; }
+      const ext = path.extname(pathname).toLowerCase();
+      if (OFFICE.has(ext)) return ext;
+    }
+    return null;
+  }
+
+  // The object bundle is authoritative, but an alias may outlive a manually
+  // pruned object directory; try both before declaring the original missing.
+  async function resolveOriginal(item, ext) {
+    checkId(item.id);
+    const candidates = [];
+    if (item.storageKey) candidates.push(path.join(objectDirectory(item.storageKey), `original${ext}`));
+    candidates.push(path.join(root, `${item.id}${ext}`));
+    for (const candidate of candidates) {
+      if (await fs.promises.access(candidate).then(() => true, () => false)) return candidate;
+    }
+    return null;
+  }
+
+  // Detection is advisory: a font we cannot read must never fail an upload.
+  async function detectFontsFor(file, ext) {
+    if (!detectMissingFonts || !OFFICE.has(ext)) return [];
+    try {
+      const missing = await detectMissingFonts(file, ext);
+      return Array.isArray(missing) ? missing.filter(name => typeof name === 'string' && name.trim()) : [];
+    } catch (error) {
+      console.warn('课件字体检测失败:', error.message);
+      return [];
+    }
+  }
+
+  // Convert a source file into a content-addressed bundle. Conversion happens
+  // in a staging directory so a crash never publishes a half-written object.
+  async function buildBundle(sourceFile, ext, bundle) {
+    const staging = await fs.promises.mkdtemp(path.join(objectsRoot, '.pending-'));
+    try {
+      const stagedOriginal = path.join(staging, `original${ext}`);
+      await fs.promises.copyFile(sourceFile, stagedOriginal);
+      if (OFFICE.has(ext)) {
+        const conversion = await convertOfficeToPdf(stagedOriginal, ext, path.join(staging, 'preview.pdf'), crypto.randomUUID());
+        if (conversion) await fs.promises.writeFile(path.join(staging, 'conversion.json'), JSON.stringify(conversion));
+        if (ext === '.pptx') {
+          try { await extractPptxVideos(stagedOriginal, path.join(staging, 'embedded')); }
+          catch (error) {
+            await fs.promises.rm(path.join(staging, 'embedded'), { recursive: true, force: true });
+            console.warn('PPTX video extraction deferred:', error.message);
+          }
+        }
+      }
+      await fs.promises.mkdir(path.dirname(bundle), { recursive: true });
+      await fs.promises.rename(staging, bundle);
+    } finally {
+      await fs.promises.rm(staging, { recursive: true, force: true });
+    }
+  }
+
   async function linkFile(source, destination) {
     try {
       await fs.promises.link(source, destination);
@@ -173,28 +239,12 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
           await fs.promises.access(bundle);
         } catch (error) {
           if (error.code !== 'ENOENT') throw error;
-          const staging = await fs.promises.mkdtemp(path.join(objectsRoot, '.pending-'));
-          try {
-            const stagedOriginal = path.join(staging, `original${ext}`);
-            await fs.promises.copyFile(file.path, stagedOriginal);
-            if (OFFICE.has(ext)) {
-              const conversion = await convertOfficeToPdf(stagedOriginal, ext, path.join(staging, 'preview.pdf'), crypto.randomUUID());
-              if (conversion) await fs.promises.writeFile(path.join(staging, 'conversion.json'), JSON.stringify(conversion));
-              if (ext === '.pptx') {
-                try { await extractPptxVideos(stagedOriginal, path.join(staging, 'embedded')); }
-                catch (error) {
-                  await fs.promises.rm(path.join(staging, 'embedded'), { recursive: true, force: true });
-                  console.warn('PPTX video extraction deferred:', error.message);
-                }
-              }
-            }
-            await fs.promises.mkdir(path.dirname(bundle), { recursive: true });
-            await fs.promises.rename(staging, bundle);
-            newBundle = true;
-          } finally {
-            await fs.promises.rm(staging, { recursive: true, force: true });
-          }
+          await buildBundle(file.path, ext, bundle);
+          newBundle = true;
         }
+        // Check the original already stored in the bundle, so a deduplicated
+        // upload reports the same missing fonts as the first one.
+        const missingFonts = await detectFontsFor(original, ext);
         return await mutate(async () => {
         const items = await readIndex();
         const existing = uploadRequestId && items.find(item => item.userId === userId && item.uploadRequestId === uploadRequestId);
@@ -211,6 +261,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
           url: urlFor(id, outputExt), storageKey };
         if (uploadRequestId) result.uploadRequestId = uploadRequestId;
         if (OFFICE.has(ext)) {
+          result.missingFonts = missingFonts;
           try { result.conversion = JSON.parse(await fs.promises.readFile(path.join(bundle, 'conversion.json'), 'utf8')); }
           catch (error) { if (error.code !== 'ENOENT') throw error; }
         }
@@ -331,6 +382,150 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     });
   }
 
+  // Existing courseware was published before font detection existed. Inspect a
+  // bounded batch of Office originals per call; the admin page refreshes the
+  // font list, which lets the rest finish on later requests without blocking.
+  async function scanMissingFonts(limit = 20) {
+    if (!detectMissingFonts) return { scanned: 0, pending: 0 };
+    const pendingItems = (await readIndex())
+      .filter(item => item.missingFonts === undefined && officeExtensionFor(item));
+    const updates = [];
+    for (const item of pendingItems.slice(0, Math.max(0, Math.trunc(limit)))) {
+      const ext = officeExtensionFor(item);
+      try {
+        const source = await resolveOriginal(item, ext);
+        // A record whose original is gone cannot be checked or regenerated;
+        // record an empty list so it does not consume the scan budget forever.
+        const missing = source ? (await detectMissingFonts(source, ext)) || [] : [];
+        updates.push({ id: item.id, missing });
+      } catch (error) {
+        // Keep missingFonts undefined so a later font-page refresh retries a
+        // transient read failure instead of silently claiming "nothing missing".
+        console.warn('课件字体检测失败:', error.message);
+      }
+    }
+    if (updates.length) {
+      await mutate(async () => {
+        const items = await readIndex();
+        const at = new Date().toISOString();
+        for (const update of updates) {
+          const current = items.find(entry => entry.id === update.id);
+          if (!current || current.missingFonts !== undefined) continue;
+          current.missingFonts = update.missing;
+          current.fontsScannedAt = at;
+        }
+        await saveIndex(items);
+      });
+    }
+    const pending = (await readIndex()).filter(item => item.missingFonts === undefined && officeExtensionFor(item)).length;
+    return { scanned: updates.length, pending };
+  }
+
+  // Re-convert an Office original after its missing fonts were installed. The
+  // public URL and record ID stay stable; only the cached PDF object changes.
+  async function regenerate(id) {
+    checkId(id);
+    const snapshot = await readIndex();
+    const item = snapshot.find(entry => entry.id === id);
+    if (!item) return null;
+    const title = item.title || item.fileName || item.id;
+    const ext = officeExtensionFor(item);
+    if (!ext) return null;
+
+    const fail = async message => {
+      await mutate(async () => {
+        const items = await readIndex();
+        const current = items.find(entry => entry.id === id);
+        if (!current) return;
+        current.regenerateError = message;
+        current.regenerateErrorAt = new Date().toISOString();
+        await saveIndex(items);
+      }).catch(() => {});
+      return { ok: false, id, title, error: message };
+    };
+
+    try {
+      const previousKey = item.storageKey || '';
+      const source = await resolveOriginal(item, ext);
+      if (!source) return fail('原始课件文件不存在，无法重新生成');
+      const profile = officeProfile(ext);
+      const storageKey = `${await hashFile(source)}${ext}${profile ? `.${profile}` : ''}`;
+      const result = await withObject(storageKey, async () => {
+        const bundle = objectDirectory(storageKey);
+        let newBundle = false;
+        try {
+          if (previousKey !== storageKey) {
+            try {
+              await fs.promises.access(bundle);
+            } catch (error) {
+              if (error.code !== 'ENOENT') throw error;
+              await buildBundle(source, ext, bundle);
+              newBundle = true;
+            }
+          }
+          const missingFonts = await detectFontsFor(path.join(bundle, `original${ext}`), ext);
+          const preview = path.join(bundle, 'preview.pdf');
+          const previewStat = await fs.promises.stat(preview);
+          let conversion;
+          try { conversion = JSON.parse(await fs.promises.readFile(path.join(bundle, 'conversion.json'), 'utf8')); }
+          catch (error) { if (error.code !== 'ENOENT') throw error; }
+          return await mutate(async () => {
+            const items = await readIndex();
+            const current = items.find(entry => entry.id === id);
+            if (!current) throw storageError(404, '课件不存在');
+            const alias = path.join(root, `${id}.pdf`);
+            const temporary = path.join(root, `.${id}-${crypto.randomUUID()}.pdf`);
+            const previousPreview = previousKey ? path.join(objectDirectory(previousKey), 'preview.pdf') : '';
+            let replacedAlias = false;
+            try {
+              await linkFile(preview, temporary);
+              await fs.promises.rename(temporary, alias);
+              replacedAlias = true;
+              current.storageKey = storageKey;
+              current.size = previewStat.size;
+              current.missingFonts = missingFonts;
+              current.regeneratedAt = new Date().toISOString();
+              if (conversion) current.conversion = conversion;
+              else delete current.conversion;
+              delete current.regenerateError;
+              delete current.regenerateErrorAt;
+              await saveIndex(items);
+              return { ok: true, id, title: current.title || title, missingFonts, storageKey };
+            } catch (error) {
+              // The index still points at the old object; put its PDF back.
+              if (replacedAlias && previousPreview) {
+                const restore = path.join(root, `.${id}-${crypto.randomUUID()}.pdf`);
+                try {
+                  await linkFile(previousPreview, restore);
+                  await fs.promises.rename(restore, alias);
+                } catch { /* keep whatever preview is already published */ }
+                finally { await fs.promises.rm(restore, { force: true }); }
+              }
+              throw error;
+            } finally {
+              await fs.promises.rm(temporary, { force: true });
+            }
+          });
+        } catch (error) {
+          if (newBundle) await fs.promises.rm(bundle, { recursive: true, force: true });
+          throw error;
+        }
+      });
+      // Only reclaim the superseded object once no record references it.
+      if (previousKey && previousKey !== storageKey && !preparations.has(previousKey)) {
+        await mutate(async () => {
+          const items = await readIndex();
+          if (!items.some(entry => entry.storageKey === previousKey)) {
+            await fs.promises.rm(objectDirectory(previousKey), { recursive: true, force: true });
+          }
+        }).catch(error => console.warn('旧课件缓存清理失败:', error.message));
+      }
+      return result;
+    } catch (error) {
+      return fail(error.publicMessage || error.message || '重新生成课件失败');
+    }
+  }
+
   function savePlayback(userId, url, page, pageCount) {
     if (!userId || !Number.isInteger(page) || !Number.isInteger(pageCount) ||
         page < 1 || pageCount < page || pageCount > 100000) return Promise.resolve(false);
@@ -397,7 +592,8 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     } finally { if (embeddedJobs.get(key) === task) embeddedJobs.delete(key); }
   }
 
-  return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink, fileNotes, embeddedVideos };
+  return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink, fileNotes,
+    embeddedVideos, scanMissingFonts, regenerate };
 }
 
 module.exports = { createCoursewareStore };

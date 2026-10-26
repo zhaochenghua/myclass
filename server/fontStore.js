@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { XMLParser } = require('fast-xml-parser');
+const { fontFamilyAliases, normalizeFontFamily } = require('./fontNames');
 
 const MAX_FONT_BYTES = 64 * 1024 * 1024;
 const FORMAT = '<font><file>%{file|xmlescape}</file><family>%{family|xmlescape}</family><style>%{style|xmlescape}</style></font>';
@@ -37,6 +38,7 @@ function createFontStore({ root = path.join(process.env.XDG_DATA_HOME || path.jo
   let revision = '';
   let queue = Promise.resolve();
   let ready;
+  let familyCache = { revision: null, names: null };
 
   async function initialize() {
     if (!ready) ready = (async () => {
@@ -66,6 +68,22 @@ function createFontStore({ root = path.join(process.env.XDG_DATA_HOME || path.jo
     }
     return { supported: true, maxBytes: MAX_FONT_BYTES,
       items: [...grouped.values()].map(item => ({ ...item, styles: [...item.styles].sort() })).sort((a, b) => a.family.localeCompare(b.family, 'zh-CN')) };
+  }
+
+  // Normalized family names (including fontconfig aliases) used by courseware
+  // font detection. Returns null when the platform cannot install/query fonts,
+  // so callers never report every document font as missing on Windows.
+  async function knownFamilies() {
+    await initialize();
+    if (!supported) return null;
+    if (familyCache.names && familyCache.revision === revision) return familyCache.names;
+    const fonts = parseFonts(await runner('fc-list', ['--format', FORMAT]));
+    const names = new Set();
+    for (const font of fonts) {
+      for (const alias of fontFamilyAliases(font.family)) names.add(normalizeFontFamily(alias));
+    }
+    familyCache = { revision, names };
+    return names;
   }
 
   async function install(file, originalName) {
@@ -107,7 +125,7 @@ function createFontStore({ root = path.join(process.env.XDG_DATA_HOME || path.jo
     return operation;
   }
 
-  return { initialize, list, install, revision: () => revision };
+  return { initialize, list, install, knownFamilies, revision: () => revision };
 }
 
 module.exports = { createFontStore, MAX_FONT_BYTES };

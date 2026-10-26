@@ -29,8 +29,12 @@ test('font installs validate content, serialize duplicates and preserve revision
   const store = createFontStore({ root, supported: true, runner });
   assert.equal(store.revision(), '');
   const results = await Promise.all([store.install(file, '../name.ttf'), store.install(file, 'same.otf')]);
-  assert.deepEqual(results.map(result => result.duplicate), [false, true]);
-  assert.equal(results[0].faces[0].family, 'Demo & Font,示例字体');
+  // Concurrent installs may reach the serialized queue in either order; only
+  // one of them may add a new file and the other must report a duplicate.
+  assert.equal(results.filter(result => result.duplicate).length, 1);
+  assert.equal(results.filter(result => !result.duplicate).length, 1);
+  const first = results.find(result => !result.duplicate);
+  assert.equal(first.faces[0].family, 'Demo & Font,示例字体');
   assert.equal(scans, 2);
   assert.equal(caches, 2);
   assert.match(store.revision(), /^[a-f0-9]{12}$/);
@@ -75,6 +79,29 @@ test('font listing groups collection styles, identifies uploads and never expose
   const unsupported = createFontStore({ root, supported: false });
   assert.equal((await unsupported.list()).supported, false);
   await assert.rejects(unsupported.install('unused', 'demo.ttf'), { status: 503 });
+});
+
+test('known font families include fontconfig aliases and refresh after install', async t => {
+  const { root, file } = await fixture(t);
+  let extra = false;
+  const store = createFontStore({ root, supported: true, runner: async command => {
+    if (command === 'fc-list') {
+      return '<font><file>/system/a.ttf</file><family>Microsoft YaHei,微软雅黑</family><style>Regular</style></font>' +
+        (extra ? '<font><file>/system/b.ttf</file><family>@Noto Sans CJK SC</family><style>Regular</style></font>' : '');
+    }
+    if (command === 'fc-scan') return '<font><family>Demo</family><style>Regular</style></font>';
+    return '';
+  } });
+  let families = await store.knownFamilies();
+  assert.equal(families.has('microsoft yahei'), true);
+  assert.equal(families.has('微软雅黑'), true);
+  assert.equal(families.has('noto sans cjk sc'), false);
+  extra = true;
+  await store.install(file, 'demo.ttf');
+  families = await store.knownFamilies();
+  assert.equal(families.has('noto sans cjk sc'), true);
+  const unsupported = createFontStore({ root, supported: false });
+  assert.equal(await unsupported.knownFamilies(), null);
 });
 
 test('uploading a font invalidates Office deduplication for later courseware uploads', async t => {

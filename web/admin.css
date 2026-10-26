@@ -41,7 +41,21 @@
 .teaching-class-button.is-active { border-color: var(--accent); background: rgba(101, 240, 200, 0.1); }
 .class-editor-actions { display: flex; gap: 1rem; align-items: center; }
 .class-editor-actions .btn-primary { width: auto; padding-inline: 1.2rem; }
+.class-draw-log { margin-top: 1.6rem; padding-top: 1.2rem; border-top: 1px solid var(--line); }
+.class-draw-log[hidden] { display: none; }
+.class-draw-log-header { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+.class-draw-log-header h3 { margin: 0; font-size: 1rem; }
+.class-draw-log-actions { display: flex; gap: 0.6rem; margin-left: auto; flex-wrap: wrap; }
+.class-draw-log-list { list-style: none; margin: 0.6rem 0 0; padding: 0; max-height: 320px; overflow: auto; }
+.class-draw-log-list li { display: grid; grid-template-columns: 150px minmax(90px, 1fr) auto; gap: 0.8rem; align-items: baseline; padding: 0.5rem 0; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+.class-draw-log-list time { color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.class-draw-log-list strong { overflow-wrap: anywhere; }
+.class-draw-log-meta { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
 @media (max-width: 700px) { .class-management { grid-template-columns: 1fr; gap: 1.2rem; } }
+@media (max-width: 600px) {
+  .class-draw-log-list li { grid-template-columns: 1fr auto; gap: 0.3rem 0.6rem; }
+  .class-draw-log-list time { grid-column: 1 / -1; }
+}
 
 .admin-header {
   display: flex;
@@ -212,6 +226,24 @@
 
 .font-upload-form { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
 .font-upload-form input { min-width: 0; max-width: 100%; font: inherit; color: var(--muted); }
+.font-missing-panel {
+  margin: 0 0 1.4rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(255, 176, 32, 0.45);
+  border-radius: 8px;
+  background: rgba(255, 176, 32, 0.08);
+}
+.font-missing-header { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+.font-missing-header h3 { margin: 0; font-size: 1rem; color: #ffcf7a; }
+.font-missing-header .btn-secondary { margin-left: auto; }
+.font-missing-count { color: var(--muted); font-size: 0.9rem; font-weight: 400; }
+.font-missing-list { margin: 0.6rem 0 0; padding-left: 1.2rem; line-height: 1.7; overflow-wrap: anywhere; }
+.font-missing-titles { color: var(--muted); font-size: 0.9rem; }
+.font-missing-panel .class-help { margin: 0.4rem 0 0; }
+#fontRegenerateStatus:not(:empty) { margin-top: 0.6rem; }
+#fontRegenerateStatus.is-error { color: var(--alert); }
+.tab-btn.has-font-missing, .tab-btn.has-font-missing.is-active { color: #ffcf7a; }
+.tab-btn.has-font-missing.is-active { border-bottom-color: #ffcf7a; }
 .font-search { display: flex; gap: 0.7rem; align-items: center; margin: 1.4rem 0 0.8rem; white-space: nowrap; }
 .font-search input { min-width: 0; width: 320px; max-width: 100%; padding: 0.55rem; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: #101b24; font: inherit; }
 .font-table { table-layout: fixed; }

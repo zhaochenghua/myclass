@@ -12,6 +12,12 @@ let fontPage = 0;
 let fontBusy = false;
 let fontRequest = 0;
 let fontSupported = false;
+let fontMissing = [];
+let fontMissingCourseware = 0;
+let fontRegeneratePending = 0;
+let fontRegenerating = false;
+let fontScanPending = 0;
+let drawLogRequest = 0;
 
 const COURSEWARE_DEFAULT_WIDTHS = { title: 230, fileName: 180, owner: 100, size: 90, createdAt: 160, actions: 180 };
 const COURSEWARE_MIN_WIDTH = 64;
@@ -45,9 +51,18 @@ function showLogin() {
   fontRequest++;
   fontItems = [];
   fontSupported = false;
+  fontMissing = [];
+  fontMissingCourseware = 0;
+  fontRegeneratePending = 0;
+  fontRegenerating = false;
+  fontScanPending = 0;
   $('#fontTableBody').replaceChildren();
   $('#fontUploadResults').replaceChildren();
   $('#fontStatus').textContent = '';
+  $('#fontMissingPanel').hidden = true;
+  $('#fontMissingList').replaceChildren();
+  $('#fontRegenerateStatus').textContent = '';
+  $('#fontScanStatus').textContent = '';
   usageRequest++;
   usageData = null;
   $('#usageTableBody').replaceChildren();
@@ -867,9 +882,13 @@ async function uploadCourseware(file) {
       const d = await res.json().catch(() => ({}));
       throw new Error(d.error || '上传失败');
     }
+    const data = await res.json().catch(() => ({}));
     fill.style.width = '100%';
     text.textContent = '上传完成';
     toast('课件上传成功', 'success');
+    if (Array.isArray(data.missingFonts) && data.missingFonts.length) {
+      toast(`课件缺少字体：${data.missingFonts.join('、')}。请在“字体管理”上传，系统会自动重新生成课件。`, 'info');
+    }
     setTimeout(() => { prog.hidden = true; }, 1500);
     loadCourseware();
   } catch (err) {
@@ -906,17 +925,65 @@ function renderFonts() {
   $('#fontCount').textContent = matches.length ? `${fontPage * pageSize + 1} - ${Math.min((fontPage + 1) * pageSize, matches.length)} / ${matches.length} 个字体系列` : '0 个字体系列';
   $('#fontPreviousButton').disabled = fontPage === 0;
   $('#fontNextButton').disabled = (fontPage + 1) * pageSize >= matches.length;
+  renderFontMissing();
+}
+
+function renderFontMissing() {
+  const list = $('#fontMissingList');
+  list.replaceChildren();
+  for (const item of fontMissing) {
+    const row = document.createElement('li');
+    const name = document.createElement('strong');
+    name.textContent = item.family;
+    const count = document.createElement('span');
+    count.className = 'font-missing-count';
+    count.textContent = ` ${item.coursewareCount} 个课件`;
+    row.append(name, count);
+    if (item.titles?.length) {
+      const titles = document.createElement('div');
+      titles.className = 'font-missing-titles';
+      titles.textContent = `涉及：${item.titles.join('、')}${item.coursewareCount > item.titles.length ? ' 等' : ''}`;
+      row.appendChild(titles);
+    }
+    list.appendChild(row);
+  }
+  const pending = fontRegeneratePending > 0;
+  $('#fontMissingPanel').hidden = !fontMissing.length && !pending && !fontScanPending;
+  $('#fontMissingHelp').textContent = fontMissing.length
+    ? '上传下列字体后，系统会自动重新生成使用这些字体的课件，无需重新上传课件。'
+    : '字体已安装，但相关课件还没有重新生成，可点击右侧按钮更新。';
+  $('#fontMissingHelp').hidden = !fontMissing.length && !pending;
+  const scan = $('#fontScanStatus');
+  scan.hidden = !fontScanPending;
+  scan.textContent = fontScanPending ? `还有 ${fontScanPending} 个旧课件待检查字体，刷新本页可继续检查。` : '';
+  $('#fontMissingCount').textContent = fontMissing.length ? `（${fontMissing.length} 种，影响 ${fontMissingCourseware} 个课件）` : '';
+  $('#regenerateFontsButton').hidden = !pending;
+  $('#regenerateFontsButton').textContent = pending ? `重新生成待更新课件（${fontRegeneratePending}）` : '重新生成待更新课件';
+  updateFontTabBadge();
+}
+
+// Show the outstanding count on the tab itself, so the prompt is visible
+// without opening the font page.
+function updateFontTabBadge() {
+  const tab = document.querySelector('#adminTabs .tab-btn[data-tab="fonts"]');
+  if (!tab) return;
+  const count = fontMissing.length;
+  tab.textContent = count ? `字体管理（缺 ${count} 种）` : '字体管理';
+  tab.classList.toggle('has-font-missing', count > 0);
+  tab.title = count ? `${count} 种课件字体尚未安装，点击查看并上传` : '';
 }
 
 function setFontControls() {
-  $('#fontFileInput').disabled = fontBusy || !fontSupported;
-  $('#uploadFontsButton').disabled = fontBusy || !fontSupported;
-  $('#refreshFontsButton').disabled = fontBusy;
+  const locked = fontBusy || fontRegenerating;
+  $('#fontFileInput').disabled = locked || !fontSupported;
+  $('#uploadFontsButton').disabled = locked || !fontSupported;
+  $('#refreshFontsButton').disabled = locked;
+  $('#regenerateFontsButton').disabled = locked;
 }
 
-async function fontApi(options = {}) {
+async function fontApi(route = '', options = {}) {
   const requestToken = token;
-  const response = await fetch(`${API_BASE}/fonts`, { ...options, cache: 'no-store', headers: { Authorization: `Bearer ${requestToken}` } });
+  const response = await fetch(`${API_BASE}/fonts${route}`, { ...options, cache: 'no-store', headers: { Authorization: `Bearer ${requestToken}` } });
   if (requestToken !== token) throw new Error('登录用户已改变，请重试');
   const data = await response.json().catch(() => ({}));
   if (response.status === 401) { token = ''; localStorage.removeItem('admin_token'); showLogin(); }
@@ -933,13 +1000,22 @@ async function loadFonts({ preserveStatus = false } = {}) {
     if (request !== fontRequest) return;
     fontItems = data.items;
     fontSupported = data.supported;
+    fontMissing = Array.isArray(data.missingFonts) ? data.missingFonts : [];
+    fontMissingCourseware = Number(data.missingCourseware) || 0;
+    fontRegeneratePending = Number(data.pendingRegeneration) || 0;
+    fontScanPending = Number(data.scanPending) || 0;
     if (!preserveStatus || !data.supported) $('#fontStatus').textContent = data.message || '';
     renderFonts();
   } catch (error) {
     if (request !== fontRequest) return;
     fontSupported = false;
+    fontMissing = [];
+    fontMissingCourseware = 0;
+    fontRegeneratePending = 0;
+    fontScanPending = 0;
     $('#fontStatus').textContent = error.message;
     $('#fontStatus').classList.add('is-error');
+    renderFontMissing();
   } finally { if (request === fontRequest) setFontControls(); }
 }
 
@@ -947,9 +1023,56 @@ $('#fontSearch').addEventListener('input', () => { fontPage = 0; renderFonts(); 
 $('#fontPreviousButton').addEventListener('click', () => { fontPage--; renderFonts(); });
 $('#fontNextButton').addEventListener('click', () => { fontPage++; renderFonts(); });
 $('#refreshFontsButton').addEventListener('click', () => loadFonts());
+$('#regenerateFontsButton').addEventListener('click', () => regenerateFonts({ force: true }));
+
+// Installing a font does not change an already published PDF. Ask the server
+// to re-convert the affected courseware once per upload batch; the server caps
+// each call, so keep asking while work remains.
+async function regenerateFonts({ force = false } = {}) {
+  if (fontRegenerating || fontBusy) return;
+  const requestToken = token;
+  const status = $('#fontRegenerateStatus');
+  fontRegenerating = true;
+  setFontControls();
+  status.classList.remove('is-error');
+  let total = 0;
+  let failedItems = [];
+  let remaining = 0;
+  try {
+    for (let round = 0; round < 40; round++) {
+      if (token !== requestToken) return;
+      status.textContent = total ? `已重新生成 ${total} 个课件，继续处理…` : '正在重新生成课件…';
+      const data = await fontApi(`/regenerate${force && round === 0 ? '?force=1' : ''}`, { method: 'POST' });
+      if (token !== requestToken) return;
+      const regenerated = Array.isArray(data.regenerated) ? data.regenerated : [];
+      failedItems = Array.isArray(data.failed) ? data.failed : [];
+      total += regenerated.length;
+      remaining = Number(data.remaining) || 0;
+      if (!data.supported) { status.textContent = '当前服务器暂不支持字体安装，未重新生成课件'; break; }
+      if (!remaining || failedItems.length || !regenerated.length) break;
+    }
+    if (failedItems.length) {
+      status.textContent = `已重新生成 ${total} 个课件，${failedItems.length} 个失败：` +
+        `${failedItems.map(item => item.title).join('、')}。可点击“重新生成待更新课件”重试。`;
+      status.classList.add('is-error');
+    } else if (remaining) {
+      status.textContent = `已重新生成 ${total} 个课件，还有 ${remaining} 个待处理，请稍后重试。`;
+    } else {
+      status.textContent = total ? `已重新生成 ${total} 个课件。` : '没有需要重新生成的课件。';
+    }
+    await loadFonts({ preserveStatus: true });
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('is-error');
+  } finally {
+    fontRegenerating = false;
+    setFontControls();
+  }
+}
+
 $('#fontUploadForm').addEventListener('submit', async event => {
   event.preventDefault();
-  if (fontBusy || !fontSupported) return;
+  if (fontBusy || fontRegenerating || !fontSupported) return;
   const files = [...$('#fontFileInput').files];
   if (!files.length) return;
   const requestToken = token;
@@ -957,6 +1080,7 @@ $('#fontUploadForm').addEventListener('submit', async event => {
   setFontControls();
   $('#fontUploadResults').replaceChildren();
   $('#fontStatus').classList.remove('is-error');
+  $('#fontRegenerateStatus').textContent = '';
   let succeeded = 0;
   let failed = 0;
   try {
@@ -970,7 +1094,7 @@ $('#fontUploadForm').addEventListener('submit', async event => {
         if (file.size > 64 * 1024 * 1024) throw new Error('单个字体不能超过 64MB');
         const body = new FormData();
         body.append('file', file);
-        const data = await fontApi({ method: 'POST', body });
+        const data = await fontApi('', { method: 'POST', body });
         result.textContent = `${file.name}：${data.duplicate ? '已安装，无需重复上传' : '安装成功'}（${data.faces.map(face => `${face.family} ${face.style}`).join(' / ')}）`;
         result.className = 'font-result-success';
         succeeded++;
@@ -988,6 +1112,7 @@ $('#fontUploadForm').addEventListener('submit', async event => {
       await loadFonts({ preserveStatus: true });
     }
   } finally { fontBusy = false; setFontControls(); }
+  if (token === requestToken && succeeded > 0) await regenerateFonts();
 });
 
 // --- 任教班级 / 学生名单 ---
@@ -995,11 +1120,17 @@ function resetClassEditor() {
   teachingClasses = [];
   editingClass = null;
   rosterDirty = false;
+  drawLogRequest++;
   $('#teachingClassList').replaceChildren();
   $('#classEditor').hidden = true;
   $('#classEditorEmpty').hidden = false;
   $('#classRoster').value = '';
   $('#editClassName').value = '';
+  $('#classDrawLog').hidden = true;
+  $('#classDrawLogList').replaceChildren();
+  $('#classDrawLogCount').textContent = '';
+  $('#classDrawLogEmpty').hidden = false;
+  $('#classDrawLogEmpty').textContent = '暂无抽取记录。';
 }
 
 async function classApi(route, method = 'GET', body) {
@@ -1024,7 +1155,57 @@ function selectTeachingClass(item) {
   $('#editClassName').value = item?.name || '';
   $('#classRoster').value = (item?.students || []).map(student => `${student.number}\t${student.name}`).join('\n');
   updateRosterCount();
+  $('#classDrawLog').hidden = !item;
+  drawLogRequest++;
+  $('#classDrawLogList').replaceChildren();
+  $('#classDrawLogCount').textContent = '';
+  $('#classDrawLogEmpty').hidden = false;
+  $('#classDrawLogEmpty').textContent = item ? '正在读取抽取记录…' : '暂无抽取记录。';
+  if (item) loadDrawLog(item.id);
   renderTeachingClasses();
+}
+
+// Draw history is fetched separately from the roster: it is larger and only
+// changes when the classroom draws, so it must not slow down class switching.
+async function loadDrawLog(classId) {
+  const request = ++drawLogRequest;
+  const empty = $('#classDrawLogEmpty');
+  try {
+    const data = await classApi(`/${encodeURIComponent(classId)}/draw-log?limit=100`);
+    if (request !== drawLogRequest) return;
+    renderDrawLog(data);
+  } catch (error) {
+    if (request !== drawLogRequest) return;
+    $('#classDrawLogList').replaceChildren();
+    $('#classDrawLogCount').textContent = '';
+    empty.hidden = false;
+    empty.textContent = error.message;
+  }
+}
+
+function renderDrawLog(data) {
+  const list = $('#classDrawLogList');
+  list.replaceChildren();
+  const items = Array.isArray(data.items) ? data.items : [];
+  for (const entry of items) {
+    const row = document.createElement('li');
+    const time = document.createElement('time');
+    time.dateTime = entry.at || '';
+    time.textContent = formatDate(entry.at);
+    const student = document.createElement('strong');
+    student.textContent = `${entry.number} ${entry.name}`;
+    const meta = document.createElement('span');
+    meta.className = 'class-draw-log-meta';
+    const parts = [`第 ${entry.round} 轮`, entry.mode === 'number' ? '抽学号' : '抽姓名'];
+    if (entry.remaining === 0) parts.push('本轮抽完');
+    meta.textContent = parts.join(' · ');
+    row.append(time, student, meta);
+    list.appendChild(row);
+  }
+  $('#classDrawLogCount').textContent = data.total ? `共 ${data.total} 条，显示最近 ${items.length} 条` : '';
+  const empty = $('#classDrawLogEmpty');
+  empty.hidden = items.length > 0;
+  empty.textContent = '暂无抽取记录。';
 }
 
 function renderTeachingClasses() {
@@ -1102,6 +1283,21 @@ $('#deleteClassButton').addEventListener('click', async () => {
     rosterDirty = false;
     await loadTeachingClasses(null);
     toast('班级已删除', 'success');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { classBusy = false; }
+});
+$('#refreshDrawLogButton').addEventListener('click', () => {
+  if (classBusy || !editingClass) return;
+  loadDrawLog(editingClass.id);
+});
+$('#clearDrawLogButton').addEventListener('click', async () => {
+  if (classBusy || !editingClass) return;
+  if (!confirm(`确定清空“${editingClass.name}”的已抽学生记录？抽取进度不会重置。`)) return;
+  classBusy = true;
+  try {
+    await classApi(`/${editingClass.id}/draw-log`, 'DELETE');
+    await loadDrawLog(editingClass.id);
+    toast('抽取记录已清空', 'success');
   } catch (error) { toast(error.message, 'error'); }
   finally { classBusy = false; }
 });
