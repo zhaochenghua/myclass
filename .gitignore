@@ -26,6 +26,8 @@ android/AndroidStudioProject/.idea/
 android/AndroidStudioProject/*.iml
 server/data/*
 !server/data/versions.json
+# 服务端 Office 转换临时目录（运行时生成，转换结束后自动清理）
+server/tmp/
 web/vendor/
 
 windows/node_modules/
