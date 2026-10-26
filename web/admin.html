@@ -178,10 +178,10 @@
         </div>
         <section class="font-missing-panel" id="fontMissingPanel" hidden aria-live="polite">
           <div class="font-missing-header">
-            <h3>课件缺少的字体 <span id="fontMissingCount" class="font-missing-count"></span></h3>
+            <h3>当前账号课件缺少的字体 <span id="fontMissingCount" class="font-missing-count"></span></h3>
             <button class="btn-secondary" id="regenerateFontsButton" type="button" hidden>重新生成待更新课件</button>
           </div>
-          <p class="class-help" id="fontMissingHelp">上传下列字体后，系统会自动重新生成使用这些字体的课件，无需重新上传课件。</p>
+          <p class="class-help" id="fontMissingHelp">上传下列字体后，系统会自动重新生成当前账号使用这些字体的课件，无需重新上传课件。</p>
           <p class="class-help" id="fontScanStatus" hidden></p>
           <ul id="fontMissingList" class="font-missing-list"></ul>
           <p class="class-help" id="fontRegenerateStatus" role="status"></p>
@@ -191,7 +191,7 @@
           <input id="fontFileInput" type="file" accept=".ttf,.otf,.ttc" multiple required disabled>
           <button class="btn-secondary" id="uploadFontsButton" type="submit" disabled>上传并安装</button>
         </form>
-        <p class="class-help">TTF / OTF / TTC，单个不超过 64MB。请使用有权在服务器使用的字体；上传后会自动重新生成缺少这些字体的课件。</p>
+        <p class="class-help">TTF / OTF / TTC，单个不超过 64MB。请使用有权在服务器使用的字体；上传后会自动重新生成当前账号缺少这些字体的课件。</p>
         <p id="fontStatus" role="status" aria-live="polite"></p>
         <ul id="fontUploadResults" class="font-upload-results" aria-live="polite"></ul>
         <label class="font-search" for="fontSearch">搜索字体 <input id="fontSearch" type="search" placeholder="字体名称或字重" maxlength="100"></label>
@@ -335,6 +335,6 @@
   </main>
 
   <script src="./studentRoster.js?v=20260919a"></script>
-  <script src="./admin.js?v=20261026-font-missing-drawlog"></script>
+  <script src="./admin.js?v=20261027-per-teacher-fonts"></script>
 </body>
 </html>

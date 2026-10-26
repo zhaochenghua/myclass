@@ -957,8 +957,8 @@ function renderFontMissing() {
   const pending = fontRegeneratePending > 0;
   $('#fontMissingPanel').hidden = !fontMissing.length && !pending && !fontScanPending;
   $('#fontMissingHelp').textContent = fontMissing.length
-    ? '上传下列字体后，系统会自动重新生成使用这些字体的课件，无需重新上传课件。'
-    : '字体已安装，但相关课件还没有重新生成，可点击右侧按钮更新。';
+    ? '上传下列字体后，系统会自动重新生成当前账号使用这些字体的课件，无需重新上传课件。'
+    : '字体已安装，但当前账号的相关课件还没有重新生成，可点击右侧按钮更新。';
   $('#fontMissingHelp').hidden = !fontMissing.length && !pending;
   const scan = $('#fontScanStatus');
   scan.hidden = !fontScanPending;

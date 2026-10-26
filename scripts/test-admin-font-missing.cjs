@@ -82,11 +82,18 @@ const { startTestServer } = require('../server/testSupport');
     assert.equal(await page.locator('#fontUploadResults .font-result-success').count(), 1);
     assert.equal(await page.locator('#tab-fonts img').count(), 0);
 
+    // Installed but not applied yet: keep offering a manual regeneration.
+    pendingRegeneration = 1;
+    await page.locator('#refreshFontsButton').click();
+    await page.waitForFunction(() => !document.getElementById('fontMissingPanel').hidden);
+    assert.match(await page.locator('#fontMissingHelp').innerText(), /字体已安装/);
+    assert.match(await page.locator('#regenerateFontsButton').innerText(), /重新生成待更新课件（1）/);
+
     // Missing font names and courseware titles are escaped as text.
     missing = [{ family: '<img src=x onerror=alert(1)>', coursewareCount: 1, titles: ['<b>课件</b>'] }];
     pendingRegeneration = 1;
     await page.locator('#refreshFontsButton').click();
-    await page.waitForFunction(() => !document.getElementById('fontMissingPanel').hidden);
+    await page.waitForFunction(() => document.querySelectorAll('#fontMissingList li').length === 1);
     assert.equal(await page.locator('#fontMissingList img').count(), 0);
     assert.equal(await page.locator('#fontMissingList b').count(), 0);
     assert.match(await page.locator('#fontMissingList').innerText(), /<img src=x onerror=alert\(1\)>/);
