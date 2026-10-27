@@ -108,6 +108,35 @@ function pdfFixture() {
     assert.ok(measured.zoomed >= measured.mid * 1.7, `放大后笔迹没有变粗: ${JSON.stringify(measured)}`);
     assert.ok(measured.zoomed >= measured.slow * 1.7, `放大后笔迹没有变粗: ${JSON.stringify(measured)}`);
 
+    // 第一笔锚定：先把课件放大 3 倍再落笔，宽度按 档位/3 折算（屏幕上与 1x 时一样粗）
+    const anchored = await page.evaluate(async () => {
+      state.annotations.strokes = [];
+      state.annotations.tool = 'pen';
+      state.annotations.penWidth = 6;
+      state.imageView.scale = 3;
+      applyCoursewareImageViewTransform();
+      const canvas = document.getElementById('annotationCanvas');
+      canvas.setPointerCapture = () => {};
+      canvas.releasePointerCapture = () => {};
+      const rect = canvas.getBoundingClientRect();
+      const fire = (type, x, y, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 78, pointerType: 'mouse',
+        isPrimary: true, button: 0, buttons, clientX: x, clientY: y
+      }));
+      const y = rect.height * 0.5;
+      fire('pointerdown', rect.width * 0.4, y, 1);
+      for (let i = 1; i <= 20; i += 1) fire('pointermove', rect.width * 0.4 + i * 8, y, 1);
+      fire('pointerup', rect.width * 0.4 + 160, y, 0);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const stroke = state.annotations.strokes[state.annotations.strokes.length - 1];
+      const result = { width: stroke?.width, inkZoom: stroke?.inkZoom };
+      state.imageView.scale = 1;
+      applyCoursewareImageViewTransform();
+      return result;
+    });
+    assert.ok(Math.abs(anchored.inkZoom - 3) < 0.01, `锚定缩放应为 3: ${JSON.stringify(anchored)}`);
+    assert.ok(Math.abs(anchored.width - 2) < 0.1, `放大 3 倍后宽度应约为 2: ${JSON.stringify(anchored)}`);
+
     // 输入链路：真实指针事件也要带上相对时间戳
     const captured = await page.evaluate(async () => {
       state.annotations.strokes = [];

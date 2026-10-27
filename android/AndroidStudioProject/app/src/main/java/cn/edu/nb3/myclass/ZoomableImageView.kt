@@ -954,14 +954,36 @@ class ZoomableImageView(context: Context) : View(context) {
 
     // ---- 画笔：笔迹生命周期 ----
 
+    /**
+     * 本页笔迹的"锚定缩放"：以本页第一笔落下时的图像缩放为准。
+     *
+     * 每一笔的宽度按 `画笔档位 / 锚定缩放` 折算，于是：
+     *  - 单题图和整张试卷在第一笔时屏幕线宽相同；
+     *  - 想要更细就把图放大再落第一笔（锚定缩放更大，折算出的宽度更小）；
+     *  - 高分辨率整张试卷放大后，笔迹不会跟着放大得又粗又糊。
+     * 已从服务器恢复的旧笔迹没有 inkZoom，用 `档位 / 首笔宽度` 反推。
+     */
+    private fun inkAnchor(): Float {
+        val first = strokes.firstOrNull { !it.isEraser }
+            ?: remoteStrokes.values.firstOrNull { !it.isEraser }
+        if (first == null) return userScale.coerceIn(1f, MAX_SCALE)
+        if (first.inkZoom > 0f) return first.inkZoom
+        if (first.width > 0f) return (PenSettings.width / first.width).coerceIn(1f, MAX_SCALE)
+        return 1f
+    }
+
     private fun startStroke(viewX: Float, viewY: Float, eventTime: Long, pressure: Float) {
         val point = toNormalized(viewX, viewY, 0, pressure) ?: return
         strokeStartedAtMs = eventTime
+        val anchor = inkAnchor()
+        val inkWidth = if (penEraser) AnnotationPalette.ERASER_WIDTH
+        else (PenSettings.width / anchor).coerceIn(1f, 200f)
         val stroke = AnnotationStroke(
             id = "a${++strokeSeq}",
             colorHex = if (penEraser) ERASER_COLOR else penColorHex,
-            width = if (penEraser) AnnotationPalette.ERASER_WIDTH else PenSettings.width,
-            isEraser = penEraser
+            width = inkWidth,
+            isEraser = penEraser,
+            inkZoom = anchor
         )
         stroke.points.add(point)
         activeStroke = stroke

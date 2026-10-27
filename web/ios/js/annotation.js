@@ -140,6 +140,7 @@ export class AnnotationBoard {
   constructor(options = {}) {
     this.canvas = options.canvas;
     this.getSurface = options.getSurface || (() => null);
+    this.getZoom = options.getZoom || (() => 1);
     this.emit = options.emit || (() => {});
     this.onChange = options.onChange || (() => {});
 
@@ -634,6 +635,25 @@ export class AnnotationBoard {
     return { x, y };
   }
 
+  /**
+   * 本页笔迹的"锚定缩放"：以本页第一笔落下时的图像缩放为准。
+   * 每笔宽度 = 画笔档位 / 锚定缩放，保证：
+   *  - 单题图与整张试卷第一笔的屏幕线宽相同；
+   *  - 想更细就把图放大再落第一笔；
+   *  - 高分辨率整张试卷放大后，笔迹不会跟着变得很粗。
+   */
+  #inkAnchor() {
+    const first = this.strokes.find((stroke) => !stroke.isEraser);
+    if (first) {
+      const stored = Number(first.inkZoom);
+      if (Number.isFinite(stored) && stored > 0) return stored;
+      if (Number(first.width) > 0) return Math.min(8, Math.max(1, this.penWidth / first.width));
+      return 1;
+    }
+    const zoom = Number(this.getZoom?.());
+    return Number.isFinite(zoom) && zoom > 0 ? Math.min(8, zoom) : 1;
+  }
+
   #beginStroke(point) {
     const id = `i${(this.strokeSeq += 1)}`;
     // 时间基准用"落指那一刻"，不是真正起笔的这一帧：
@@ -642,10 +662,12 @@ export class AnnotationBoard {
     this.strokeStartedAt = Number.isFinite(this.pendingStartTime) ? this.pendingStartTime : performance.now();
     point.t = 0;
     point.p = this.lastPressure;
+    const anchor = this.#inkAnchor();
     const stroke = {
       id,
       colorHex: this.eraser ? ERASER_COLOR : this.color,
-      width: this.eraser ? ERASER_WIDTH : this.penWidth,
+      width: this.eraser ? ERASER_WIDTH : Math.max(1, Math.min(200, this.penWidth / anchor)),
+      inkZoom: anchor,
       isEraser: this.eraser,
       points: [point]
     };

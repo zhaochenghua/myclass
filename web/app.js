@@ -3959,17 +3959,23 @@ function beginAnnotationStroke(event) {
   // 记下起笔时间，后续每个点带上相对时间戳，供速度笔锋计算线宽
   point.t = 0;
   point.p = pointerPressure(event);
+  const page = currentCoursewarePage();
+  const penAnchor = pageInkAnchor(page, state.annotations.penWidth);
   state.annotations.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
     color: isEraser ? '#000' : state.annotations.currentColor,
-    width: isEraser ? state.annotations.eraserWidth : state.annotations.penWidth,
+    // 线宽 = 画笔档位 / 本页锚定缩放：同一页粗细一致，放大后落笔更细
+    width: isEraser
+      ? state.annotations.eraserWidth
+      : Math.max(1, Math.min(200, state.annotations.penWidth / penAnchor)),
+    inkZoom: penAnchor,
     isEraser: isEraser,
     mode: isEraser ? null : state.annotations.mode,
     lineMode: isLine,
     points: [point],
     startedAt: event.timeStamp,
     startScreen: isLine ? { x: event.clientX, y: event.clientY } : null,
-    page: currentCoursewarePage()
+    page
   });
   syncViewerAnnotationBegin(event.pointerId);
   scheduleAnnotationRedraw(false);
@@ -4083,6 +4089,8 @@ function completeAnnotationStroke(event, releaseCapture = true) {
     state.annotations.strokes.push({
       color: stroke.color,
       width: stroke.width,
+      // 本页的锚定缩放要跟着笔画保留，后续笔画才知道该按哪个比例折算
+      inkZoom: stroke.inkZoom,
       isEraser: !!stroke.isEraser,
       mode: stroke.mode,
       lineMode: !!stroke.lineMode,
@@ -4905,6 +4913,28 @@ function drawBlackboardFreehand(ctx, stroke) {
     p: hasPressure ? clamp(Number(point.p) || 0.5, 0, 1) : 0.5,
     t: Number(point.t) || 0
   })), stroke.width));
+}
+
+/**
+ * 本页笔迹的"锚定缩放"：以本页第一笔落下时的图像缩放为准。
+ *
+ * 每笔宽度 = 画笔档位 / 锚定缩放，于是：
+ *  - 单题图和整张试卷第一笔的屏幕线宽相同；
+ *  - 想要更细就先把图放大再落第一笔（锚定缩放更大）；
+ *  - 高分辨率整张试卷放大后绘制，笔迹不会跟着放大得又粗又糊。
+ * 旧笔迹没有 inkZoom（从服务器恢复），用 `档位 / 首笔宽度` 反推。
+ */
+function pageInkAnchor(page, level) {
+  const first = state.annotations.strokes.find(stroke =>
+    !stroke.isEraser && (!stroke.page || stroke.page === page));
+  if (first) {
+    const stored = Number(first.inkZoom);
+    if (Number.isFinite(stored) && stored > 0) return stored;
+    if (Number(first.width) > 0) return clamp(level / first.width, 1, 8);
+    return 1;
+  }
+  const zoom = Number(state.imageView?.scale);
+  return Number.isFinite(zoom) && zoom > 0 ? Math.min(8, zoom) : 1;
 }
 
 /**

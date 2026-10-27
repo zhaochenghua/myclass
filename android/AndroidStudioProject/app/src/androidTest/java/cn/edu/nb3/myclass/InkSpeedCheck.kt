@@ -81,6 +81,42 @@ object InkSpeedCheck {
                     "收笔点没有同步：线上 ${synced.last()} 本地 ${points.last()}"
                 }
 
+                // 第一笔锚定：先把图放大 3 倍再落笔，宽度应折算成 档位/3（屏幕上与 1x 一样粗）
+                val anchorView = ZoomableImageView(themed)
+                anchorView.measure(
+                    View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+                )
+                anchorView.layout(0, 0, width, height)
+                anchorView.setImage(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
+                    eraseColor(Color.WHITE)
+                })
+                anchorView.mode = ImageCastMode.Pen
+                val anchorScale = ZoomableImageView::class.java.getDeclaredField("userScale")
+                anchorScale.isAccessible = true
+                anchorScale.setFloat(anchorView, 3f)
+                val anchorTime = SystemClock.uptimeMillis()
+                var anchorX = 120f
+                val anchorY = height / 2f
+                fun sendAnchor(action: Int, at: Long, px: Float) {
+                    val event = MotionEvent.obtain(anchorTime, at, action, px, anchorY, 0)
+                    anchorView.dispatchTouchEvent(event)
+                    event.recycle()
+                }
+                sendAnchor(MotionEvent.ACTION_DOWN, anchorTime, anchorX)
+                for (step in 1..20) {
+                    anchorX += 6f
+                    sendAnchor(MotionEvent.ACTION_MOVE, anchorTime + step * 8L, anchorX)
+                }
+                sendAnchor(MotionEvent.ACTION_UP, anchorTime + 180L, anchorX)
+                val anchored = anchorView.currentStrokes().last()
+                check(kotlin.math.abs(anchored.inkZoom - 3f) < 0.01f) {
+                    "锚定缩放应为 3，实际 ${anchored.inkZoom}"
+                }
+                check(kotlin.math.abs(anchored.width - PenSettings.width / 3f) < 0.05f) {
+                    "放大 3 倍后宽度应约为 ${PenSettings.width / 3f}，实际 ${anchored.width}"
+                }
+
                 val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                 view.draw(Canvas(output))
                 // 留一份渲染结果给人工核对（adb pull），失败时也能看到实际笔迹
@@ -205,6 +241,7 @@ object InkSpeedCheck {
                     "stream",
                     "PASS: 速度笔锋 起笔=${tip}px 慢写=${slow}px 快写=${fast}px，" +
                         "放大 1x→2x ${zoomBase}px→${zoomed}px，" +
+                        "首笔锚定 3x→宽 ${"%.1f".format(anchored.width)}px，" +
                         "本地 ${points.size} 点 / 线上 ${synced.size} 点，t=${points.first().t}..${points.last().t}ms"
                 )
             } catch (error: Throwable) {

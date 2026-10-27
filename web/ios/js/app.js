@@ -1987,6 +1987,8 @@ function createAnnotationBoards() {
   state.mediaBoard = new AnnotationBoard({
     canvas: $('mediaAnnotationCanvas'),
     getSurface: () => ($('mediaPreview').hidden ? null : $('mediaPreview')),
+    // 第一笔落下时的图片缩放，用于锚定整页笔迹粗细
+    getZoom: () => state.media.queue[state.media.index]?.scale || 1,
     emit: (payload) => sendAnnotation(payload, 0),
     onChange: () => {
       refreshAnnotationBar(MEDIA_BAR);
@@ -1997,6 +1999,8 @@ function createAnnotationBoards() {
   state.cwBoard = new AnnotationBoard({
     canvas: $('cwAnnotationCanvas'),
     getSurface: coursewareSurface,
+    // 第一笔落下时的课件缩放，用于锚定整页笔迹粗细
+    getZoom: () => state.cwView.scale || 1,
     emit: (payload) => sendAnnotation(payload, state.courseware?.page || 1),
     onChange: () => {
       refreshAnnotationBar(CW_BAR);

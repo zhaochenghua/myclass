@@ -90,7 +90,13 @@ data class AnnotationStroke(
     val isEraser: Boolean,
     val points: MutableList<AnnotationPoint> = mutableListOf(),
     val mode: String = "solid",
-    val lineMode: Boolean = false
+    val lineMode: Boolean = false,
+    /**
+     * 本页第一笔落下时的图像缩放（只在本机使用，不参与同步）。
+     * 同一页所有笔画的宽度都按 `画笔档位 / inkZoom` 折算，保证整页粗细一致；
+     * 从服务器恢复的旧笔迹没有这个值（0），用 `档位 / width` 反推。
+     */
+    val inkZoom: Float = 0f
 )
 
 object AnnotationPalette {
