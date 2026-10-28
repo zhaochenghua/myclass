@@ -21,7 +21,7 @@ MyClass 是一套面向局域网课堂展示的投屏系统。教师电脑打开
 - 网页端画笔支持撤销和清空。
 - 标注绑定到视频内容坐标；手机端移动锁定画面时，网页端标注会跟随画面移动，避免错位。
 - iPhone 网页版支持“添加到主屏幕”全屏运行、离线打开界面、课件上传与播放。
-- 管理后台“任教班级”支持按次登记作业（优秀 / 涉抄 / 错多 / 未交）并查看历次统计、导出 CSV。
+- 管理后台“任教班级”支持按次登记作业（优秀 / 涉抄 / 错多 / 未交，可自定义改名、增删与配色）并查看历次统计、导出 CSV。
 
 Android App 支持手机屏幕共享（整块屏幕或单个应用），开始后自动退到后台，教师直接切换到要展示的内容；
 iPhone 网页版受 iOS 限制不提供屏幕共享。
@@ -169,9 +169,11 @@ HTTP 和 WebSocket 会检查 `Host` 与 `Origin`，默认允许 `10.30.13.1`、`
 
 “任教班级”选中班级后，可在“作业登记”中填写日期和作业名称新建一次作业；名称留空会自动命名为“10 月 28 日作业”。随后直接在每位学生姓名后点“优秀 / 涉抄 / 错多 / 未交”即可登记该次作业，再点一次同一状态可取消。连续点选会合并为一次保存，刷新页面、重新登录或换设备后仍保留。若当前选中的不是今天的作业，页面会提示先新建，避免把今天的新作业登记到旧记录上。
 
-“历次作业统计”按作业日期汇总各状态人数，并按学生列出历次记录、个人合计和“未登记”数，可导出 CSV（带 BOM，Excel 可直接打开）。未点选任何状态计为未登记；名单中删除的学生不计入统计，同一学号重新加入后恢复显示历史记录。每班最多保留 200 次作业记录，可删除单次记录；删除班级会一并删除作业记录。数据仍保存在 `server/data/classes.json`，接口为登录后的 `GET/POST /api/classes/:id/homework`、`GET/PATCH/DELETE /api/classes/:id/homework/:homeworkId` 和 `GET /api/classes/:id/homework/stats`，部署时无需迁移。
+默认提供“优秀 / 涉抄 / 错多 / 未交”四个按钮。点“状态设置”可以按班级修改按钮名称、颜色，或增删按钮（最多同时启用 8 个，至少保留 1 个）。改名会同步历史记录；已经用过的状态删除时会转为停用，不再显示登记按钮，但历史统计与 CSV 仍保留该列，也可以随时恢复；未使用过的状态才会真正删除。状态设置只影响当前班级。
 
-开发验证：`cd server && npm test`，或运行 `node server/testSupport.js` 启动仅含虚构测试账号的隔离环境（端口 3107）。作业登记的浏览器完整流程可运行 `node scripts/test-admin-homework.cjs`（需 Playwright 与 Edge）。模拟器可用 `adb reverse tcp:3107 tcp:3107` 配合 `-PMYCLASS_SERVER_URL=http://127.0.0.1:3107/myclass` 增量安装，不修改正式地址或安全白名单。备份班级数据时应包含整个 `server/data`。
+“历次作业统计”按作业日期汇总各状态人数，并按学生列出历次记录、个人合计和“未登记”数，可导出 CSV（带 BOM，Excel 可直接打开）。未点选任何状态计为未登记；名单中删除的学生不计入统计，同一学号重新加入后恢复显示历史记录。每班最多保留 200 次作业记录，可删除单次记录；删除班级会一并删除作业记录。数据仍保存在 `server/data/classes.json`，接口为登录后的 `GET/POST /api/classes/:id/homework`、`GET/PATCH/DELETE /api/classes/:id/homework/:homeworkId`、`GET /api/classes/:id/homework/stats`，以及状态设置使用的 `GET/POST /api/classes/:id/homework-statuses`、`PUT/DELETE /api/classes/:id/homework-statuses/:statusId`，部署时无需迁移。
+
+开发验证：`cd server && npm test`，或运行 `node server/testSupport.js` 启动仅含虚构测试账号的隔离环境（端口 3107）。作业登记的浏览器完整流程可运行 `node scripts/test-admin-homework.cjs`，自定义状态按钮可运行 `node scripts/test-admin-homework-statuses.cjs`（均需 Playwright 与 Edge）。模拟器可用 `adb reverse tcp:3107 tcp:3107` 配合 `-PMYCLASS_SERVER_URL=http://127.0.0.1:3107/myclass` 增量安装，不修改正式地址或安全白名单。备份班级数据时应包含整个 `server/data`。
 
 ### 服务器字体与缺少字体提示
 

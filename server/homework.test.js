@@ -12,8 +12,8 @@ async function fixture(t) {
   return { store: createClassStore(filename), filename };
 }
 
-async function classWithRoster(store) {
-  const item = await store.create('alice', { name: '七（1）班' });
+async function classWithRoster(store, name = '七（1）班') {
+  const item = await store.create('alice', { name });
   await store.update('alice', item.id, {
     name: item.name, revision: 1,
     students: [{ number: '01', name: '张三' }, { number: '02', name: '李四' }, { number: '03', name: '王五' }]
@@ -92,6 +92,77 @@ test('homework statistics show every assignment in date order and ignore removed
     students: [{ number: '01', name: '张三' }, { number: '02', name: '李四' }, { number: '03', name: '王五' }]
   });
   assert.deepEqual((await store.homeworkStats('alice', item.id)).students[2].records, ['missing', null]);
+});
+
+test('homework status buttons are per class and can be renamed, added, archived and restored', async t => {
+  const { store } = await fixture(t);
+  const item = await classWithRoster(store);
+  const initial = await store.homeworkStatusList('alice', item.id);
+  assert.deepEqual(initial.items.map(({ id, label, tone, archived }) => ({ id, label, tone, archived })), [
+    { id: 'excellent', label: '优秀', tone: 'green', archived: false },
+    { id: 'copy', label: '涉抄', tone: 'orange', archived: false },
+    { id: 'wrong', label: '错多', tone: 'yellow', archived: false },
+    { id: 'missing', label: '未交', tone: 'red', archived: false }
+  ]);
+  assert.ok(initial.items.every(status => status.usage === 0));
+
+  const added = await store.createHomeworkStatus('alice', item.id, { label: '未订正', tone: 'purple' });
+  const custom = added.status;
+  assert.equal(custom.label, '未订正');
+  assert.equal(custom.tone, 'purple');
+  await assert.rejects(store.createHomeworkStatus('alice', item.id, { label: '未订正', tone: 'blue' }), { status: 409 });
+  await assert.rejects(store.createHomeworkStatus('alice', item.id, { label: '颜色错误', tone: 'pink' }), { status: 400 });
+  await assert.rejects(store.createHomeworkStatus('alice', item.id, { label: '   ', tone: 'blue' }), { status: 400 });
+  await assert.rejects(store.createHomeworkStatus('alice', item.id, { label: '未登记', tone: 'blue' }), { status: 400 });
+
+  const renamed = await store.updateHomeworkStatus('alice', item.id, 'copy', { label: '抄袭', tone: 'orange' });
+  assert.equal(renamed.status.label, '抄袭');
+  await assert.rejects(store.updateHomeworkStatus('alice', item.id, 'copy', { label: '未订正' }), { status: 409 });
+
+  const homework = await store.createHomework('alice', item.id, { title: '状态测试', date: '2026-10-28' });
+  await store.setHomeworkRecords('alice', item.id, homework.id, { records: { '01': custom.id, '02': 'copy' } });
+  let stats = await store.homeworkStats('alice', item.id);
+  assert.equal(stats.assignments[0].counts[custom.id], 1);
+  assert.equal(stats.totals[custom.id], 1);
+  assert.equal(stats.statuses.find(status => status.id === custom.id).label, '未订正');
+  assert.equal(stats.statuses.find(status => status.id === 'copy').label, '抄袭');
+
+  // A status used by history is archived, not removed: the button disappears
+  // from the registration set while statistics and the old record stay.
+  const archived = await store.removeHomeworkStatus('alice', item.id, custom.id);
+  assert.equal(archived.archived, true);
+  assert.equal(archived.used, 1);
+  assert.equal((await store.homeworkStatusList('alice', item.id)).items.find(status => status.id === custom.id).archived, true);
+  assert.equal((await store.homeworkGet('alice', item.id, homework.id)).records['01'], custom.id);
+  await assert.rejects(store.setHomeworkRecords('alice', item.id, homework.id, { records: { '03': custom.id } }), { status: 400 });
+  stats = await store.homeworkStats('alice', item.id);
+  assert.equal(stats.assignments[0].counts[custom.id], 1);
+  assert.equal(stats.statuses.find(status => status.id === custom.id).archived, true);
+
+  const restored = await store.updateHomeworkStatus('alice', item.id, custom.id, { archived: false });
+  assert.equal(restored.status.archived, false);
+  await store.setHomeworkRecords('alice', item.id, homework.id, { records: { '03': custom.id } });
+  assert.equal((await store.homeworkStats('alice', item.id)).assignments[0].counts[custom.id], 2);
+
+  // Unused statuses are removed outright instead of accumulating in class data.
+  const temporary = await store.createHomeworkStatus('alice', item.id, { label: '临时', tone: 'gray' });
+  const removed = await store.removeHomeworkStatus('alice', item.id, temporary.status.id);
+  assert.equal(removed.archived, false);
+  assert.equal((await store.homeworkStatusList('alice', item.id)).items.some(status => status.id === temporary.status.id), false);
+
+  // The last usable button cannot be deleted, and at most 8 can be active.
+  for (const status of (await store.homeworkStatusList('alice', item.id)).items.filter(status => !status.archived).slice(1)) {
+    await store.removeHomeworkStatus('alice', item.id, status.id);
+  }
+  const last = (await store.homeworkStatusList('alice', item.id)).items.filter(status => !status.archived);
+  assert.equal(last.length, 1);
+  await assert.rejects(store.removeHomeworkStatus('alice', item.id, last[0].id), { status: 400 });
+
+  const secondClass = await classWithRoster(store, '七（2）班');
+  for (let index = 0; index < 4; index++) {
+    await store.createHomeworkStatus('alice', secondClass.id, { label: `状态${index}`, tone: 'blue' });
+  }
+  await assert.rejects(store.createHomeworkStatus('alice', secondClass.id, { label: '超限', tone: 'blue' }), { status: 400 });
 });
 
 test('homework keeps the newest 200 sessions and rejects invalid student-number keys safely', async t => {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管理后台 - 上课投屏平台</title>
   <link rel="stylesheet" href="./style.css">
-  <link rel="stylesheet" href="./admin.css?v=20261028-homework">
+  <link rel="stylesheet" href="./admin.css?v=20261028-homework-statuses">
 </head>
 <body>
   <main class="admin-page">
@@ -241,6 +241,7 @@
               <div class="class-homework-header">
                 <h3 id="classHomeworkHeading">作业登记 <span id="classHomeworkTitle" class="muted"></span></h3>
                 <div class="class-homework-actions">
+                  <button class="btn-secondary" id="toggleHomeworkStatusSettingsButton" type="button" aria-expanded="false" disabled>状态设置</button>
                   <button class="btn-secondary" id="toggleHomeworkStatsButton" type="button" aria-expanded="false" disabled>历次作业统计</button>
                   <button class="btn-secondary" id="deleteHomeworkButton" type="button" disabled>删除本次</button>
                 </div>
@@ -254,6 +255,31 @@
                 </label>
                 <button class="btn-primary" id="createHomeworkButton" type="submit">新建并开始登记</button>
               </form>
+              <section class="homework-status-settings" id="homeworkStatusSettings" hidden aria-labelledby="homeworkStatusSettingsHeading">
+                <div class="homework-status-settings-header">
+                  <h4 id="homeworkStatusSettingsHeading">作业状态按钮</h4>
+                  <button class="btn-secondary" id="closeHomeworkStatusSettingsButton" type="button">收起设置</button>
+                </div>
+                <p class="class-help">修改名称或颜色会同步历史记录；已用于历史记录的状态停用后不再显示登记按钮，但统计中仍会保留。最多同时启用 8 个状态。</p>
+                <ul id="homeworkStatusList" class="homework-status-list"></ul>
+                <form id="createHomeworkStatusForm" class="homework-status-create-form">
+                  <label for="newHomeworkStatusLabel">新增按钮
+                    <input id="newHomeworkStatusLabel" maxlength="12" placeholder="例如：未订正" autocomplete="off">
+                  </label>
+                  <label for="newHomeworkStatusTone">颜色
+                    <select id="newHomeworkStatusTone">
+                      <option value="green">绿色</option>
+                      <option value="orange">橙色</option>
+                      <option value="yellow">黄色</option>
+                      <option value="red">红色</option>
+                      <option value="blue" selected>蓝色</option>
+                      <option value="purple">紫色</option>
+                      <option value="gray">灰色</option>
+                    </select>
+                  </label>
+                  <button class="btn-primary" id="createHomeworkStatusButton" type="submit">新增状态</button>
+                </form>
+              </section>
               <p class="class-help" id="homeworkEmpty" hidden>还没有作业登记。填好日期和名称后，点“新建并开始登记”。</p>
               <div class="homework-register" id="homeworkRegister" hidden>
                 <div class="homework-toolbar">
@@ -383,6 +409,6 @@
   </main>
 
   <script src="./studentRoster.js?v=20260919a"></script>
-  <script src="./admin.js?v=20261028-homework"></script>
+  <script src="./admin.js?v=20261028-homework-statuses"></script>
 </body>
 </html>

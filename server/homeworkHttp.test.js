@@ -57,6 +57,54 @@ test('homework APIs are teacher-scoped, batch-save statuses and expose statistic
   assert.equal((await (await server.api(`/classes/${item.id}/homework/${homework.id}`, 'alice')).status), 404);
 });
 
+test('homework status API customizes buttons without losing historical labels', async t => {
+  const server = await startTestServer();
+  t.after(server.close);
+  const { item } = await (await server.api('/classes', 'alice', 'POST', { name: '状态班' })).json();
+  await server.api(`/classes/${item.id}`, 'alice', 'PUT', {
+    name: item.name, revision: 1, students: [{ number: '01', name: '张三' }]
+  });
+  assert.equal((await fetch(`${server.base}/api/classes/${item.id}/homework-statuses`)).status, 401);
+  assert.equal((await server.api(`/classes/${item.id}/homework-statuses`, 'bob')).status, 404);
+  const initial = await server.api(`/classes/${item.id}/homework-statuses`, 'alice');
+  assert.equal(initial.headers.get('cache-control'), 'no-store');
+  assert.deepEqual((await initial.json()).items.map(status => status.label), ['优秀', '涉抄', '错多', '未交']);
+
+  const created = await server.api(`/classes/${item.id}/homework-statuses`, 'alice', 'POST', { label: '未订正', tone: 'purple' });
+  assert.equal(created.status, 201);
+  const custom = (await created.json()).status;
+  assert.equal(custom.label, '未订正');
+  assert.equal((await server.api(`/classes/${item.id}/homework-statuses`, 'alice', 'POST', { label: '未订正', tone: 'blue' })).status, 409);
+  assert.equal((await server.api(`/classes/${item.id}/homework-statuses`, 'alice', 'POST', { label: '坏颜色', tone: 'pink' })).status, 400);
+
+  const renamed = await server.api(`/classes/${item.id}/homework-statuses/copy`, 'alice', 'PUT', { label: '抄袭' });
+  assert.equal((await renamed.json()).status.label, '抄袭');
+  assert.equal((await server.api(`/classes/${item.id}/homework-statuses/copy`, 'bob', 'PUT', { label: '越权' })).status, 404);
+
+  const homework = (await (await server.api(`/classes/${item.id}/homework`, 'alice', 'POST', {
+    title: '状态接口测试', date: '2026-10-28'
+  })).json()).item;
+  assert.equal((await server.api(`/classes/${item.id}/homework/${homework.id}`, 'alice', 'PATCH', {
+    records: { '01': custom.id }
+  })).status, 200);
+  const archived = await server.api(`/classes/${item.id}/homework-statuses/${custom.id}`, 'alice', 'DELETE');
+  const archivedBody = await archived.json();
+  assert.equal(archivedBody.archived, true);
+  assert.equal(archivedBody.used, 1);
+  assert.equal((await server.api(`/classes/${item.id}/homework/${homework.id}`, 'alice', 'PATCH', {
+    records: { '01': custom.id }
+  })).status, 400, 'an archived status cannot be used for new records');
+
+  const stats = await (await server.api(`/classes/${item.id}/homework/stats`, 'alice')).json();
+  assert.equal(stats.statuses.find(status => status.id === custom.id).archived, true);
+  assert.equal(stats.statuses.find(status => status.id === 'copy').label, '抄袭');
+  assert.equal(stats.assignments[0].counts[custom.id], 1);
+
+  const restored = await server.api(`/classes/${item.id}/homework-statuses/${custom.id}`, 'alice', 'PUT', { archived: false });
+  assert.equal((await restored.json()).status.archived, false);
+  assert.equal((await server.api(`/classes/${item.id}/homework-statuses/nope`, 'alice', 'DELETE')).status, 404);
+});
+
 test('homework history survives roster edits and class deletion removes it', async t => {
   const server = await startTestServer();
   t.after(server.close);

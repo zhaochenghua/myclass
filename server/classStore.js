@@ -13,14 +13,28 @@ const DRAW_LOG_DEFAULT_LIMIT = 100;
 // rewritten on every save, so keep the worst case bounded while leaving enough
 // room for a full school year of assignments.
 const HOMEWORK_LIMIT = 200;
-const HOMEWORK_STATUSES = ['excellent', 'copy', 'wrong', 'missing'];
-const HOMEWORK_STATUS_SET = new Set(HOMEWORK_STATUSES);
+const HOMEWORK_STATUS_LIMIT = 8;
+const HOMEWORK_STATUS_TONES = ['green', 'orange', 'yellow', 'red', 'blue', 'purple', 'gray'];
+const HOMEWORK_STATUS_TONE_SET = new Set(HOMEWORK_STATUS_TONES);
+const HOMEWORK_STATUS_RESERVED_LABELS = new Set(['未登记', '已登记', '合计']);
+const DEFAULT_HOMEWORK_STATUSES = [
+  { id: 'excellent', label: '优秀', tone: 'green', archived: false },
+  { id: 'copy', label: '涉抄', tone: 'orange', archived: false },
+  { id: 'wrong', label: '错多', tone: 'yellow', archived: false },
+  { id: 'missing', label: '未交', tone: 'red', archived: false }
+];
 
 function textField(value, label, maxLength) {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > maxLength || /[\x00-\x1f\x7f]/.test(value)) {
     throw fail(400, `${label}不能为空，且不能超过 ${maxLength} 个字符`);
   }
   return value.trim();
+}
+
+function statusLabelField(value) {
+  const label = textField(value, '状态名称', 12);
+  if (HOMEWORK_STATUS_RESERVED_LABELS.has(label)) throw fail(400, '该名称是系统保留列名，请换一个');
+  return label;
 }
 
 function validateStudents(students) {
@@ -58,10 +72,67 @@ function ownRecord(records, number) {
   return records && Object.prototype.hasOwnProperty.call(records, number) ? records[number] : null;
 }
 
-function sanitizeRecords(records) {
+function validStatusLabel(value) {
+  if (typeof value !== 'string') return null;
+  const label = value.trim();
+  if (!label || label.length > 12 || /[\x00-\x1f\x7f]/.test(label)) return null;
+  return label;
+}
+
+function cloneStatus(status) {
+  return { id: status.id, label: status.label, tone: status.tone, archived: Boolean(status.archived) };
+}
+
+function defaultHomeworkStatuses() {
+  return DEFAULT_HOMEWORK_STATUSES.map(cloneStatus);
+}
+
+// Status lists are stored per class. Older classes have no list and keep the
+// four original buttons; malformed entries fall back to the defaults rather
+// than leaving the registration UI without any button.
+function statusDefinitions(item) {
+  const stored = Array.isArray(item?.homeworkStatuses) ? item.homeworkStatuses : [];
+  const statuses = [];
+  const ids = new Set();
+  const labels = new Set();
+  for (const entry of stored) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (typeof entry.id !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(entry.id)) continue;
+    if (['recorded', 'unmarked', 'total', '__proto__', 'constructor', 'prototype'].includes(entry.id) || ids.has(entry.id)) continue;
+    const label = validStatusLabel(entry.label);
+    if (!label || labels.has(label) || HOMEWORK_STATUS_RESERVED_LABELS.has(label) || !HOMEWORK_STATUS_TONE_SET.has(entry.tone)) continue;
+    ids.add(entry.id);
+    labels.add(label);
+    statuses.push({ id: entry.id, label, tone: entry.tone, archived: Boolean(entry.archived) });
+  }
+  if (!statuses.length) return defaultHomeworkStatuses();
+  if (!statuses.some(status => !status.archived)) statuses[0].archived = false;
+  return statuses;
+}
+
+function activeHomeworkStatuses(item) {
+  return statusDefinitions(item).filter(status => !status.archived);
+}
+
+function homeworkStatusUsage(item, statusId) {
+  let used = 0;
+  for (const homework of homeworkEntries(item)) {
+    for (const status of Object.values(homework.records && typeof homework.records === 'object' ? homework.records : {})) {
+      if (status === statusId) used++;
+    }
+  }
+  return used;
+}
+
+function statusesForClient(item) {
+  return statusDefinitions(item).map(status => ({ ...status, usage: homeworkStatusUsage(item, status.id) }));
+}
+
+function sanitizeRecords(records, statuses) {
+  const ids = new Set(statuses.map(status => status.id));
   const clean = {};
   for (const [number, status] of Object.entries(records && typeof records === 'object' && !Array.isArray(records) ? records : {})) {
-    if (HOMEWORK_STATUS_SET.has(status)) setRecord(clean, number, status);
+    if (ids.has(status)) setRecord(clean, number, status);
   }
   return clean;
 }
@@ -76,11 +147,13 @@ function findHomework(item, homeworkId) {
   return homework;
 }
 
-function homeworkCounts(students, records) {
-  const counts = { excellent: 0, copy: 0, wrong: 0, missing: 0, recorded: 0, unmarked: 0, total: students.length };
+function homeworkCounts(students, records, statuses) {
+  const counts = { recorded: 0, unmarked: 0, total: students.length };
+  for (const status of statuses) counts[status.id] = 0;
   const numbers = new Set(students.map(student => student.number));
+  const ids = new Set(statuses.map(status => status.id));
   for (const [number, status] of Object.entries(records && typeof records === 'object' && !Array.isArray(records) ? records : {})) {
-    if (!numbers.has(number) || !HOMEWORK_STATUS_SET.has(status)) continue;
+    if (!numbers.has(number) || !ids.has(status)) continue;
     counts[status]++;
     counts.recorded++;
   }
@@ -88,20 +161,28 @@ function homeworkCounts(students, records) {
   return counts;
 }
 
-function homeworkSummary(homework, students) {
+function homeworkSummary(homework, students, statuses) {
   return {
     id: homework.id, title: homework.title, date: homework.date,
     createdAt: homework.createdAt, updatedAt: homework.updatedAt,
-    counts: homeworkCounts(students, homework.records)
+    counts: homeworkCounts(students, homework.records, statuses)
   };
 }
 
-function homeworkDetail(homework) {
+function homeworkDetail(homework, statuses) {
   return {
     id: homework.id, title: homework.title, date: homework.date,
     createdAt: homework.createdAt, updatedAt: homework.updatedAt,
-    records: sanitizeRecords(homework.records)
+    records: sanitizeRecords(homework.records, statuses)
   };
+}
+
+function newHomeworkStatusId(statuses) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const id = `s${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    if (!statuses.some(status => status.id === id)) return id;
+  }
+  throw fail(500, '无法生成新的作业状态，请重试');
 }
 
 function sortedHomework(item, newestFirst) {
@@ -162,7 +243,7 @@ function createClassStore(filename) {
   // their own endpoints and the class payload stays small.
   function publicItem(item) {
     if (!item || typeof item !== 'object') return item;
-    const { drawLog, homework, ...rest } = item;
+    const { drawLog, homework, homeworkStatuses, ...rest } = item;
     return { ...rest, homeworkCount: Array.isArray(homework) ? homework.length : 0 };
   }
   return {
@@ -204,8 +285,83 @@ function createClassStore(filename) {
     homeworkList(ownerId, id) {
       return inspect(items => {
         const item = find(items, ownerId, id);
+        const statuses = statusDefinitions(item);
         const entries = sortedHomework(item, true);
-        return { items: entries.map(entry => homeworkSummary(entry, item.students)), total: entries.length };
+        return {
+          items: entries.map(entry => homeworkSummary(entry, item.students, statuses)),
+          total: entries.length,
+          statuses: statusesForClient(item)
+        };
+      });
+    },
+    homeworkStatusList(ownerId, id) {
+      return inspect(items => ({ items: statusesForClient(find(items, ownerId, id)) }));
+    },
+    createHomeworkStatus(ownerId, id, body) {
+      return change(items => {
+        const item = find(items, ownerId, id);
+        const statuses = statusDefinitions(item);
+        if (statuses.filter(status => !status.archived).length >= HOMEWORK_STATUS_LIMIT) {
+          throw fail(400, `最多同时启用 ${HOMEWORK_STATUS_LIMIT} 个作业状态`);
+        }
+        const label = statusLabelField(body?.label);
+        const tone = body?.tone === undefined ? 'blue' : body.tone;
+        if (!HOMEWORK_STATUS_TONE_SET.has(tone)) throw fail(400, '状态颜色无效');
+        if (statuses.some(status => status.label === label)) throw fail(409, '已存在同名作业状态');
+        const status = { id: newHomeworkStatusId(statuses), label, tone, archived: false };
+        item.homeworkStatuses = [...statuses, status];
+        return { items: statusesForClient(item), status: cloneStatus(status) };
+      });
+    },
+    updateHomeworkStatus(ownerId, id, statusId, body) {
+      return change(items => {
+        const item = find(items, ownerId, id);
+        const statuses = statusDefinitions(item);
+        const status = statuses.find(entry => entry.id === statusId);
+        if (!status) throw fail(404, '作业状态不存在或已删除');
+        if (body?.label !== undefined) {
+          const label = statusLabelField(body.label);
+          if (statuses.some(entry => entry.id !== status.id && entry.label === label)) {
+            throw fail(409, '已存在同名作业状态');
+          }
+          status.label = label;
+        }
+        if (body?.tone !== undefined) {
+          if (!HOMEWORK_STATUS_TONE_SET.has(body.tone)) throw fail(400, '状态颜色无效');
+          status.tone = body.tone;
+        }
+        if (body?.archived !== undefined) {
+          const archived = Boolean(body.archived);
+          if (archived !== status.archived) {
+            if (archived && statuses.filter(entry => !entry.archived).length <= 1) {
+              throw fail(400, '至少保留一个可用的作业状态');
+            }
+            if (!archived && statuses.filter(entry => !entry.archived).length >= HOMEWORK_STATUS_LIMIT) {
+              throw fail(400, `最多同时启用 ${HOMEWORK_STATUS_LIMIT} 个作业状态`);
+            }
+            status.archived = archived;
+          }
+        }
+        item.homeworkStatuses = statuses;
+        return { items: statusesForClient(item), status: cloneStatus(status) };
+      });
+    },
+    removeHomeworkStatus(ownerId, id, statusId) {
+      return change(items => {
+        const item = find(items, ownerId, id);
+        const statuses = statusDefinitions(item);
+        const status = statuses.find(entry => entry.id === statusId);
+        if (!status) throw fail(404, '作业状态不存在或已删除');
+        if (!status.archived && statuses.filter(entry => !entry.archived).length <= 1) {
+          throw fail(400, '至少保留一个可用的作业状态');
+        }
+        // A status already used by history is archived instead of removed so
+        // past assignments keep a readable label and count.
+        const used = homeworkStatusUsage(item, statusId);
+        if (used) status.archived = true;
+        else statuses.splice(statuses.indexOf(status), 1);
+        item.homeworkStatuses = statuses;
+        return { items: statusesForClient(item), archived: Boolean(used), used };
       });
     },
     createHomework(ownerId, id, body) {
@@ -224,16 +380,21 @@ function createClassStore(filename) {
         const now = new Date().toISOString();
         const entry = { id: randomUUID(), title, date, records: {}, createdAt: now, updatedAt: now };
         item.homework = [...homework, entry];
-        return homeworkDetail(entry);
+        return homeworkDetail(entry, statusDefinitions(item));
       });
     },
     homeworkGet(ownerId, id, homeworkId) {
-      return inspect(items => homeworkDetail(findHomework(find(items, ownerId, id), homeworkId)));
+      return inspect(items => {
+        const item = find(items, ownerId, id);
+        return homeworkDetail(findHomework(item, homeworkId), statusDefinitions(item));
+      });
     },
     setHomeworkRecords(ownerId, id, homeworkId, body) {
       return change(items => {
         const item = find(items, ownerId, id);
         const homework = findHomework(item, homeworkId);
+        const statuses = statusDefinitions(item);
+        const activeIds = new Set(activeHomeworkStatuses(item).map(status => status.id));
         const raw = body?.records;
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw fail(400, '请提供要登记的作业状态');
         const entries = Object.entries(raw);
@@ -244,7 +405,7 @@ function createClassStore(filename) {
         // half-applied registration behind.
         for (const [number, status] of entries) {
           if (!numbers.has(number)) throw fail(400, '学生不在当前班级名单中，请刷新页面后重试');
-          if (status !== null && !HOMEWORK_STATUS_SET.has(status)) throw fail(400, '作业状态无效');
+          if (status !== null && !activeIds.has(status)) throw fail(400, '作业状态无效或已停用');
         }
         const records = homework.records && typeof homework.records === 'object' && !Array.isArray(homework.records)
           ? homework.records : {};
@@ -253,7 +414,7 @@ function createClassStore(filename) {
         homework.updatedAt = new Date().toISOString();
         return {
           id: homework.id, updatedAt: homework.updatedAt,
-          counts: homeworkCounts(item.students, records)
+          counts: homeworkCounts(item.students, records, statuses)
         };
       });
     },
@@ -271,15 +432,19 @@ function createClassStore(filename) {
     homeworkStats(ownerId, id) {
       return inspect(items => {
         const item = find(items, ownerId, id);
+        const statuses = statusDefinitions(item);
+        const statusIds = new Set(statuses.map(status => status.id));
         const entries = sortedHomework(item, false);
-        const assignments = entries.map(entry => homeworkSummary(entry, item.students));
-        const totals = { excellent: 0, copy: 0, wrong: 0, missing: 0, recorded: 0, unmarked: 0, total: entries.length * item.students.length };
+        const assignments = entries.map(entry => homeworkSummary(entry, item.students, statuses));
+        const totals = { recorded: 0, unmarked: 0, total: entries.length * item.students.length };
+        for (const status of statuses) totals[status.id] = 0;
         const students = item.students.map(student => {
           const records = entries.map(entry => {
             const status = ownRecord(entry.records, student.number);
-            return HOMEWORK_STATUS_SET.has(status) ? status : null;
+            return statusIds.has(status) ? status : null;
           });
-          const studentTotals = { excellent: 0, copy: 0, wrong: 0, missing: 0, recorded: 0, unmarked: 0, total: entries.length };
+          const studentTotals = { recorded: 0, unmarked: 0, total: entries.length };
+          for (const status of statuses) studentTotals[status.id] = 0;
           for (const status of records) {
             if (status === null) continue;
             studentTotals[status]++;
@@ -291,7 +456,7 @@ function createClassStore(filename) {
           return { number: student.number, name: student.name, records, totals: studentTotals };
         });
         totals.unmarked = totals.total - totals.recorded;
-        return { assignments, students, totals };
+        return { statuses: statusesForClient(item), assignments, students, totals };
       });
     },
     setCalibration(ownerId, id, body) {

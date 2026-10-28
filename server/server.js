@@ -570,6 +570,23 @@ app.delete(`${PATH_PREFIX}/api/classes/:id/draw-log`, requireAuth, async (req, r
   try { res.json(await classStore.clearDrawLog(req.user.id, req.params.id)); }
   catch (error) { next(error); }
 });
+// 作业状态按钮可由教师按班级自定义；已用于历史记录的状态停用而不是删除。
+app.get(`${PATH_PREFIX}/api/classes/:id/homework-statuses`, requireAuth, async (req, res, next) => {
+  try { res.set('Cache-Control', 'no-store').json(await classStore.homeworkStatusList(req.user.id, req.params.id)); }
+  catch (error) { next(error); }
+});
+app.post(`${PATH_PREFIX}/api/classes/:id/homework-statuses`, requireAuth, async (req, res, next) => {
+  try { res.status(201).json(await classStore.createHomeworkStatus(req.user.id, req.params.id, req.body)); }
+  catch (error) { next(error); }
+});
+app.put(`${PATH_PREFIX}/api/classes/:id/homework-statuses/:statusId`, requireAuth, async (req, res, next) => {
+  try { res.json(await classStore.updateHomeworkStatus(req.user.id, req.params.id, req.params.statusId, req.body)); }
+  catch (error) { next(error); }
+});
+app.delete(`${PATH_PREFIX}/api/classes/:id/homework-statuses/:statusId`, requireAuth, async (req, res, next) => {
+  try { res.json(await classStore.removeHomeworkStatus(req.user.id, req.params.id, req.params.statusId)); }
+  catch (error) { next(error); }
+});
 // 作业登记：教师课后按学生点选本次作业状态，并按历次记录生成统计。
 app.get(`${PATH_PREFIX}/api/classes/:id/homework/stats`, requireAuth, async (req, res, next) => {
   try { res.set('Cache-Control', 'no-store').json(await classStore.homeworkStats(req.user.id, req.params.id)); }
