@@ -237,7 +237,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
     res.setHeader('Vary', 'Origin');
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
@@ -568,6 +568,31 @@ app.get(`${PATH_PREFIX}/api/classes/:id/draw-log`, requireAuth, async (req, res,
 });
 app.delete(`${PATH_PREFIX}/api/classes/:id/draw-log`, requireAuth, async (req, res, next) => {
   try { res.json(await classStore.clearDrawLog(req.user.id, req.params.id)); }
+  catch (error) { next(error); }
+});
+// 作业登记：教师课后按学生点选本次作业状态，并按历次记录生成统计。
+app.get(`${PATH_PREFIX}/api/classes/:id/homework/stats`, requireAuth, async (req, res, next) => {
+  try { res.set('Cache-Control', 'no-store').json(await classStore.homeworkStats(req.user.id, req.params.id)); }
+  catch (error) { next(error); }
+});
+app.get(`${PATH_PREFIX}/api/classes/:id/homework`, requireAuth, async (req, res, next) => {
+  try { res.set('Cache-Control', 'no-store').json(await classStore.homeworkList(req.user.id, req.params.id)); }
+  catch (error) { next(error); }
+});
+app.post(`${PATH_PREFIX}/api/classes/:id/homework`, requireAuth, async (req, res, next) => {
+  try { res.status(201).json({ item: await classStore.createHomework(req.user.id, req.params.id, req.body) }); }
+  catch (error) { next(error); }
+});
+app.get(`${PATH_PREFIX}/api/classes/:id/homework/:homeworkId`, requireAuth, async (req, res, next) => {
+  try { res.set('Cache-Control', 'no-store').json({ item: await classStore.homeworkGet(req.user.id, req.params.id, req.params.homeworkId) }); }
+  catch (error) { next(error); }
+});
+app.patch(`${PATH_PREFIX}/api/classes/:id/homework/:homeworkId`, requireAuth, async (req, res, next) => {
+  try { res.json(await classStore.setHomeworkRecords(req.user.id, req.params.id, req.params.homeworkId, req.body)); }
+  catch (error) { next(error); }
+});
+app.delete(`${PATH_PREFIX}/api/classes/:id/homework/:homeworkId`, requireAuth, async (req, res, next) => {
+  try { res.json(await classStore.removeHomework(req.user.id, req.params.id, req.params.homeworkId)); }
   catch (error) { next(error); }
 });
 app.get(`${PATH_PREFIX}/api/classes/:id/touch-calibration`, requireAuth, async (req, res, next) => {

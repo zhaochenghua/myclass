@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管理后台 - 上课投屏平台</title>
   <link rel="stylesheet" href="./style.css">
-  <link rel="stylesheet" href="./admin.css?v=20261026-font-missing-drawlog">
+  <link rel="stylesheet" href="./admin.css?v=20261028-homework">
 </head>
 <body>
   <main class="admin-page">
@@ -237,6 +237,54 @@
                 <button class="btn-danger" id="deleteClassButton" type="button">删除班级</button>
               </div>
             </form>
+            <section class="class-homework" id="classHomework" hidden aria-labelledby="classHomeworkHeading">
+              <div class="class-homework-header">
+                <h3 id="classHomeworkHeading">作业登记 <span id="classHomeworkTitle" class="muted"></span></h3>
+                <div class="class-homework-actions">
+                  <button class="btn-secondary" id="toggleHomeworkStatsButton" type="button" aria-expanded="false" disabled>历次作业统计</button>
+                  <button class="btn-secondary" id="deleteHomeworkButton" type="button" disabled>删除本次</button>
+                </div>
+              </div>
+              <form class="homework-create-form" id="createHomeworkForm">
+                <label for="newHomeworkDate">作业日期
+                  <input type="date" id="newHomeworkDate" required>
+                </label>
+                <label for="newHomeworkTitle">作业名称
+                  <input id="newHomeworkTitle" maxlength="60" placeholder="留空自动命名，如 10月28日作业" autocomplete="off">
+                </label>
+                <button class="btn-primary" id="createHomeworkButton" type="submit">新建并开始登记</button>
+              </form>
+              <p class="class-help" id="homeworkEmpty" hidden>还没有作业登记。填好日期和名称后，点“新建并开始登记”。</p>
+              <div class="homework-register" id="homeworkRegister" hidden>
+                <div class="homework-toolbar">
+                  <label for="homeworkSelect">登记作业</label>
+                  <select id="homeworkSelect"></select>
+                  <span class="homework-save-state" id="homeworkSaveState" role="status" aria-live="polite"></span>
+                </div>
+                <p class="homework-date-warning" id="homeworkDateWarning" role="status" aria-live="polite" hidden></p>
+                <div class="homework-count-bar">
+                  <span class="homework-counts" id="homeworkCounts" aria-live="polite"></span>
+                  <div class="homework-progress" role="progressbar" aria-label="本次作业登记进度" aria-valuemin="0" aria-valuemax="100" id="homeworkProgress">
+                    <span id="homeworkProgressFill"></span>
+                  </div>
+                </div>
+                <p class="class-help homework-tip">改完作业后，点学生姓名后面的状态即可登记；每次点击立即保存，再点一次同一状态可取消登记。</p>
+                <p class="class-help" id="homeworkRosterEmpty" hidden>这个班级还没有学生，请先在上方录入并保存名单，再登记作业。</p>
+                <div class="homework-students" id="homeworkStudents" role="group" aria-label="学生作业登记"></div>
+              </div>
+              <section class="homework-stats" id="homeworkStats" hidden aria-labelledby="homeworkStatsHeading">
+                <div class="homework-stats-header">
+                  <h3 id="homeworkStatsHeading">历次作业统计</h3>
+                  <div class="homework-stats-actions">
+                    <button class="btn-secondary" id="refreshHomeworkStatsButton" type="button">刷新统计</button>
+                    <button class="btn-secondary" id="exportHomeworkStatsButton" type="button" disabled>导出 CSV</button>
+                  </div>
+                </div>
+                <p class="class-help" id="homeworkStatsStatus" role="status" aria-live="polite"></p>
+                <div class="homework-stats-summary" id="homeworkStatsSummary"></div>
+                <div id="homeworkStatsTables"></div>
+              </section>
+            </section>
             <section class="class-draw-log" id="classDrawLog" hidden aria-live="polite">
               <div class="class-draw-log-header">
                 <h3>已抽学生记录 <span id="classDrawLogCount" class="muted"></span></h3>
@@ -335,6 +383,6 @@
   </main>
 
   <script src="./studentRoster.js?v=20260919a"></script>
-  <script src="./admin.js?v=20261027-per-teacher-fonts"></script>
+  <script src="./admin.js?v=20261028-homework"></script>
 </body>
 </html>

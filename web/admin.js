@@ -22,6 +22,29 @@ let fontScanRounds = 0;
 let fontScanLastPending = -1;
 let drawLogRequest = 0;
 
+const HOMEWORK_STATUSES = [
+  { id: 'excellent', label: '优秀' },
+  { id: 'copy', label: '涉抄' },
+  { id: 'wrong', label: '错多' },
+  { id: 'missing', label: '未交' }
+];
+const HOMEWORK_STATUS_IDS = new Set(HOMEWORK_STATUSES.map(status => status.id));
+const HOMEWORK_STATUS_LABELS = Object.fromEntries(HOMEWORK_STATUSES.map(status => [status.id, status.label]));
+const HOMEWORK_FLUSH_DELAY = 200;
+let homeworkAssignments = [];
+let homeworkCurrent = null;
+let homeworkStatsData = null;
+let homeworkListRequest = 0;
+let homeworkDetailRequest = 0;
+let homeworkStatsRequest = 0;
+let homeworkPending = new Map();
+let homeworkFlushTimer = null;
+let homeworkFlushPromise = null;
+let homeworkStatsOpen = false;
+let homeworkCreating = false;
+let homeworkSaveToken = 0;
+let classSelectionToken = 0;
+
 const COURSEWARE_DEFAULT_WIDTHS = { title: 230, fileName: 180, owner: 100, size: 90, createdAt: 160, actions: 180 };
 const COURSEWARE_MIN_WIDTH = 64;
 const COURSEWARE_WIDTHS_KEY = 'myclass.admin.courseware.widths.v1';
@@ -171,7 +194,8 @@ $('#loginForm').addEventListener('submit', async (e) => {
   btn.textContent = '登录';
 });
 
-$('#logoutButton').addEventListener('click', () => {
+$('#logoutButton').addEventListener('click', async () => {
+  if (homeworkPending.size) await flushAllHomework();
   token = '';
   currentUser = null;
   localStorage.removeItem('admin_token');
@@ -179,7 +203,8 @@ $('#logoutButton').addEventListener('click', () => {
 });
 
 // --- 回到主页（安全退出会话并跳转） ---
-$('#homeButton').addEventListener('click', () => {
+$('#homeButton').addEventListener('click', async () => {
+  if (homeworkPending.size) await flushAllHomework();
   token = '';
   currentUser = null;
   localStorage.removeItem('admin_token');
@@ -1152,7 +1177,9 @@ function resetClassEditor() {
   teachingClasses = [];
   editingClass = null;
   rosterDirty = false;
+  classSelectionToken++;
   drawLogRequest++;
+  resetHomeworkPanel();
   $('#teachingClassList').replaceChildren();
   $('#classEditor').hidden = true;
   $('#classEditorEmpty').hidden = false;
@@ -1178,7 +1205,10 @@ async function classApi(route, method = 'GET', body) {
   return data;
 }
 
-function selectTeachingClass(item) {
+async function selectTeachingClass(item) {
+  const selection = ++classSelectionToken;
+  if (homeworkPending.size || homeworkFlushPromise) await flushAllHomework();
+  if (selection !== classSelectionToken) return;
   editingClass = item;
   rosterDirty = false;
   $('#classEditor').hidden = !item;
@@ -1187,13 +1217,21 @@ function selectTeachingClass(item) {
   $('#editClassName').value = item?.name || '';
   $('#classRoster').value = (item?.students || []).map(student => `${student.number}\t${student.name}`).join('\n');
   updateRosterCount();
+  resetHomeworkPanel();
+  if (item) {
+    $('#classHomework').hidden = false;
+    prepareHomeworkPanel();
+  }
   $('#classDrawLog').hidden = !item;
   drawLogRequest++;
   $('#classDrawLogList').replaceChildren();
   $('#classDrawLogCount').textContent = '';
   $('#classDrawLogEmpty').hidden = false;
   $('#classDrawLogEmpty').textContent = item ? '正在读取抽取记录…' : '暂无抽取记录。';
-  if (item) loadDrawLog(item.id);
+  if (item) {
+    loadDrawLog(item.id);
+    loadHomework(item.id);
+  }
   renderTeachingClasses();
 }
 
@@ -1240,6 +1278,670 @@ function renderDrawLog(data) {
   empty.textContent = '暂无抽取记录。';
 }
 
+// --- 任教班级：作业登记与统计 ---
+function localDateInput(date = new Date()) {
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function homeworkDefaultTitle(date) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date || '');
+  return match ? `${Number(match[2])}月${Number(match[3])}日作业` : `${date || ''} 作业`;
+}
+
+function updateHomeworkTitlePlaceholder() {
+  const date = $('#newHomeworkDate').value || localDateInput();
+  $('#newHomeworkTitle').placeholder = `留空自动命名，如 ${homeworkDefaultTitle(date)}`;
+}
+
+function updateHomeworkCreateState() {
+  const button = $('#createHomeworkButton');
+  button.disabled = homeworkCreating || !(editingClass?.students || []).length;
+  button.textContent = homeworkCreating ? '正在创建…' : '新建并开始登记';
+}
+
+function prepareHomeworkPanel() {
+  $('#newHomeworkDate').value = localDateInput();
+  $('#newHomeworkTitle').value = '';
+  updateHomeworkTitlePlaceholder();
+  updateHomeworkCreateState();
+  $('#homeworkSaveState').textContent = '';
+  $('#homeworkSaveState').classList.remove('is-error');
+}
+
+function resetHomeworkPanel() {
+  homeworkListRequest++;
+  homeworkDetailRequest++;
+  homeworkStatsRequest++;
+  clearTimeout(homeworkFlushTimer);
+  homeworkFlushTimer = null;
+  homeworkPending.clear();
+  homeworkAssignments = [];
+  homeworkCurrent = null;
+  homeworkStatsData = null;
+  homeworkStatsOpen = false;
+  homeworkSaveToken++;
+  $('#classHomework').hidden = true;
+  $('#classHomeworkTitle').textContent = '';
+  $('#homeworkEmpty').hidden = true;
+  $('#homeworkEmpty').textContent = '';
+  $('#homeworkRegister').hidden = true;
+  $('#homeworkDateWarning').hidden = true;
+  $('#homeworkDateWarning').textContent = '';
+  $('#homeworkRosterEmpty').hidden = true;
+  $('#homeworkStudents').replaceChildren();
+  $('#homeworkStudents').hidden = false;
+  $('#homeworkSelect').replaceChildren();
+  $('#homeworkSelect').disabled = true;
+  $('#homeworkCounts').textContent = '';
+  $('#homeworkSaveState').textContent = '';
+  $('#homeworkSaveState').classList.remove('is-error');
+  $('#homeworkProgressFill').style.width = '0%';
+  $('#homeworkProgress').setAttribute('aria-valuenow', '0');
+  $('#toggleHomeworkStatsButton').textContent = '历次作业统计';
+  $('#toggleHomeworkStatsButton').setAttribute('aria-expanded', 'false');
+  $('#toggleHomeworkStatsButton').disabled = true;
+  $('#deleteHomeworkButton').disabled = true;
+  $('#homeworkStats').hidden = true;
+  $('#homeworkStatsStatus').textContent = '';
+  $('#homeworkStatsStatus').classList.remove('is-error');
+  $('#homeworkStatsSummary').replaceChildren();
+  $('#homeworkStatsTables').replaceChildren();
+  $('#exportHomeworkStatsButton').disabled = true;
+}
+
+function homeworkRecord(records, number) {
+  if (!records || !Object.prototype.hasOwnProperty.call(records, number)) return null;
+  return HOMEWORK_STATUS_IDS.has(records[number]) ? records[number] : null;
+}
+
+function setHomeworkRecord(records, number, status) {
+  if (status === null) { delete records[number]; return; }
+  Object.defineProperty(records, number, { value: status, enumerable: true, configurable: true, writable: true });
+}
+
+function countHomework(students, records) {
+  const counts = { excellent: 0, copy: 0, wrong: 0, missing: 0, recorded: 0, unmarked: 0, total: students.length };
+  for (const student of students) {
+    const status = homeworkRecord(records, student.number);
+    if (!status) continue;
+    counts[status]++;
+    counts.recorded++;
+  }
+  counts.unmarked = counts.total - counts.recorded;
+  return counts;
+}
+
+async function loadHomework(classId, preferredId) {
+  const request = ++homeworkListRequest;
+  closeHomeworkStats(true);
+  homeworkAssignments = [];
+  homeworkCurrent = null;
+  homeworkStatsData = null;
+  $('#classHomeworkTitle').textContent = '';
+  $('#homeworkRegister').hidden = true;
+  $('#homeworkSelect').replaceChildren();
+  $('#homeworkSelect').disabled = true;
+  $('#toggleHomeworkStatsButton').disabled = true;
+  $('#deleteHomeworkButton').disabled = true;
+  $('#homeworkEmpty').hidden = false;
+  $('#homeworkEmpty').textContent = '正在读取作业登记…';
+  try {
+    const data = await classApi(`/${encodeURIComponent(classId)}/homework`);
+    if (request !== homeworkListRequest || editingClass?.id !== classId) return;
+    homeworkAssignments = Array.isArray(data.items) ? data.items : [];
+    if (editingClass) editingClass.homeworkCount = homeworkAssignments.length;
+    const classEntry = teachingClasses.find(entry => entry.id === classId);
+    if (classEntry) classEntry.homeworkCount = homeworkAssignments.length;
+    renderTeachingClasses();
+    renderHomeworkSelect();
+    if (!homeworkAssignments.length) {
+      $('#homeworkEmpty').hidden = false;
+      $('#homeworkEmpty').textContent = (editingClass?.students || []).length
+        ? '还没有作业登记。填好日期和名称后，点“新建并开始登记”。'
+        : '这个班级还没有学生，请先在上方录入并保存名单，再登记作业。';
+      return;
+    }
+    $('#homeworkEmpty').hidden = true;
+    const chosen = homeworkAssignments.find(entry => entry.id === preferredId) || homeworkAssignments[0];
+    await openHomework(chosen.id, request);
+  } catch (error) {
+    if (request !== homeworkListRequest || editingClass?.id !== classId) return;
+    $('#homeworkEmpty').hidden = false;
+    $('#homeworkEmpty').textContent = error.message;
+  }
+}
+
+async function openHomework(homeworkId, listRequest = homeworkListRequest) {
+  const classId = editingClass?.id;
+  if (!classId) return;
+  const request = ++homeworkDetailRequest;
+  closeHomeworkStats(true);
+  try {
+    const data = await classApi(`/${encodeURIComponent(classId)}/homework/${encodeURIComponent(homeworkId)}`);
+    if (request !== homeworkDetailRequest || listRequest !== homeworkListRequest || editingClass?.id !== classId) return;
+    homeworkCurrent = data.item;
+    renderHomeworkRegister();
+  } catch (error) {
+    if (request !== homeworkDetailRequest || listRequest !== homeworkListRequest || editingClass?.id !== classId) return;
+    homeworkCurrent = null;
+    $('#homeworkRegister').hidden = true;
+    $('#homeworkEmpty').hidden = false;
+    $('#homeworkEmpty').textContent = error.message;
+  }
+}
+
+function renderHomeworkSelect() {
+  const select = $('#homeworkSelect');
+  select.replaceChildren();
+  for (const entry of homeworkAssignments) {
+    const option = document.createElement('option');
+    option.value = entry.id;
+    option.textContent = `${entry.date} ${entry.title}`;
+    select.appendChild(option);
+  }
+  select.disabled = !homeworkAssignments.length;
+  $('#toggleHomeworkStatsButton').disabled = !homeworkAssignments.length;
+  updateHomeworkCreateState();
+}
+
+function renderHomeworkRegister() {
+  const item = homeworkCurrent;
+  if (!item) return;
+  if (!item.records || typeof item.records !== 'object' || Array.isArray(item.records)) item.records = {};
+  closeHomeworkStats(true);
+  $('#homeworkEmpty').hidden = true;
+  $('#homeworkRegister').hidden = false;
+  $('#classHomeworkTitle').textContent = `${item.date} ${item.title}`;
+  $('#homeworkSelect').value = item.id;
+  $('#deleteHomeworkButton').disabled = false;
+  $('#toggleHomeworkStatsButton').disabled = false;
+  const today = localDateInput();
+  const warning = $('#homeworkDateWarning');
+  warning.hidden = item.date === today;
+  warning.textContent = item.date === today
+    ? ''
+    : `当前选中的是 ${item.date} 的作业；如果这是今天刚改完的新作业，请先在上方“新建并开始登记”。`;
+  const students = editingClass?.students || [];
+  $('#homeworkRosterEmpty').hidden = students.length > 0;
+  $('#homeworkStudents').hidden = students.length === 0;
+  renderHomeworkStudents();
+  updateHomeworkCounts();
+  updateHomeworkCreateState();
+}
+
+function renderHomeworkStudents() {
+  const container = $('#homeworkStudents');
+  container.replaceChildren();
+  const students = editingClass?.students || [];
+  const records = homeworkCurrent?.records || {};
+  for (const student of students) {
+    const row = document.createElement('div');
+    row.className = 'homework-student';
+    row.dataset.number = student.number;
+    const status = homeworkRecord(records, student.number);
+    row.classList.toggle('has-record', Boolean(status));
+
+    const name = document.createElement('span');
+    name.className = 'homework-student-name';
+    const number = document.createElement('span');
+    number.className = 'homework-student-number';
+    number.textContent = student.number;
+    const label = document.createElement('span');
+    label.textContent = student.name;
+    name.append(number, label);
+
+    const group = document.createElement('span');
+    group.className = 'homework-statuses';
+    for (const option of HOMEWORK_STATUSES) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'homework-status';
+      button.dataset.status = option.id;
+      button.textContent = option.label;
+      button.title = `${option.label}（再次点击取消登记）`;
+      button.setAttribute('aria-label', `${student.number} ${student.name} ${option.label}`);
+      button.setAttribute('aria-pressed', String(status === option.id));
+      button.addEventListener('click', () => chooseHomeworkStatus(student.number, option.id));
+      group.appendChild(button);
+    }
+    row.append(name, group);
+    container.appendChild(row);
+  }
+}
+
+function updateHomeworkStudentRow(number) {
+  const row = Array.from($('#homeworkStudents').children).find(element => element.dataset.number === number);
+  if (!row) return;
+  const status = homeworkRecord(homeworkCurrent?.records, number);
+  row.querySelectorAll('.homework-status').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.status === status));
+  });
+  row.classList.toggle('has-record', Boolean(status));
+}
+
+function updateHomeworkCounts() {
+  const counts = countHomework(editingClass?.students || [], homeworkCurrent?.records || {});
+  $('#homeworkCounts').textContent = `已登记 ${counts.recorded} / ${counts.total} · 优秀 ${counts.excellent} · 涉抄 ${counts.copy} · 错多 ${counts.wrong} · 未交 ${counts.missing}`;
+  const percent = counts.total ? Math.round(counts.recorded / counts.total * 100) : 0;
+  $('#homeworkProgressFill').style.width = `${percent}%`;
+  $('#homeworkProgress').setAttribute('aria-valuenow', String(percent));
+}
+
+function applyHomeworkRecord(number, status) {
+  if (!homeworkCurrent) return;
+  if (!homeworkCurrent.records || typeof homeworkCurrent.records !== 'object' || Array.isArray(homeworkCurrent.records)) {
+    homeworkCurrent.records = {};
+  }
+  setHomeworkRecord(homeworkCurrent.records, number, status);
+  updateHomeworkStudentRow(number);
+  updateHomeworkCounts();
+}
+
+function chooseHomeworkStatus(number, status) {
+  if (!homeworkCurrent) return;
+  const previous = homeworkRecord(homeworkCurrent.records, number);
+  const next = previous === status ? null : status;
+  if (next === previous) return;
+  applyHomeworkRecord(number, next);
+  const queued = homeworkPending.get(number);
+  homeworkPending.set(number, { status: next, previous: queued ? queued.previous : previous });
+  setHomeworkSaveState('保存中…');
+  scheduleHomeworkFlush();
+}
+
+function setHomeworkSaveState(text, isError = false) {
+  const element = $('#homeworkSaveState');
+  const token = ++homeworkSaveToken;
+  element.textContent = text;
+  element.classList.toggle('is-error', isError);
+  if (!isError && text === '已保存') {
+    setTimeout(() => {
+      if (token === homeworkSaveToken) element.textContent = '';
+    }, 2000);
+  }
+}
+
+function scheduleHomeworkFlush() {
+  clearTimeout(homeworkFlushTimer);
+  homeworkFlushTimer = setTimeout(() => {
+    homeworkFlushTimer = null;
+    flushHomework();
+  }, HOMEWORK_FLUSH_DELAY);
+}
+
+function flushHomework() {
+  if (homeworkFlushPromise) return homeworkFlushPromise;
+  if (!homeworkPending.size || !homeworkCurrent || !editingClass) return Promise.resolve();
+  clearTimeout(homeworkFlushTimer);
+  homeworkFlushTimer = null;
+  const classId = editingClass.id;
+  const homeworkId = homeworkCurrent.id;
+  const changes = new Map(homeworkPending);
+  homeworkPending.clear();
+  const records = {};
+  for (const [number, change] of changes) {
+    Object.defineProperty(records, number, { value: change.status, enumerable: true, configurable: true, writable: true });
+  }
+  setHomeworkSaveState('保存中…');
+  homeworkFlushPromise = (async () => {
+    try {
+      const data = await classApi(`/${encodeURIComponent(classId)}/homework/${encodeURIComponent(homeworkId)}`, 'PATCH', { records });
+      if (editingClass?.id === classId && homeworkCurrent?.id === homeworkId) {
+        const summary = homeworkAssignments.find(entry => entry.id === homeworkId);
+        if (summary) summary.counts = data.counts;
+        setHomeworkSaveState('已保存');
+        if (homeworkStatsOpen) loadHomeworkStats({ silent: true });
+      }
+    } catch (error) {
+      if (editingClass?.id === classId && homeworkCurrent?.id === homeworkId) {
+        for (const [number, change] of changes) {
+          if (homeworkPending.has(number)) continue;
+          if (homeworkRecord(homeworkCurrent.records, number) !== change.status) continue;
+          applyHomeworkRecord(number, change.previous);
+        }
+        setHomeworkSaveState('保存失败，请重试', true);
+      }
+      toast(error.message, 'error');
+    } finally {
+      homeworkFlushPromise = null;
+      if (homeworkPending.size) scheduleHomeworkFlush();
+    }
+  })();
+  return homeworkFlushPromise;
+}
+
+async function flushAllHomework() {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    if (homeworkFlushPromise) { await homeworkFlushPromise; continue; }
+    if (!homeworkPending.size) return;
+    if (!homeworkCurrent || !editingClass) return;
+    await flushHomework();
+  }
+}
+
+function closeHomeworkStats(clear) {
+  homeworkStatsOpen = false;
+  homeworkStatsRequest++;
+  $('#homeworkStats').hidden = true;
+  $('#toggleHomeworkStatsButton').textContent = '历次作业统计';
+  $('#toggleHomeworkStatsButton').setAttribute('aria-expanded', 'false');
+  if (clear) {
+    homeworkStatsData = null;
+    $('#homeworkStatsSummary').replaceChildren();
+    $('#homeworkStatsTables').replaceChildren();
+    $('#homeworkStatsStatus').textContent = '';
+    $('#homeworkStatsStatus').classList.remove('is-error');
+    $('#exportHomeworkStatsButton').disabled = true;
+  }
+}
+
+async function loadHomeworkStats({ silent = false } = {}) {
+  const classId = editingClass?.id;
+  if (!classId) return;
+  const request = ++homeworkStatsRequest;
+  const status = $('#homeworkStatsStatus');
+  if (!silent) {
+    status.textContent = '正在统计…';
+    status.classList.remove('is-error');
+  }
+  $('#refreshHomeworkStatsButton').disabled = true;
+  try {
+    const data = await classApi(`/${encodeURIComponent(classId)}/homework/stats`);
+    if (request !== homeworkStatsRequest || editingClass?.id !== classId) return;
+    homeworkStatsData = data;
+    renderHomeworkStats(data);
+    status.textContent = silent ? '' : '统计已更新。';
+    status.classList.remove('is-error');
+  } catch (error) {
+    if (request !== homeworkStatsRequest || editingClass?.id !== classId) return;
+    status.textContent = error.message;
+    status.classList.add('is-error');
+  } finally {
+    if (request === homeworkStatsRequest) $('#refreshHomeworkStatsButton').disabled = false;
+  }
+}
+
+function statsTableRow(cellTag, values) {
+  const row = document.createElement('tr');
+  for (const value of values) {
+    const cell = document.createElement(cellTag);
+    if (value instanceof Node) cell.appendChild(value);
+    else cell.textContent = String(value);
+    row.appendChild(cell);
+  }
+  return row;
+}
+
+function statsTableScroll(table) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-scroll';
+  wrapper.appendChild(table);
+  return wrapper;
+}
+
+function homeworkBadge(status) {
+  const badge = document.createElement('span');
+  badge.className = `homework-badge is-${status}`;
+  badge.textContent = HOMEWORK_STATUS_LABELS[status];
+  return badge;
+}
+
+function renderHomeworkStats(data) {
+  const assignments = Array.isArray(data.assignments) ? data.assignments : [];
+  const students = Array.isArray(data.students) ? data.students : [];
+  const totals = data.totals || {};
+  const summary = $('#homeworkStatsSummary');
+  summary.replaceChildren();
+  const cards = [
+    ['作业次数', assignments.length],
+    ['已登记', `${totals.recorded || 0} / ${totals.total || 0}`],
+    ['优秀', totals.excellent || 0],
+    ['涉抄', totals.copy || 0],
+    ['错多', totals.wrong || 0],
+    ['未交', totals.missing || 0],
+    ['未登记', totals.unmarked || 0]
+  ];
+  for (const [label, value] of cards) {
+    const card = document.createElement('div');
+    card.className = 'homework-stat-card';
+    const title = document.createElement('span');
+    title.textContent = label;
+    const number = document.createElement('strong');
+    number.textContent = String(value);
+    card.append(title, number);
+    summary.appendChild(card);
+  }
+
+  const container = $('#homeworkStatsTables');
+  container.replaceChildren();
+
+  const assignmentHeading = document.createElement('h4');
+  assignmentHeading.textContent = '各次作业汇总';
+  const assignmentTable = document.createElement('table');
+  assignmentTable.className = 'data-table homework-assignment-table';
+  const assignmentHead = document.createElement('thead');
+  assignmentHead.appendChild(statsTableRow('th', ['日期', '作业名称', '优秀', '涉抄', '错多', '未交', '未登记', '已登记']));
+  assignmentTable.appendChild(assignmentHead);
+  const assignmentBody = document.createElement('tbody');
+  for (const assignment of assignments) {
+    const counts = assignment.counts || {};
+    assignmentBody.appendChild(statsTableRow('td', [
+      assignment.date, assignment.title,
+      counts.excellent || 0, counts.copy || 0, counts.wrong || 0, counts.missing || 0,
+      counts.unmarked || 0, `${counts.recorded || 0} / ${counts.total || 0}`
+    ]));
+  }
+  assignmentTable.appendChild(assignmentBody);
+  const assignmentFoot = document.createElement('tfoot');
+  assignmentFoot.appendChild(statsTableRow('td', [
+    '合计', '',
+    totals.excellent || 0, totals.copy || 0, totals.wrong || 0, totals.missing || 0,
+    totals.unmarked || 0, `${totals.recorded || 0} / ${totals.total || 0}`
+  ]));
+  assignmentTable.appendChild(assignmentFoot);
+  container.append(assignmentHeading, statsTableScroll(assignmentTable));
+
+  const studentHeading = document.createElement('h4');
+  studentHeading.textContent = '学生历次作业明细';
+  const matrix = document.createElement('table');
+  matrix.className = 'data-table homework-matrix';
+  const matrixHead = document.createElement('thead');
+  const matrixHeadRow = document.createElement('tr');
+  const studentTh = document.createElement('th');
+  studentTh.scope = 'col';
+  studentTh.textContent = '学生';
+  matrixHeadRow.appendChild(studentTh);
+  for (const assignment of assignments) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.title = `${assignment.date} ${assignment.title}`;
+    const date = document.createElement('span');
+    date.className = 'homework-matrix-date';
+    date.textContent = assignment.date.slice(5);
+    const title = document.createElement('span');
+    title.className = 'homework-matrix-title';
+    title.textContent = assignment.title;
+    th.append(date, title);
+    matrixHeadRow.appendChild(th);
+  }
+  for (const label of ['优秀', '涉抄', '错多', '未交', '未登记']) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = label;
+    matrixHeadRow.appendChild(th);
+  }
+  matrixHead.appendChild(matrixHeadRow);
+  matrix.appendChild(matrixHead);
+
+  const matrixBody = document.createElement('tbody');
+  for (const student of students) {
+    const row = document.createElement('tr');
+    const studentCell = document.createElement('td');
+    const number = document.createElement('span');
+    number.className = 'homework-student-number';
+    number.textContent = student.number;
+    const name = document.createElement('span');
+    name.textContent = student.name;
+    studentCell.append(number, name);
+    row.appendChild(studentCell);
+    for (const status of student.records || []) {
+      const cell = document.createElement('td');
+      if (status && HOMEWORK_STATUS_IDS.has(status)) cell.appendChild(homeworkBadge(status));
+      else {
+        const empty = document.createElement('span');
+        empty.className = 'homework-unmarked';
+        empty.textContent = '—';
+        cell.appendChild(empty);
+      }
+      row.appendChild(cell);
+    }
+    for (const key of ['excellent', 'copy', 'wrong', 'missing', 'unmarked']) {
+      const cell = document.createElement('td');
+      cell.textContent = String(student.totals?.[key] || 0);
+      row.appendChild(cell);
+    }
+    matrixBody.appendChild(row);
+  }
+  matrix.appendChild(matrixBody);
+  if (assignments.length && students.length) {
+    const matrixFoot = document.createElement('tfoot');
+    const footRow = document.createElement('tr');
+    const label = document.createElement('td');
+    label.textContent = '合计';
+    footRow.appendChild(label);
+    for (const assignment of assignments) {
+      const counts = assignment.counts || {};
+      const cell = document.createElement('td');
+      cell.textContent = `${counts.recorded || 0}/${counts.total || 0}`;
+      footRow.appendChild(cell);
+    }
+    for (const key of ['excellent', 'copy', 'wrong', 'missing', 'unmarked']) {
+      const cell = document.createElement('td');
+      cell.textContent = String(totals[key] || 0);
+      footRow.appendChild(cell);
+    }
+    matrixFoot.appendChild(footRow);
+    matrix.appendChild(matrixFoot);
+  }
+  container.append(studentHeading, statsTableScroll(matrix));
+  const note = document.createElement('p');
+  note.className = 'class-help homework-stats-note';
+  note.textContent = '“未登记”表示该次作业没有点选任何状态；名单中已删除的学生不计入统计，重新加入同一学号后会恢复显示历史记录。表格较宽时可左右滑动查看。';
+  container.appendChild(note);
+  $('#exportHomeworkStatsButton').disabled = false;
+}
+
+function csvCell(value) {
+  const text = String(value ?? '');
+  // Keep student numbers such as "01" as text when Excel opens the CSV.
+  if (/^0\d+$/.test(text)) return `"=""${text}"""`;
+  const guarded = text.replace(/^[=+@\-\t\r]/, match => `'${match}`);
+  return /[",\r\n]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
+}
+
+function sanitizeFilename(value) {
+  return String(value || '').replace(/[\\/:*?"<>|]/g, '_').trim() || '班级';
+}
+
+function exportHomeworkStatsCsv() {
+  const data = homeworkStatsData;
+  if (!data || !editingClass) return;
+  const lines = [
+    [`${editingClass.name} 作业统计`, `导出时间 ${new Date().toLocaleString('zh-CN')}`],
+    [],
+    ['日期', '作业名称', '优秀', '涉抄', '错多', '未交', '未登记', '已登记']
+  ];
+  for (const assignment of data.assignments || []) {
+    const counts = assignment.counts || {};
+    lines.push([assignment.date, assignment.title, counts.excellent || 0, counts.copy || 0,
+      counts.wrong || 0, counts.missing || 0, counts.unmarked || 0, `${counts.recorded || 0}/${counts.total || 0}`]);
+  }
+  const totals = data.totals || {};
+  lines.push(['合计', '', totals.excellent || 0, totals.copy || 0, totals.wrong || 0,
+    totals.missing || 0, totals.unmarked || 0, `${totals.recorded || 0}/${totals.total || 0}`]);
+  lines.push([]);
+  lines.push(['学号', '姓名', ...(data.assignments || []).map(assignment => `${assignment.date} ${assignment.title}`),
+    '优秀', '涉抄', '错多', '未交', '未登记']);
+  for (const student of data.students || []) {
+    const studentTotals = student.totals || {};
+    lines.push([student.number, student.name,
+      ...(student.records || []).map(status => HOMEWORK_STATUS_LABELS[status] || '未登记'),
+      studentTotals.excellent || 0, studentTotals.copy || 0, studentTotals.wrong || 0,
+      studentTotals.missing || 0, studentTotals.unmarked || 0]);
+  }
+  const csv = `\ufeff${lines.map(row => row.map(csvCell).join(',')).join('\r\n')}`;
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${sanitizeFilename(editingClass.name)}-作业统计-${localDateInput()}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function createHomework(event) {
+  event.preventDefault();
+  if (!editingClass || homeworkCreating) return;
+  const date = $('#newHomeworkDate').value;
+  if (!date) { toast('请选择作业日期', 'error'); return; }
+  const titleInput = $('#newHomeworkTitle');
+  const title = titleInput.value.trim() || homeworkDefaultTitle(date);
+  const classId = editingClass.id;
+  homeworkCreating = true;
+  updateHomeworkCreateState();
+  try {
+    await flushAllHomework();
+    const data = await classApi(`/${encodeURIComponent(classId)}/homework`, 'POST', { title, date });
+    titleInput.value = '';
+    if (editingClass?.id !== classId) return;
+    await loadHomework(classId, data.item.id);
+    toast('已新建作业，可以开始登记了', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    homeworkCreating = false;
+    updateHomeworkCreateState();
+  }
+}
+
+async function deleteCurrentHomework() {
+  if (!editingClass || !homeworkCurrent) return;
+  const classId = editingClass.id;
+  const homework = homeworkCurrent;
+  if (!confirm(`确定删除“${homework.date} ${homework.title}”的作业登记？该次记录将无法恢复。`)) return;
+  clearTimeout(homeworkFlushTimer);
+  homeworkFlushTimer = null;
+  homeworkPending.clear();
+  if (homeworkFlushPromise) await homeworkFlushPromise;
+  try {
+    await classApi(`/${encodeURIComponent(classId)}/homework/${encodeURIComponent(homework.id)}`, 'DELETE');
+    if (editingClass?.id !== classId) return;
+    const next = homeworkAssignments.find(entry => entry.id !== homework.id);
+    await loadHomework(classId, next?.id);
+    toast('本次作业记录已删除', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function toggleHomeworkStats() {
+  if (!editingClass || !homeworkAssignments.length) return;
+  if (homeworkStatsOpen) {
+    closeHomeworkStats(true);
+    return;
+  }
+  homeworkStatsOpen = true;
+  $('#homeworkStats').hidden = false;
+  $('#toggleHomeworkStatsButton').textContent = '收起统计';
+  $('#toggleHomeworkStatsButton').setAttribute('aria-expanded', 'true');
+  await flushAllHomework();
+  await loadHomeworkStats();
+  $('#homeworkStats').scrollIntoView({ block: 'nearest' });
+}
+
 function renderTeachingClasses() {
   const list = $('#teachingClassList');
   list.replaceChildren();
@@ -1247,7 +1949,8 @@ function renderTeachingClasses() {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `teaching-class-button${editingClass?.id === item.id ? ' is-active' : ''}`;
-    button.textContent = `${item.name} · ${item.students.length} 人`;
+    const homeworkCount = Number(item.homeworkCount) || 0;
+    button.textContent = `${item.name} · ${item.students.length} 人${homeworkCount ? ` · ${homeworkCount} 次作业` : ''}`;
     button.setAttribute('aria-pressed', String(editingClass?.id === item.id));
     button.addEventListener('click', () => {
       if (classBusy || (rosterDirty && !confirm('名单尚未保存，确定切换并放弃修改吗？'))) return;
@@ -1261,7 +1964,7 @@ async function loadTeachingClasses(selectedId = editingClass?.id) {
   try {
     const data = await classApi('');
     teachingClasses = data.items;
-    selectTeachingClass(teachingClasses.find(item => item.id === selectedId) || teachingClasses[0] || null);
+    await selectTeachingClass(teachingClasses.find(item => item.id === selectedId) || teachingClasses[0] || null);
   } catch (error) { toast(error.message, 'error'); }
 }
 
@@ -1296,11 +1999,12 @@ $('#classEditor').addEventListener('submit', async event => {
   try {
     const students = StudentRoster.parse($('#classRoster').value);
     if (!students.length && editingClass.students.length && !confirm('保存后将清空这个班级的学生名单，确定继续吗？')) return;
+    await flushAllHomework();
     const { item } = await classApi(`/${editingClass.id}`, 'PUT', {
       name: $('#editClassName').value.trim(), students, revision: editingClass.revision
     });
     teachingClasses = teachingClasses.map(existing => existing.id === item.id ? item : existing);
-    selectTeachingClass(item);
+    await selectTeachingClass(item);
     toast('班级与名单已保存', 'success');
   } catch (error) {
     $('#classEditorError').textContent = error.message;
@@ -1311,6 +2015,7 @@ $('#deleteClassButton').addEventListener('click', async () => {
   if (classBusy || !editingClass || !confirm(`确定删除“${editingClass.name}”及其全部学生名单？`)) return;
   classBusy = true;
   try {
+    await flushAllHomework();
     await classApi(`/${editingClass.id}?revision=${editingClass.revision}`, 'DELETE');
     rosterDirty = false;
     await loadTeachingClasses(null);
@@ -1333,8 +2038,25 @@ $('#clearDrawLogButton').addEventListener('click', async () => {
   } catch (error) { toast(error.message, 'error'); }
   finally { classBusy = false; }
 });
+$('#newHomeworkDate').addEventListener('change', updateHomeworkTitlePlaceholder);
+$('#createHomeworkForm').addEventListener('submit', createHomework);
+$('#homeworkSelect').addEventListener('change', () => {
+  const homeworkId = $('#homeworkSelect').value;
+  if (!homeworkId || homeworkId === homeworkCurrent?.id) return;
+  if (homeworkPending.size) flushHomework();
+  closeHomeworkStats(true);
+  openHomework(homeworkId);
+});
+$('#deleteHomeworkButton').addEventListener('click', deleteCurrentHomework);
+$('#toggleHomeworkStatsButton').addEventListener('click', toggleHomeworkStats);
+$('#refreshHomeworkStatsButton').addEventListener('click', async () => {
+  if (!homeworkStatsOpen) return;
+  await flushAllHomework();
+  await loadHomeworkStats();
+});
+$('#exportHomeworkStatsButton').addEventListener('click', exportHomeworkStatsCsv);
 window.addEventListener('beforeunload', event => {
-  if (rosterDirty) { event.preventDefault(); event.returnValue = ''; }
+  if (rosterDirty || homeworkPending.size) { event.preventDefault(); event.returnValue = ''; }
 });
 
 // --- Toast 提示 ---
