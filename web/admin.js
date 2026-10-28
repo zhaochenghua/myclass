@@ -1191,6 +1191,9 @@ function resetClassEditor() {
   $('#classEditorEmpty').hidden = false;
   $('#classRoster').value = '';
   $('#editClassName').value = '';
+  $('#classEditorDetails').open = false;
+  $('#classRosterSummary').textContent = '';
+  $('#classStudentCount').textContent = '';
   $('#classDrawLog').hidden = true;
   $('#classDrawLogList').replaceChildren();
   $('#classDrawLogCount').textContent = '';
@@ -1215,6 +1218,8 @@ async function selectTeachingClass(item) {
   const selection = ++classSelectionToken;
   if (homeworkPending.size || homeworkFlushPromise) await flushAllHomework();
   if (selection !== classSelectionToken) return;
+  const sameClass = Boolean(item && editingClass?.id === item.id);
+  const rosterWasOpen = $('#classEditorDetails').open;
   editingClass = item;
   rosterDirty = false;
   $('#classEditor').hidden = !item;
@@ -1222,6 +1227,7 @@ async function selectTeachingClass(item) {
   $('#classEditorError').hidden = true;
   $('#editClassName').value = item?.name || '';
   $('#classRoster').value = (item?.students || []).map(student => `${student.number}\t${student.name}`).join('\n');
+  $('#classEditorDetails').open = Boolean(item) && (sameClass ? rosterWasOpen : !(item.students || []).length);
   updateRosterCount();
   resetHomeworkPanel();
   if (item) {
@@ -2300,9 +2306,17 @@ async function loadTeachingClasses(selectedId = editingClass?.id) {
 }
 
 function updateRosterCount() {
+  let summary;
   try {
-    $('#classStudentCount').textContent = `（${StudentRoster.parse($('#classRoster').value).length} 人${rosterDirty ? '，未保存' : ''}）`;
-  } catch { $('#classStudentCount').textContent = '（名单有待检查，保存时会提示）'; }
+    const count = StudentRoster.parse($('#classRoster').value).length;
+    const suffix = `人${rosterDirty ? ' · 未保存' : ''}`;
+    $('#classStudentCount').textContent = `（${count} ${suffix}）`;
+    summary = `${count} ${suffix}`;
+  } catch {
+    $('#classStudentCount').textContent = '（名单有待检查，保存时会提示）';
+    summary = '名单有待检查';
+  }
+  $('#classRosterSummary').textContent = summary ? `· ${summary}` : '';
 }
 $('#classEditor').addEventListener('input', () => { rosterDirty = true; updateRosterCount(); });
 $('#refreshClassesButton').addEventListener('click', () => {
@@ -2340,6 +2354,7 @@ $('#classEditor').addEventListener('submit', async event => {
   } catch (error) {
     $('#classEditorError').textContent = error.message;
     $('#classEditorError').hidden = false;
+    $('#classEditorDetails').open = true;
   } finally { classBusy = false; $('#saveClassButton').disabled = false; }
 });
 $('#deleteClassButton').addEventListener('click', async () => {

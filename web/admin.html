@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管理后台 - 上课投屏平台</title>
   <link rel="stylesheet" href="./style.css">
-  <link rel="stylesheet" href="./admin.css?v=20261028-homework-statuses">
+  <link rel="stylesheet" href="./admin.css?v=20261028-collapsible-roster">
 </head>
 <body>
   <main class="admin-page">
@@ -228,9 +228,17 @@
             <form id="classEditor" hidden>
               <label for="editClassName">班级名称</label>
               <input id="editClassName" maxlength="40" required autocomplete="off">
-              <label for="classRoster">学生名单 <span id="classStudentCount"></span></label>
-              <p id="classRosterHelp" class="class-help">每行一位学生，格式为“学号 姓名”。可直接粘贴 Excel 的学号、姓名两列；编辑或删除对应行后点保存。学号可保留前导 0，同班不能重复。</p>
-              <textarea id="classRoster" rows="14" maxlength="40000" spellcheck="false" aria-describedby="classRosterHelp" placeholder="01 张三&#10;02 李四&#10;03 王五"></textarea>
+              <details class="class-editor-details" id="classEditorDetails">
+                <summary>
+                  <span class="class-editor-summary-title">学生名单设置</span>
+                  <span class="class-editor-summary-meta" id="classRosterSummary"></span>
+                </summary>
+                <div class="class-editor-roster">
+                  <label for="classRoster">学生名单 <span id="classStudentCount"></span></label>
+                  <p id="classRosterHelp" class="class-help">每行一位学生，格式为“学号 姓名”。可直接粘贴 Excel 的学号、姓名两列；编辑或删除对应行后点保存。学号可保留前导 0，同班不能重复。</p>
+                  <textarea id="classRoster" rows="14" maxlength="40000" spellcheck="false" aria-describedby="classRosterHelp" placeholder="01 张三&#10;02 李四&#10;03 王五"></textarea>
+                </div>
+              </details>
               <p class="form-error" id="classEditorError" role="alert" hidden></p>
               <div class="class-editor-actions">
                 <button class="btn-primary" id="saveClassButton" type="submit">保存班级与名单</button>
@@ -409,6 +417,6 @@
   </main>
 
   <script src="./studentRoster.js?v=20260919a"></script>
-  <script src="./admin.js?v=20261028-homework-statuses"></script>
+  <script src="./admin.js?v=20261028-collapsible-roster"></script>
 </body>
 </html>

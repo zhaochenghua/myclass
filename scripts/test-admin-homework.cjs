@@ -33,6 +33,17 @@ const students = [
     await page.waitForSelector('#classHomework:not([hidden])');
     await page.waitForFunction(() => document.querySelector('#homeworkEmpty')?.textContent.includes('还没有作业登记'));
 
+    // A populated class starts with the roster editor collapsed so the
+    // homework panel is immediately visible; it expands on demand.
+    assert.equal(await page.locator('#classEditorDetails').getAttribute('open'), null);
+    assert.equal(await page.locator('#classRoster').isHidden(), true);
+    assert.match(await page.locator('#classRosterSummary').innerText(), /4 人/);
+    await page.locator('#classEditorDetails summary').click();
+    assert.equal(await page.locator('#classRoster').isVisible(), true);
+    await page.screenshot({ path: path.join(output, 'desktop-roster-open.png'), fullPage: true });
+    await page.locator('#classEditorDetails summary').click();
+    assert.equal(await page.locator('#classRoster').isHidden(), true);
+
     await page.locator('#newHomeworkTitle').fill('第一单元练习');
     await page.getByRole('button', { name: '新建并开始登记' }).click();
     await page.waitForSelector('.homework-student');
