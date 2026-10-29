@@ -1,4 +1,4 @@
-import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261012-ios3';
+import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261029-pdfcompat';
 import { loadPageMapping, slideEntries } from './coursewarePages.mjs?v=20261022-reader';
 import { layoutRect } from './orientation.mjs?v=20261022-reader';
 

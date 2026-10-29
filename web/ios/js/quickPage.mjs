@@ -1,4 +1,4 @@
-import { renderPdfPage } from './pdfview.js?v=20261012-ios3';
+import { renderPdfPage } from './pdfview.js?v=20261029-pdfcompat';
 import { slideEntries, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';
 
 export function createQuickPagePicker({ root, getCourseware, getPdf, isConnected, onSelect, onUnavailable }) {

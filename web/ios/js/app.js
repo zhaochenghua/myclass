@@ -1,12 +1,12 @@
 import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261024-toolbar';
 let embeddedVideoControls = null;
-import { createPresenter } from './presenter.mjs?v=20261029-presenter';
+import { createPresenter } from './presenter.mjs?v=20261029-pdfcompat';
 let presenterControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';
 import { layoutPoint, layoutRect } from './orientation.mjs?v=20261022-reader';
-import { createDocumentPreview } from './documentPreview.mjs?v=20261022-reader';
-import { createQuickPagePicker } from './quickPage.mjs?v=20261022-reader';
+import { createDocumentPreview } from './documentPreview.mjs?v=20261029-pdfcompat';
+import { createQuickPagePicker } from './quickPage.mjs?v=20261029-pdfcompat';
 // iPhone 网页版教师端主流程。
 // 界面状态机与 Android MainActivity 一致：
 //   auth -> connect -> menu -> (live | coursewareSource -> coursewareList -> coursewarePlay)
@@ -34,8 +34,8 @@ import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
 import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261012-ios3';
 import { mediaKind, prepareImageFile, ensureMediaUploaded } from './mediaFiles.mjs?v=20261012-ios3';
 import { AnnotationBoard, stylusBusy, PEN_WIDTH_LEVELS } from './annotation.js?v=20261022-start';
-import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261012-ios3';
-import { ListPreviews, playbackProgress } from './listPreviews.mjs?v=20261022-reader';
+import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261029-pdfcompat';
+import { ListPreviews, playbackProgress } from './listPreviews.mjs?v=20261029-pdfcompat';
 import { createCoursewareLinks } from './coursewareLinks.mjs?v=20261022-reader';
 
 let mediaListPreviews = null;

@@ -9,7 +9,7 @@
 // 只有当前课件确实带有备注时才显示“演讲”按钮；普通 PDF、链接课件、提取失败的
 // 文件不会多出一个空入口。
 
-import { renderPdfPage } from './pdfview.js?v=20261012-ios3';
+import { renderPdfPage } from './pdfview.js?v=20261029-pdfcompat';
 
 export function createPresenter({ container, getContext, getSession, getDocument, slideFor, navigate }) {
   const style = document.createElement('style');

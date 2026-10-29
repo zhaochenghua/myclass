@@ -17,10 +17,19 @@ const PDFJS_UMD_WORKER = [
 ];
 
 let pdfJsPromise = null;
+let legacyPromise = null;
 let fallbackIndex = -1;
+let legacyRetryUsed = false;
 const documentTasks = new WeakMap();
 
-/** pdf.js 5.x 内部用到 Promise.withResolvers，旧版 Safari 需要兜底 */
+// pdf.js 4.x/5.x 的 worker 在独立线程里运行，页面里的 Promise.withResolvers
+// 兜底补丁传不进 worker。浏览器原生没有它（Chrome < 119、Safari < 17.4）时
+// worker 会直接起不来：worker 反复重试、PDF 一次都不会被请求，界面只剩
+// “课件预览加载失败”。这种环境必须直接用旧版 UMD 构建（大屏端也是这么判断的）。
+// 注意：必须在下面任何兜底补丁执行之前取这个值。
+const nativeWorkerSupport = typeof Promise.withResolvers === 'function';
+
+/** pdf.js 5.x 内部用到 Promise.withResolvers，旧版 Safari 的主线程需要兜底 */
 function ensurePromiseWithResolvers() {
   if (typeof Promise.withResolvers === 'function') return;
   Promise.withResolvers = function withResolvers() {
@@ -45,11 +54,34 @@ function loadScript(src) {
   });
 }
 
+function loadLegacyPdfJs() {
+  if (legacyPromise) return legacyPromise;
+  legacyPromise = (async () => {
+    for (let index = 0; index < PDFJS_UMD_CANDIDATES.length; index += 1) {
+      try {
+        await loadScript(`${PDFJS_UMD_CANDIDATES[index]}${PDFJS_VERSION}`);
+        const lib = window.pdfjsLib;
+        if (!lib) continue;
+        fallbackIndex = index;
+        lib.GlobalWorkerOptions.workerSrc = `${PDFJS_UMD_WORKER[index]}${PDFJS_VERSION}`;
+        return lib;
+      } catch {
+        /* 尝试下一个候选 */
+      }
+    }
+    throw new Error('PDF 组件加载失败，请检查服务器 vendor 资源');
+  })();
+  // 失败后允许下一次重新尝试，不把失败结果永久缓存。
+  legacyPromise.catch(() => { legacyPromise = null; });
+  return legacyPromise;
+}
+
 export function loadPdfJs() {
+  ensurePromiseWithResolvers();
+  if (!nativeWorkerSupport) return loadLegacyPdfJs();
   if (pdfJsPromise) return pdfJsPromise;
 
   pdfJsPromise = (async () => {
-    ensurePromiseWithResolvers();
     try {
       // import() resolves relative to this module (ios/js/), whereas the other
       // resource URLs resolve relative to the document (ios/).
@@ -58,19 +90,7 @@ export function loadPdfJs() {
       return lib;
     } catch {
       // 旧版服务端只有 UMD 构建
-      for (let index = 0; index < PDFJS_UMD_CANDIDATES.length; index += 1) {
-        try {
-          await loadScript(`${PDFJS_UMD_CANDIDATES[index]}${PDFJS_VERSION}`);
-          const lib = window.pdfjsLib;
-          if (!lib) continue;
-          fallbackIndex = index;
-          lib.GlobalWorkerOptions.workerSrc = `${PDFJS_UMD_WORKER[index]}${PDFJS_VERSION}`;
-          return lib;
-        } catch {
-          /* 尝试下一个候选 */
-        }
-      }
-      throw new Error('PDF 组件加载失败，请检查服务器 vendor 资源');
+      return loadLegacyPdfJs();
     }
   })();
 
@@ -78,11 +98,22 @@ export function loadPdfJs() {
 }
 
 export function pdfJsUsesLegacyBuild() {
-  return fallbackIndex >= 0;
+  return fallbackIndex >= 0 || !nativeWorkerSupport;
 }
 
 export async function openPdfDocument(url, { signal } = {}) {
-  const pdfjsLib = await loadPdfJs();
+  try {
+    return await openWith(await loadPdfJs(), url, signal);
+  } catch (error) {
+    // 现代构建在个别浏览器上仍可能起不来（worker 初始化失败等）。
+    // 整个会话退回旧版 UMD 构建再试一次，避免整块课件都打不开。
+    if (signal?.aborted || legacyRetryUsed || !nativeWorkerSupport) throw error;
+    legacyRetryUsed = true;
+    return openWith(await loadLegacyPdfJs(), url, signal);
+  }
+}
+
+async function openWith(pdfjsLib, url, signal) {
   if (signal?.aborted) throw new Error('cancelled');
   const task = pdfjsLib.getDocument({
     url,
@@ -94,7 +125,14 @@ export async function openPdfDocument(url, { signal } = {}) {
   const abort = () => { Promise.resolve(task.destroy()).catch(() => {}); };
   signal?.addEventListener('abort', abort, { once: true });
   try {
-    const document = await task.promise;
+    let document;
+    try {
+      document = await task.promise;
+    } catch (error) {
+      // 失败的任务要显式销毁，避免换旧版构建重试时留下半个 worker。
+      Promise.resolve(task.destroy()).catch(() => {});
+      throw error;
+    }
     documentTasks.set(document, task);
     return document;
   }
