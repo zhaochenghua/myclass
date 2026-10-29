@@ -43,8 +43,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "cn.edu.nb3.myclass.ImportFlowInstrumentation"
-        versionCode = 2026102701
-        versionName = "1.10.6-2026102701"
+        versionCode = 2026102902
+        versionName = "1.10.8-2026102902"
 
         buildConfigField("String", "SERVER_BASE_URL", myClassServerUrl.asBuildConfigString())
         buildConfigField("String", "EXTERNAL_SERVER_BASE_URL", myClassExternalServerUrl.asBuildConfigString())

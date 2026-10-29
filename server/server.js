@@ -17,6 +17,7 @@ const { createUsageStore, chinaDay } = require('./usageStore');
 const { createFontStore } = require('./fontStore');
 const { mountFontRoutes } = require('./fontHttp');
 const { extractDocumentFonts, FONT_DETECTION_VERSION } = require('./documentFonts');
+const { MAX_NOTE_CHARS } = require('./pptxNotes');
 const { isFamilyInstalled } = require('./fontNames');
 const { createFontRegeneration } = require('./fontRegeneration');
 
@@ -666,6 +667,53 @@ app.delete(`${PATH_PREFIX}/api/courseware/:id`, requireAuth, async (req, res, ne
   } catch (error) {
     next(error);
   }
+});
+
+// -- 课件演讲者备注（PPTX 提取 + 教师本人修改） --
+// 备注跟着课件页走，但只给手持设备（Android / iPhone / iPad）看：大屏投影时
+// 学生看不到备注。修改按「课件 id + 用户」保存，共享课件不会把一位老师的
+// 讲稿串到另一位老师那里；提取失败只降级为「没有备注」，不影响课件播放。
+function canReadCourseware(user, item) {
+  return Boolean(item) && (user.role === 'admin' || !item.userId || ['admin', 'legacy', user.id].includes(item.userId));
+}
+
+async function findVisibleCourseware(user, id) {
+  if (typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) return null;
+  const item = (await readCoursewareIndex()).find(entry => entry.id === id);
+  return canReadCourseware(user, item) ? item : null;
+}
+
+app.get(`${PATH_PREFIX}/api/courseware/:id/notes`, requireAuth, async (req, res, next) => {
+  try {
+    const item = await findVisibleCourseware(req.user, req.params.id);
+    if (!item) return res.status(404).json({ error: '课件不存在或无权查看' });
+    res.set('Cache-Control', 'no-store');
+    if (!coursewareStore.notesSupported(item)) return res.json({ supported: false, slides: [] });
+    try {
+      res.json({ supported: true, slides: await coursewareStore.notes(item, req.user.id) });
+    } catch (error) {
+      console.warn('PPTX 备注读取失败:', error.message);
+      res.json({ supported: false, slides: [], warning: '备注提取失败，课件仍可正常播放' });
+    }
+  } catch (error) { next(error); }
+});
+
+app.put(`${PATH_PREFIX}/api/courseware/:id/notes`, requireAuth, async (req, res, next) => {
+  try {
+    const item = await findVisibleCourseware(req.user, req.params.id);
+    if (!item) return res.status(404).json({ error: '课件不存在或无权修改备注' });
+    if (!coursewareStore.notesSupported(item)) return res.status(400).json({ error: '仅 PPTX 课件支持备注' });
+    const { slide, text } = req.body || {};
+    const slideCount = Number(item.conversion?.slideCount) || 0;
+    if (!Number.isInteger(slide) || slide < 1 || (slideCount > 0 ? slide > slideCount : slide > 10000)) {
+      return res.status(400).json({ error: '页码无效' });
+    }
+    if (typeof text !== 'string' || text.length > MAX_NOTE_CHARS) {
+      return res.status(400).json({ error: '备注内容无效或过长' });
+    }
+    const saved = await coursewareStore.saveNote(item, req.user.id, slide, text);
+    res.json({ ok: true, ...saved });
+  } catch (error) { next(error); }
 });
 
 // 课件重命名

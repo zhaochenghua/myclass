@@ -1,5 +1,7 @@
 import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261024-toolbar';
 let embeddedVideoControls = null;
+import { createPresenter } from './presenter.mjs?v=20261029-presenter';
+let presenterControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';
 import { layoutPoint, layoutRect } from './orientation.mjs?v=20261022-reader';
@@ -3411,6 +3413,20 @@ function bindStaticEvents() {
     getDocument: () => state.cwPdf.doc,
     onExternal: url => window.open(url, '_blank', 'noopener,noreferrer'),
     onInternal: page => jumpToCoursewarePage(page)
+  });
+  // 演讲者视图：与内嵌视频同一排按钮；备注按原幻灯片编号返回，
+  // 动画展开后同一张幻灯片的多个状态页共用一段备注。
+  presenterControls = createPresenter({
+    container: document.querySelector('.cw-footer .classroom-actions'),
+    getContext: () => state.screen === 'CoursewarePlay' && state.courseware && !state.coursewareSuspended
+      && coursewarePreviewKind(state.courseware) === 'pdf'
+      ? { url: state.courseware.url, page: state.courseware.page,
+        pageCount: Number(state.cwPdf.pageCount) || Number(state.courseware.pageCount) || 1,
+        slide: slidePage(state.courseware), slideTotal: slideCount(state.courseware) } : null,
+    getSession: () => ({ apiBase: state.apiBase, token: state.token }),
+    getDocument: () => (state.cwPdf.url === state.courseware?.url ? state.cwPdf.doc : null),
+    slideFor: page => state.courseware?.mapping?.statePages?.[page - 1] || page,
+    navigate: page => jumpToCoursewarePage(page)
   });
   setupClipboardLink({
     getSession: () => ({ token: state.token, apiBase: state.apiBase }),

@@ -7,11 +7,12 @@ const { createHmac } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 
-async function startTestServer({ port = 0, withWeb = false, env = {} } = {}) {
+async function startTestServer({ port = 0, withWeb = false, env = {}, seed } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'myclass-classroom-test-'));
   const serverRoot = path.join(directory, 'server');
+  const coursewareRoot = path.join(directory, 'courseware');
   await fs.mkdir(path.join(serverRoot, 'data'), { recursive: true });
-  for (const name of ['server.js', 'classStore.js', 'coursewareStore.js', 'expandAnimations.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js', 'annotationStore.js', 'pptxVideos.js', 'usageStore.js', 'fontStore.js', 'fontHttp.js', 'fontNames.js', 'documentFonts.js', 'missingFonts.js', 'fontRegeneration.js']) {
+  for (const name of ['server.js', 'classStore.js', 'coursewareStore.js', 'expandAnimations.js', 'userStore.js', 'websocket.js', 'roomManager.js', 'presentationState.js', 'annotationStore.js', 'pptxVideos.js', 'pptxNotes.js', 'usageStore.js', 'fontStore.js', 'fontHttp.js', 'fontNames.js', 'documentFonts.js', 'missingFonts.js', 'fontRegeneration.js']) {
     await fs.copyFile(path.join(__dirname, name), path.join(serverRoot, name));
   }
   await fs.cp(path.join(__dirname, 'vendor'), path.join(serverRoot, 'vendor'), { recursive: true });
@@ -32,11 +33,14 @@ async function startTestServer({ port = 0, withWeb = false, env = {} } = {}) {
     passwordHash: createHmac('sha256', secret).update('test1234').digest('hex'),
     createdAt: new Date().toISOString(), lastLoginAt: new Date().toISOString()
   }))));
+  // Tests that need real courseware (PDF preview, extracted PPTX notes) can
+  // publish an isolated fixture before the server reads its index.
+  if (typeof seed === 'function') await seed({ directory, serverRoot, coursewareRoot });
   const child = spawn(process.execPath, [path.join(serverRoot, 'server.js')], {
     cwd: directory, windowsHide: true,
     env: { ...process.env, NODE_PATH: path.join(__dirname, 'node_modules'), HOST: '0.0.0.0', PORT: String(port),
       HTTPS_PORT: '0', PATH_PREFIX: '/myclass', ALLOWED_HOSTS: '127.0.0.1,localhost,10.0.2.2',
-      AUTH_SECRET: secret, XDG_DATA_HOME: path.join(directory, 'font-data'), COURSEWARE_ROOT: path.join(directory, 'courseware'), ...env }
+      AUTH_SECRET: secret, XDG_DATA_HOME: path.join(directory, 'font-data'), COURSEWARE_ROOT: coursewareRoot, ...env }
   });
   let output = '';
   child.stderr.on('data', data => { output += data; });

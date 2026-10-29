@@ -267,6 +267,28 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             send = { action, url, index -> signalingClient?.sendEmbeddedVideo(action, url, index) == true },
             onPages = { url, pages -> coursewareMappings[url] = pages })
     }
+    /** PPTX 演讲者备注：只在当前课件带有备注时露出入口，可当场修改并保存 */
+    private val lectureNotes by lazy {
+        CoursewareNotes(this, coursewareHttpClient,
+            getContext = { coursewareUrl.takeIf { mediaKindOf(it) == CastMediaKind.Pdf }?.let {
+                CoursewareNotes.Context(it, coursewarePage, displayedCoursewarePage()) } },
+            token = { authToken })
+    }
+    /** 演讲者视图的讲话计时：同一课件累计，切换课件时重置 */
+    private val presentationTimer = PresentationTimer()
+    private var presentationTimerUrl = ""
+    /** 演讲者视图翻页：由课件播放页注册，按“页”直接切换并同步大屏 */
+    private var coursewarePdfShowPage: ((Int) -> Unit)? = null
+    private val coursewarePresenter by lazy {
+        CoursewarePresenter(this, lectureNotes, presentationTimer,
+            totalPages = { coursewarePdf?.pageCount ?: 0 },
+            currentPage = { coursewarePage },
+            slideNumber = { displayedCoursewarePage() },
+            slideTotal = { displayedCoursewareCount() },
+            slideForPage = { page -> coursewarePages()?.slide(page) ?: page },
+            step = { delta -> stepPresentedPage(delta) },
+            renderPage = { page, maxEdge, onDone -> renderCoursewarePageForPresenter(page, maxEdge, onDone) })
+    }
     /** 当前已打开课件的缓存键，用于识别切换课件并清理上一份课件的笔迹与位图 */
     private var coursewarePdfOpenedKey = ""
     /** 最近一次收到大屏视频状态的时间，用于判断大屏端是否仍在播放 */
@@ -497,6 +519,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
         }
+        // 演讲者视图是独立的对话框窗口：主界面按新方向重建后，它也要按新布局重建
+        if (currentScreen == Screen.Courseware && coursewareSubScreen == CoursewareSubScreen.Playback) {
+            coursewarePresenter.onConfigurationChanged()
+        }
         if (reopenClassPicker) showPhoneClassPicker()
         syncDeviceRotationFromDisplay(force = true)
     }
@@ -614,6 +640,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     override fun onDestroy() {
         managementPreview?.dismiss()
         embeddedVideos.destroy()
+        lectureNotes.destroy()
+        coursewarePresenter.dismiss()
         ImportUploadService.detach(this)
         clipboardDialog?.dismiss()
         campusCheckGeneration += 1
@@ -4674,6 +4702,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         currentScreen = Screen.Courseware
         coursewareSubScreen = CoursewareSubScreen.Playback
         coursewareUploadInProgress = false
+        // 换课件时讲话计时从 0 开始；同一个课件旋转/重进不清零
+        if (presentationTimerUrl != coursewareUrl) {
+            presentationTimerUrl = coursewareUrl
+            presentationTimer.reset()
+        }
 
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         // 横屏分两种，与 iOS 端 iPad / 手机的分化一致：
@@ -4786,7 +4819,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         pageBar.addView(pageLabel)
         pageBar.addView(nextButton)
 
-        // 跳页行：左侧输入页码、右侧跳转按钮，做成显性入口，不再藏在页码里
+        // 跳页行：左侧输入页码、右侧跳转按钮，做成显性入口，不再藏在页码里；
+        // 带备注的 PPTX 在右侧多一个“备注”入口（没有备注时自动隐藏，不占位）。
         val jumpRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -4797,9 +4831,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             )
         }
         val jumpButton = compactButton(primaryButton("快速翻页"), 14f).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                marginEnd = dp(8)
+            }
         }
         jumpRow.addView(jumpButton)
+        // 演讲者视图入口：带备注的 PPTX 才出现（没有备注时自动隐藏，不占位）
+        val presentationButton = compactButton(secondaryButton("演讲"), 12f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(76), ViewGroup.LayoutParams.MATCH_PARENT)
+            setOnClickListener { coursewarePresenter.show() }
+            lectureNotes.attach(this)
+        }
+        jumpRow.addView(presentationButton)
 
         // 手势模式工具栏（课件页方向固定，不提供旋转）
         val gestureBar = LinearLayout(this).apply {
@@ -5001,6 +5044,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
         fun updatePageBar() {
             embeddedVideos.refresh()
+            lectureNotes.refresh()
+            coursewarePresenter.refresh()
             val total = coursewarePdf?.pageCount?.takeIf { it > 0 } ?: coursewarePageCount
             pageLabel.text = "第 ${displayedCoursewarePage()} / ${displayedCoursewareCount()} 页"
             val canPrev = coursewarePage > 1
@@ -5033,6 +5078,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             if (notifyRemote) {
                 signalingClient?.sendCoursewarePage(page)
             }
+            // 演讲者视图的“上一页 / 下一页”直接按页切换，不走逐屏滚动
+            coursewarePdfShowPage = { next -> showPage(next, notifyRemote = true) }
 
             val cached = coursewarePdfBitmaps[page]
             if (cached != null) {
@@ -5213,6 +5260,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             addToPageRow(rollButton, dp(80), end = 6)
             addToPageRow(clearButton, dp(76), end = 6)
             addToPageRow(embeddedButton, dp(76), end = 6)
+            addToPageRow(presentationButton, dp(64), end = 6)
             addToPageRow(prevButton, 0, weight = 1f, end = 6)
             addToPageRow(pageLabel, dp(88))
             addToPageRow(nextButton, 0, weight = 1f, start = 6)
@@ -5343,6 +5391,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     /** 释放课件渲染资源：关闭 PDF 句柄并回收全部页位图 */
     private fun releaseCoursewarePdf() {
         coursewarePdfPaging = null
+        coursewarePdfShowPage = null
         coursewarePdf?.close()
         coursewarePdf = null
         coursewarePdfBitmaps.values.forEach { runCatching { it.recycle() } }
@@ -5817,6 +5866,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     /** 结束图片/视频投屏时释放预览资源与界面引用 */
     private fun resetMediaCastState() {
         embeddedVideos.detach()
+        lectureNotes.detach()
+        coursewarePresenter.dismiss()
         coursewareLocalUri = null
         castImageBitmap = null
         zoomableImageView?.releaseAnnotationLayer()
@@ -5858,6 +5909,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun releaseMediaCastViews() {
         saveVisibleFileAnnotations()
         embeddedVideos.detach()
+        lectureNotes.detach()
+        coursewarePresenter.dismiss()
         zoomableImageView?.releaseAnnotationLayer()
         zoomableImageView = null
         imageCastPenMode = false
@@ -5957,6 +6010,34 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         signalingClient?.sendCoursewareNavigate(delta)
         updateStatus("$coursewareTitle\n正在切换...")
+    }
+
+    /** 演讲者视图翻页：直接切到上一页/下一页（不做逐屏滚动），与“下一页预览”一致 */
+    private fun stepPresentedPage(delta: Int) {
+        if (!isCoursewarePlaybackScreen()) return
+        val showPage = coursewarePdfShowPage ?: return
+        val total = coursewarePdf?.pageCount ?: 0
+        if (total <= 0) return
+        val target = (coursewarePage + delta).coerceIn(1, total)
+        if (target == coursewarePage) return
+        showPage(target)
+    }
+
+    /** 演讲者视图的预览位图：独立渲染，避免与主界面的位图缓存互相回收 */
+    private fun renderCoursewarePageForPresenter(page: Int, maxEdge: Int, onDone: (Bitmap?) -> Unit) {
+        val pdf = coursewarePdf
+        if (pdf == null || pdf.pageCount <= 0) {
+            onDone(null)
+            return
+        }
+        Thread {
+            val bitmap = runCatching { pdf.renderPage(page - 1, maxEdge) }
+                .onFailure { Log.w(logTag, "演讲者视图渲染第 $page 页失败", it) }
+                .getOrNull()
+            runOnUiThread {
+                if (isDestroyed) bitmap?.recycle() else onDone(bitmap)
+            }
+        }.start()
     }
 
     private fun configureCoursewareNavigationButton(button: MaterialButton, delta: Int) {

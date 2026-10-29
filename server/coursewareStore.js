@@ -3,11 +3,14 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { AnnotationStore } = require('./annotationStore');
 const { extractPptxVideos } = require('./pptxVideos');
+const { extractPptxNotes, MAX_NOTE_CHARS, MAX_SLIDES } = require('./pptxNotes');
 
 const OFFICE = new Set(['.ppt', '.pptx', '.doc', '.docx']);
 const VIDEO = new Set(['.mp4', '.mov', '.avi', '.webm', '.mkv', '.3gp']);
 const IMAGE = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
 const EXTENSIONS = ['.pdf', '.zip', ...OFFICE, ...VIDEO, ...IMAGE];
+// Upper bound for one teacher's edited notes across a whole deck.
+const MAX_NOTE_TOTAL_CHARS = 1024 * 1024;
 
 function storageError(status, message) {
   return Object.assign(new Error(message), { status, publicMessage: message });
@@ -27,10 +30,15 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
   const objectsRoot = path.join(root, '.objects');
   fs.mkdirSync(objectsRoot, { recursive: true });
   const annotations = new AnnotationStore(path.join(root, '.annotations'));
+  // Speaker-note edits are personal: each teacher keeps their own copy of a
+  // file's notes, so a shared courseware never leaks one teacher's script into
+  // another teacher's classroom. The extracted PPTX notes are the shared base.
+  const notesRoot = path.join(root, '.notes');
   let writes = Promise.resolve();
   let initialization;
   const preparations = new Map();
   const embeddedJobs = new Map();
+  const baseNoteJobs = new Map();
 
   // Only identical objects wait for each other. Conversion must never occupy
   // the global metadata transaction queue (and block unrelated tiny uploads).
@@ -202,6 +210,14 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
             await fs.promises.rm(path.join(staging, 'embedded'), { recursive: true, force: true });
             console.warn('PPTX video extraction deferred:', error.message);
           }
+          // Notes are small: extract eagerly so the first classroom open does not
+          // pay for parsing. A failure is only deferred, never fatal to upload.
+          try {
+            await fs.promises.writeFile(path.join(staging, 'notes.json'), JSON.stringify(await extractPptxNotes(stagedOriginal)));
+          } catch (error) {
+            await fs.promises.rm(path.join(staging, 'notes.json'), { force: true });
+            console.warn('PPTX notes extraction deferred:', error.message);
+          }
         }
       }
       await fs.promises.mkdir(path.dirname(bundle), { recursive: true });
@@ -363,6 +379,8 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
       // If interrupted afterwards, leftover files stay unlisted, never shared.
       await saveIndex(remaining);
       await annotations.remove(id);
+      await fs.promises.rm(path.join(notesRoot, id), { recursive: true, force: true });
+      await fs.promises.rm(path.join(notesRoot, `${id}.base.json`), { force: true });
       // Wait for an in-progress lazy extraction before removing the last copy.
       await embeddedJobs.get(item.storageKey || item.id)?.catch(() => {});
       await fs.promises.rm(path.join(root, '.embedded', id), { recursive: true, force: true });
@@ -600,8 +618,122 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     } finally { if (embeddedJobs.get(key) === task) embeddedJobs.delete(key); }
   }
 
+  // -- 演讲者备注 ---------------------------------------------------------
+  // Notes belong to a slide, not to a PDF page: after animation expansion one
+  // slide can own several pages, and every page shows the same note.
+  // The PPTX is the shared base; each teacher's edits are stored per user so a
+  // shared courseware never hands one teacher's script to another teacher.
+
+  function checkUserId(userId) {
+    if (typeof userId !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(userId)) throw storageError(400, '无效用户');
+    return userId;
+  }
+
+  function notesSupported(item) {
+    return typeof item?.originalUrl === 'string' && item.originalUrl.endsWith('.pptx');
+  }
+
+  function normalizeNotes(value) {
+    if (!Array.isArray(value)) return [];
+    const notes = [];
+    for (const note of value) {
+      const slide = Number(note?.slide);
+      const text = typeof note?.text === 'string' ? note.text.trim().slice(0, MAX_NOTE_CHARS) : '';
+      if (Number.isInteger(slide) && slide >= 1 && slide <= MAX_SLIDES && text) notes.push({ slide, text });
+    }
+    return notes;
+  }
+
+  function overridesFile(id, userId) {
+    checkId(id);
+    checkUserId(userId);
+    return path.join(notesRoot, id, `${userId}.json`);
+  }
+
+  async function readOverrides(id, userId) {
+    let raw;
+    try { raw = await fs.promises.readFile(overridesFile(id, userId), 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+    const slides = JSON.parse(raw)?.slides;
+    if (!slides || typeof slides !== 'object') return {};
+    const overrides = {};
+    for (const [key, value] of Object.entries(slides)) {
+      const slide = Number(key);
+      if (Number.isInteger(slide) && slide >= 1 && slide <= MAX_SLIDES && typeof value === 'string') {
+        overrides[slide] = value.slice(0, MAX_NOTE_CHARS);
+      }
+    }
+    return overrides;
+  }
+
+  async function baseNotes(item) {
+    if (!notesSupported(item)) return [];
+    checkId(item.id);
+    const bundle = item.storageKey ? objectDirectory(item.storageKey) : null;
+    const bundleFile = bundle ? path.join(bundle, 'notes.json') : '';
+    const legacyFile = path.join(notesRoot, `${item.id}.base.json`);
+    for (const file of [bundleFile, legacyFile]) {
+      if (!file) continue;
+      try { return normalizeNotes(JSON.parse(await fs.promises.readFile(file, 'utf8'))); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    // Courseware published before notes existed: extract on first use, exactly
+    // like embedded videos, so old files do not require a re-upload.
+    const key = item.storageKey || item.id;
+    let job = baseNoteJobs.get(key);
+    if (!job) {
+      job = (async () => {
+        const source = await resolveOriginal(item, '.pptx');
+        if (!source) return [];
+        const notes = normalizeNotes(await extractPptxNotes(source));
+        const inBundle = bundle && await fs.promises.access(bundle).then(() => true, () => false);
+        const directory = inBundle ? bundle : notesRoot;
+        await fs.promises.mkdir(directory, { recursive: true });
+        await fs.promises.writeFile(inBundle ? bundleFile : legacyFile, JSON.stringify(notes));
+        return notes;
+      })();
+      baseNoteJobs.set(key, job);
+    }
+    try { return await job; }
+    finally { if (baseNoteJobs.get(key) === job) baseNoteJobs.delete(key); }
+  }
+
+  async function notes(item, userId) {
+    const merged = new Map((await baseNotes(item)).map(note => [note.slide, note.text]));
+    for (const [slide, text] of Object.entries(await readOverrides(item.id, userId))) merged.set(Number(slide), text);
+    return [...merged.entries()].filter(([, text]) => text.trim())
+      .sort((a, b) => a[0] - b[0]).map(([slide, text]) => ({ slide, text }));
+  }
+
+  // An empty text intentionally masks the note baked into the PPTX instead of
+  // deleting the override, otherwise "clear" would bring the original back.
+  function saveNote(item, userId, slide, text) {
+    return Promise.resolve().then(() => {
+      checkId(item.id);
+      checkUserId(userId);
+      if (!Number.isInteger(slide) || slide < 1 || slide > MAX_SLIDES) throw storageError(400, '无效页码');
+      if (typeof text !== 'string' || text.length > MAX_NOTE_CHARS) throw storageError(400, '备注过长');
+      const value = text.replace(/\r\n?/g, '\n').trim();
+      return mutate(async () => {
+        const overrides = await readOverrides(item.id, userId);
+        overrides[slide] = value;
+        let total = 0;
+        for (const note of Object.values(overrides)) total += note.length;
+        if (total > MAX_NOTE_TOTAL_CHARS) throw storageError(400, '备注总长度超出限制');
+        const file = overridesFile(item.id, userId);
+        await fs.promises.mkdir(path.dirname(file), { recursive: true });
+        const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+        try {
+          await fs.promises.writeFile(temporary, JSON.stringify({ version: 1, slides: overrides, updatedAt: new Date().toISOString() }));
+          await fs.promises.rename(temporary, file);
+        } finally { await fs.promises.rm(temporary, { force: true }); }
+        return { slide, text: value };
+      });
+    });
+  }
+
   return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink, fileNotes,
-    embeddedVideos, scanMissingFonts, regenerate };
+    embeddedVideos, notes, saveNote, notesSupported, scanMissingFonts, regenerate };
 }
 
 module.exports = { createCoursewareStore };
