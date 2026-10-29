@@ -2,6 +2,7 @@ package cn.edu.nb3.myclass
 
 import android.app.Activity
 import android.app.Dialog
+import android.content.Context
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -14,6 +15,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.util.TypedValue
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -30,15 +32,16 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.button.MaterialButton
 
 /**
- * 演讲者视图（全屏）：当前页 / 下一页预览、演讲备注（可就地修改）、计时器、页码进度。
+ * 演讲者视图（全屏）：当前页 / 下一页预览、演讲备注（可就地修改）、当前页视频、计时器、页码进度。
  *
  * 界面按横竖屏自适应：
  * - 横屏：左侧当前页，右侧上下分成下一页与备注；
  * - 竖屏：当前页 / 下一页 / 备注纵向排布。
  * 编辑备注时临时收起预览，把整块空间让给输入框（键盘弹起后仍然够用）。
  *
- * 所有预览位图由本类自己渲染并回收，不与课件主界面共用缓存，避免主界面翻页
- * 回收位图时把演讲者视图里的图一起回收。
+ * 预览优先复用课件主界面已经渲染好的位图（按比例缩成预览图），没有时才自己渲染，
+ * 并缓存最近几页：来回翻页不需要重新渲染。自己渲染/生成的位图由本类回收，
+ * 主界面的位图只读取、不回收。
  */
 class CoursewarePresenter(
     private val activity: Activity,
@@ -48,12 +51,21 @@ class CoursewarePresenter(
     private val currentPage: () -> Int,
     private val slideNumber: () -> Int,
     private val slideTotal: () -> Int,
-    private val slideForPage: (Int) -> Int,
     private val step: (Int) -> Unit,
-    private val renderPage: (page: Int, maxEdge: Int, onDone: (Bitmap?) -> Unit) -> Unit
+    private val renderPage: (page: Int, maxEdge: Int, onDone: (Bitmap?) -> Unit) -> Unit,
+    /** 主界面已渲染的页位图（只读，不回收）；没有则返回 null。 */
+    private val sharedBitmap: (Int) -> Bitmap? = { null },
+    /** 当前幻灯片是否有内嵌视频。 */
+    private val hasVideo: () -> Boolean = { false },
+    /** 打开本页视频的选择 / 遥控面板。 */
+    private val openVideo: () -> Unit = {}
 ) {
-    private class PagePane(val view: LinearLayout, val image: ImageView, val hint: TextView) {
-        var bitmap: Bitmap? = null
+    private class PagePane(val view: LinearLayout, val image: ImageView, val hint: TextView)
+
+    private companion object {
+        const val PREVIEW_MAIN_EDGE = 1200
+        const val PREVIEW_NEXT_EDGE = 800
+        const val PREVIEW_CACHE_LIMIT = 3
     }
 
     private var dialog: Dialog? = null
@@ -70,6 +82,15 @@ class CoursewarePresenter(
     private var notesAction: MaterialButton? = null
     private var notesCancel: MaterialButton? = null
     private var notesStatus: TextView? = null
+    private var videoButton: MaterialButton? = null
+    private var fontDownButton: MaterialButton? = null
+    private var fontUpButton: MaterialButton? = null
+    /** 备注字号四档（sp），默认 16；选择记在本机，换课件/重启后保持 */
+    private val noteSizesSp = floatArrayOf(14f, 16f, 18f, 20f)
+    private var noteSizeIndex = activity.getSharedPreferences("myclass_ui", Context.MODE_PRIVATE)
+        .getInt("presenterNoteSize", 1).coerceIn(0, noteSizesSp.lastIndex)
+    /** 预览缓存：页码 → 自己生成/缩放的位图（最近几页，来回翻页不重复渲染） */
+    private val previewCache = LinkedHashMap<Int, Bitmap>()
 
     private var editing = false
     private var saving = false
@@ -130,6 +151,7 @@ class CoursewarePresenter(
         if (dialog == null) return
         updateHeader()
         if (!editing) renderNotesBody()
+        updateVideoButton()
         val page = currentPage()
         val total = totalPages()
         if (force || page != renderedPage || total != renderedTotal || previewFailed) {
@@ -205,6 +227,17 @@ class CoursewarePresenter(
             }
         }
         row.addView(progressLabel)
+        // 备注字号：A− / A+ 四档，设置保存在本机（不同老师/设备互不影响）
+        fontDownButton = actionButton("A−", filled = false, textSize = 12f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(34)).apply { marginEnd = dp(4) }
+            setOnClickListener { changeNoteSize(-1) }
+        }
+        row.addView(fontDownButton)
+        fontUpButton = actionButton("A+", filled = false, textSize = 12f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(34)).apply { marginEnd = dp(8) }
+            setOnClickListener { changeNoteSize(1) }
+        }
+        row.addView(fontUpButton)
         row.addView(actionButton("关闭", filled = false, textSize = 13f).apply {
             layoutParams = LinearLayout.LayoutParams(dp(64), dp(34))
             setOnClickListener { dismiss() }
@@ -292,6 +325,13 @@ class CoursewarePresenter(
             }
         }
         header.addView(notesStatus)
+        // 当前幻灯片有内嵌视频时才有入口；视频仍在大屏播放，这里负责选片与遥控。
+        videoButton = actionButton("本页视频", filled = false, textSize = 12f).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(72), dp(30)).apply { marginEnd = dp(6) }
+            visibility = View.GONE
+            setOnClickListener { if (!editing && !saving) openVideo() }
+        }
+        header.addView(videoButton)
         notesAction = actionButton("编辑", filled = false, textSize = 12f).apply {
             layoutParams = LinearLayout.LayoutParams(dp(60), dp(30))
             setOnClickListener { if (editing) saveNote() else enterEdit() }
@@ -332,6 +372,7 @@ class CoursewarePresenter(
         }
         host.addView(notesEditor)
         pane.addView(host, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        applyNoteFont()
         return pane
     }
 
@@ -460,35 +501,69 @@ class CoursewarePresenter(
             scheduleRetry(generation)
             return
         }
-        drawPreview(currentPane, page, 1600, generation)
+        drawPreview(currentPane, page, PREVIEW_MAIN_EDGE, generation)
         if (page < total) {
-            drawPreview(nextPane, page + 1, 1100, generation)
+            drawPreview(nextPane, page + 1, PREVIEW_NEXT_EDGE, generation)
         } else {
-            nextPane?.bitmap?.let { runCatching { it.recycle() } }
-            nextPane?.bitmap = null
             nextPane?.image?.setImageDrawable(null)
             nextPane?.hint?.text = "已是最后一页"
         }
     }
 
+    private fun previewFor(page: Int): Bitmap? = previewCache[page]?.takeIf { !it.isRecycled }
+
+    private fun putPreview(page: Int, bitmap: Bitmap) {
+        // 只做缓存替换，不立即 recycle：旧位图可能还挂在某个 ImageView 上，
+        // 立刻回收会让画面显示一张已回收的位图。真正回收放在 releaseBitmaps()。
+        previewCache[page] = bitmap
+        while (previewCache.size > PREVIEW_CACHE_LIMIT) {
+            previewCache.remove(previewCache.keys.first())
+        }
+    }
+
+    /** 主界面已渲染好的页位图按比例缩成预览图；尺寸相同也必须复制，不能回收主界面的位图 */
+    private fun scaledCopy(source: Bitmap, maxEdge: Int): Bitmap? {
+        val longest = maxOf(source.width, source.height).coerceAtLeast(1)
+        val scale = (maxEdge.toFloat() / longest).coerceAtMost(1f)
+        val width = maxOf(1, (source.width * scale).toInt())
+        val height = maxOf(1, (source.height * scale).toInt())
+        if (width == source.width && height == source.height) return source.copy(Bitmap.Config.ARGB_8888, false)
+        return Bitmap.createScaledBitmap(source, width, height, true)
+    }
+
     private fun drawPreview(pane: PagePane?, page: Int, maxEdge: Int, generation: Int) {
         pane ?: return
+        // 1) 预览缓存命中：来回翻页瞬间显示
+        val cached = previewFor(page)
+        if (cached != null) {
+            pane.image.setImageBitmap(cached)
+            pane.hint.text = ""
+            return
+        }
+        // 2) 主界面已经渲染过这一页：缩放复制，省掉一次完整渲染
+        val shared = sharedBitmap(page)?.takeIf { !it.isRecycled }
+        if (shared != null) {
+            val copy = runCatching { scaledCopy(shared, maxEdge) }.getOrNull()
+            if (copy != null) {
+                putPreview(page, copy)
+                pane.image.setImageBitmap(copy)
+                pane.hint.text = ""
+                return
+            }
+        }
+        // 3) 兜底：自己渲染（分辨率比主界面低，速度更快）
         pane.hint.text = "正在渲染…"
         renderPage(page, maxEdge) { bitmap ->
-            if (dialog == null || generation != previewGeneration) {
-                runCatching { bitmap?.recycle() }
-                return@renderPage
-            }
+            if (dialog == null || generation != previewGeneration) return@renderPage
             if (bitmap == null) {
                 pane.hint.text = "预览加载中…"
                 previewFailed = true
                 scheduleRetry(generation)
                 return@renderPage
             }
-            pane.bitmap?.let { runCatching { it.recycle() } }
-            pane.bitmap = bitmap
+            putPreview(page, bitmap)
             pane.image.setImageBitmap(bitmap)
-            pane.hint.text = "第 ${slideForPage(page)} 页"
+            pane.hint.text = ""
         }
     }
 
@@ -519,6 +594,7 @@ class CoursewarePresenter(
         notesCancel?.visibility = View.VISIBLE
         notesStatus?.setTextColor(ContextCompat.getColor(activity, R.color.myclass_muted))
         notesStatus?.text = ""
+        updateVideoButton()
         notesEditor?.post {
             activity.getSystemService(InputMethodManager::class.java)
                 ?.showSoftInput(notesEditor, InputMethodManager.SHOW_IMPLICIT)
@@ -535,6 +611,7 @@ class CoursewarePresenter(
         notesCancel?.visibility = View.GONE
         hideKeyboard()
         renderNotesBody()
+        updateVideoButton()
     }
 
     private fun saveNote() {
@@ -579,11 +656,41 @@ class CoursewarePresenter(
     }
 
     private fun releaseBitmaps() {
-        listOf(currentPane, nextPane).forEach { pane ->
-            pane?.bitmap?.let { runCatching { it.recycle() } }
-            pane?.bitmap = null
-            pane?.image?.setImageDrawable(null)
+        // 先摘掉 ImageView 上的引用，再回收缓存位图，避免绘制已回收位图。
+        listOf(currentPane, nextPane).forEach { it?.image?.setImageDrawable(null) }
+        previewCache.values.forEach { runCatching { it.recycle() } }
+        previewCache.clear()
+    }
+
+    private fun updateVideoButton() {
+        val button = videoButton ?: return
+        button.visibility = if (!editing && hasVideo()) View.VISIBLE else View.GONE
+    }
+
+    /** 备注字号（阅读与编辑同步），并维护 A−/A+ 在两端时的置灰状态 */
+    private fun applyNoteFont() {
+        val size = noteSizesSp[noteSizeIndex]
+        notesBody?.setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
+        notesEditor?.setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
+        val canDown = noteSizeIndex > 0
+        val canUp = noteSizeIndex < noteSizesSp.lastIndex
+        fontDownButton?.apply {
+            isEnabled = canDown
+            alpha = if (canDown) 1f else 0.4f
         }
+        fontUpButton?.apply {
+            isEnabled = canUp
+            alpha = if (canUp) 1f else 0.4f
+        }
+    }
+
+    private fun changeNoteSize(delta: Int) {
+        val next = (noteSizeIndex + delta).coerceIn(0, noteSizesSp.lastIndex)
+        if (next == noteSizeIndex) return
+        noteSizeIndex = next
+        activity.getSharedPreferences("myclass_ui", Context.MODE_PRIVATE).edit()
+            .putInt("presenterNoteSize", noteSizeIndex).apply()
+        applyNoteFont()
     }
 
     private fun cleanup() {
@@ -605,6 +712,9 @@ class CoursewarePresenter(
         notesAction = null
         notesCancel = null
         notesStatus = null
+        videoButton = null
+        fontDownButton = null
+        fontUpButton = null
         dialog = null
     }
 

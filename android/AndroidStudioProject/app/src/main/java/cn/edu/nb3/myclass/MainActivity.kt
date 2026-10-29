@@ -285,9 +285,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             currentPage = { coursewarePage },
             slideNumber = { displayedCoursewarePage() },
             slideTotal = { displayedCoursewareCount() },
-            slideForPage = { page -> coursewarePages()?.slide(page) ?: page },
             step = { delta -> stepPresentedPage(delta) },
-            renderPage = { page, maxEdge, onDone -> renderCoursewarePageForPresenter(page, maxEdge, onDone) })
+            renderPage = { page, maxEdge, onDone -> renderCoursewarePageForPresenter(page, maxEdge, onDone) },
+            // 主界面已渲染好的页位图直接缩放复用，预览几乎即时出现
+            sharedBitmap = { page -> coursewarePdfBitmaps[page] },
+            hasVideo = { embeddedVideos.hasVideosOnCurrentSlide() },
+            openVideo = { embeddedVideos.openFromPresenter() })
     }
     /** 当前已打开课件的缓存键，用于识别切换课件并清理上一份课件的笔迹与位图 */
     private var coursewarePdfOpenedKey = ""

@@ -3,7 +3,7 @@ export function createEmbeddedVideos({ container, getContext, send, remote = fal
   const style = document.createElement('style');
   style.textContent = `
     .embedded-launch {padding:8px 12px;border:1px solid #64748b;border-radius:8px;background:#174b47;color:white;cursor:pointer;font:inherit;white-space:nowrap}
-    .embedded-overlay {position:fixed;inset:0;z-index:1200;background:#000e;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
+    .embedded-overlay {position:fixed;inset:0;z-index:1400;background:#000e;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
     .embedded-overlay[hidden],.embedded-launch[hidden] {display:none!important}
     .embedded-card {width:min(100%,1100px);max-height:100%;overflow:auto;background:#111c26;color:white;padding:16px;border-radius:12px;box-sizing:border-box}
     .embedded-card video {display:block;position:relative;inset:auto;width:100%;height:auto;max-height:70dvh;object-fit:contain;background:black;transform:none}
@@ -51,12 +51,13 @@ export function createEmbeddedVideos({ container, getContext, send, remote = fal
       signal('open', item.index);
     }
   }
-  launch.onclick = () => {
+  function open() {
     const list = available();
     if (!list.length) { show(); title.textContent = '内嵌视频'; status.textContent = warning || '当前页没有可播放的视频。'; return; }
     if (list.length === 1) start(list[0]);
     else { show(); title.textContent = '选择本页视频'; status.textContent = ''; choices.replaceChildren(); list.forEach(item => button(item.title, () => start(item), choices)); }
-  };
+  }
+  launch.onclick = open;
   overlay.querySelector('.embedded-close').onclick = () => close(true);
   overlay.addEventListener('keydown', event => {
     event.stopPropagation();
@@ -124,6 +125,13 @@ export function createEmbeddedVideos({ container, getContext, send, remote = fal
     }
   return {
     receive,
+    /** 指定幻灯片（默认当前页）是否有可播放的视频；演讲者视图直接传入自己的页码。 */
+    hasVideosOnCurrentSlide: slideOverride => {
+      const target = Number(slideOverride) >= 1 ? Number(slideOverride) : slide();
+      return (metadata?.videos || []).some(video => video.slide === target);
+    },
+    /** 打开视频选择 / 遥控面板；演讲者视图直接调用，不依赖底部按钮。 */
+    open,
     destroy() { clearInterval(timer); generation++; close(false); overlay.remove(); launch.remove(); style.remove(); }
   };
 }

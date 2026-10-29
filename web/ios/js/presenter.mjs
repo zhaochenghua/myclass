@@ -11,7 +11,8 @@
 
 import { renderPdfPage } from './pdfview.js?v=20261029-pdfcompat';
 
-export function createPresenter({ container, getContext, getSession, getDocument, slideFor, navigate }) {
+export function createPresenter({ container, getContext, getSession, getDocument, slideFor, navigate,
+  hasVideo, openVideo, getMainPreview }) {
   const style = document.createElement('style');
   style.textContent = `
     .presenter-launch {padding:8px 12px;border:1px solid #64748b;border-radius:8px;background:#1f3a5f;color:white;cursor:pointer;font:inherit;white-space:nowrap}
@@ -25,6 +26,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
     .presenter-progress {margin:0;color:#94a3b8;font-size:.85rem;flex:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .presenter-head button,.presenter-foot button {padding:.45rem .7rem;font:inherit;background:#263b4e;color:#fff;border:1px solid #8ba1b5;border-radius:.5rem;cursor:pointer}
     .presenter-head button:disabled,.presenter-foot button:disabled {opacity:.5;cursor:default}
+    .presenter-head .presenter-font-down,.presenter-head .presenter-font-up {padding:.35rem .45rem;font-size:.8rem;line-height:1}
     .presenter-body {flex:1;min-height:0;display:flex;flex-direction:column;gap:.5rem;padding:0 .7rem .2rem}
     .presenter-pane {display:flex;flex-direction:column;min-height:0;background:#0b1620;border-radius:.6rem;padding:.3rem .5rem .5rem;box-sizing:border-box}
     .presenter-caption {margin:0;display:flex;justify-content:space-between;gap:.5rem;color:#94a3b8;font-size:.75rem;flex:0 0 auto}
@@ -43,6 +45,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
     .presenter-status.is-ok {color:#7dd3fc}
     .presenter-notes-head button {padding:.3rem .6rem;font:inherit;background:#263b4e;color:#fff;border:1px solid #8ba1b5;border-radius:.4rem;cursor:pointer}
     .presenter-notes-head button[hidden] {display:none!important}
+    .presenter-notes-head .presenter-video {background:#174b47;border-color:#2f7a73;white-space:nowrap}
     .presenter-note-scroll {flex:1;min-height:0;overflow:auto;margin-top:.3rem;-webkit-overflow-scrolling:touch}
     .presenter-note-scroll[hidden] {display:none!important}
     .presenter-note-text {margin:0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;font-size:1rem}
@@ -81,6 +84,8 @@ export function createPresenter({ container, getContext, getSession, getDocument
   overlay.innerHTML = `<header class="presenter-head">
       <h2>演讲者视图</h2>
       <p class="presenter-progress"></p>
+      <button type="button" class="presenter-font-down" aria-label="减小备注字号">A−</button>
+      <button type="button" class="presenter-font-up" aria-label="增大备注字号">A+</button>
       <button type="button" class="presenter-close">关闭</button>
     </header>
     <div class="presenter-body">
@@ -97,6 +102,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
           <div class="presenter-notes-head">
             <span class="presenter-notes-title">演讲备注</span>
             <span class="presenter-status" role="status"></span>
+            <button type="button" class="presenter-video" hidden>本页视频</button>
             <button type="button" class="presenter-edit">编辑</button>
             <button type="button" class="presenter-cancel" hidden>取消</button>
           </div>
@@ -117,6 +123,8 @@ export function createPresenter({ container, getContext, getSession, getDocument
 
   const nodes = {
     progress: overlay.querySelector('.presenter-progress'),
+    fontDown: overlay.querySelector('.presenter-font-down'),
+    fontUp: overlay.querySelector('.presenter-font-up'),
     close: overlay.querySelector('.presenter-close'),
     mainCaption: overlay.querySelector('.presenter-main-page'),
     nextCaption: overlay.querySelector('.presenter-next-caption'),
@@ -125,6 +133,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
     currentHint: overlay.querySelector('.presenter-current-hint'),
     nextHint: overlay.querySelector('.presenter-next-hint'),
     status: overlay.querySelector('.presenter-status'),
+    video: overlay.querySelector('.presenter-video'),
     edit: overlay.querySelector('.presenter-edit'),
     cancel: overlay.querySelector('.presenter-cancel'),
     noteScroll: overlay.querySelector('.presenter-note-scroll'),
@@ -139,6 +148,34 @@ export function createPresenter({ container, getContext, getSession, getDocument
   };
 
   const EMPTY_HINT = '本页没有备注。点“编辑”可以添加，磨课时随时修改。';
+
+  // 备注字号四档，选择保存在本机（换课件/重新打开演讲者视图后保持）
+  const NOTE_FONT_KEY = 'myclass.ios.presenterNoteSize';
+  const NOTE_FONT_SIZES = ['0.875rem', '1rem', '1.125rem', '1.25rem'];
+  let noteFontIndex = (() => {
+    try {
+      const raw = localStorage.getItem(NOTE_FONT_KEY);
+      // Number(null) 是 0，必须先排除没存过的情况，否则默认字号会变成最小档
+      const parsed = raw === null ? Number.NaN : Number(raw);
+      return Number.isInteger(parsed) && parsed >= 0 && parsed < NOTE_FONT_SIZES.length ? parsed : 1;
+    } catch { return 1; }
+  })();
+
+  function applyNoteFont() {
+    const size = NOTE_FONT_SIZES[noteFontIndex];
+    nodes.noteText.style.fontSize = size;
+    nodes.editor.style.fontSize = size;
+    nodes.fontDown.disabled = noteFontIndex <= 0;
+    nodes.fontUp.disabled = noteFontIndex >= NOTE_FONT_SIZES.length - 1;
+  }
+
+  function changeNoteFont(delta) {
+    const next = Math.min(Math.max(0, noteFontIndex + delta), NOTE_FONT_SIZES.length - 1);
+    if (next === noteFontIndex) return;
+    noteFontIndex = next;
+    try { localStorage.setItem(NOTE_FONT_KEY, String(noteFontIndex)); } catch { /* 隐私模式忽略 */ }
+    applyNoteFont();
+  }
 
   let context = null;
   let deck = '';
@@ -246,33 +283,90 @@ export function createPresenter({ container, getContext, getSession, getDocument
 
   // ---------------------------------------------------------------- 预览渲染
 
+  // 预览缓存：page -> { doc, canvas }。老师来回翻页时不用重新渲染；
+  // 当前页若主界面已经渲染好，直接按比例复制那张 canvas，省掉一次完整渲染。
+  const PREVIEW_CACHE_LIMIT = 4;
+  const previewCache = new Map();
+  let previewUrl = '';
+  let drawBlockedUntil = 0;
+
+  function cachePreview(page, doc, canvas) {
+    previewCache.set(page, { doc, canvas });
+    while (previewCache.size > PREVIEW_CACHE_LIMIT) {
+      previewCache.delete(previewCache.keys().next().value);
+    }
+  }
+
+  function cachedPreview(page, doc) {
+    const hit = previewCache.get(page);
+    return hit && hit.doc === doc ? hit.canvas : null;
+  }
+
   function clearCanvas(canvas) {
     if (!canvas.width || !canvas.height) return;
     canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
   }
 
+  /** 把源画布按 maxEdge 等比缩放画到目标画布（白底，与主界面一致） */
+  function paint(target, source, maxEdge) {
+    const longest = Math.max(source.width, source.height) || 1;
+    const scale = Math.min(1, maxEdge / longest);
+    const width = Math.max(1, Math.round(source.width * scale));
+    const height = Math.max(1, Math.round(source.height * scale));
+    if (target.width !== width) target.width = width;
+    if (target.height !== height) target.height = height;
+    const context = target.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(source, 0, 0, width, height);
+  }
+
+  async function ensurePreview(page, doc, maxEdge) {
+    const cached = cachedPreview(page, doc);
+    if (cached) return cached;
+    const main = getMainPreview?.();
+    if (main && main.page === page && !main.rendering && main.canvas?.width && !main.canvas.hidden) {
+      const copy = document.createElement('canvas');
+      paint(copy, main.canvas, maxEdge);
+      cachePreview(page, doc, copy);
+      return copy;
+    }
+    const canvas = document.createElement('canvas');
+    await renderPdfPage(doc, page, canvas, maxEdge);
+    cachePreview(page, doc, canvas);
+    return canvas;
+  }
+
+  function retryDrawLater() {
+    drawBlockedUntil = Date.now() + 1200;
+    setTimeout(() => { if (open) requestDraw(); }, 1200);
+  }
+
   async function drawPreviews() {
     if (!open) return;
     if (drawBusy) { drawPending = true; return; }
-    drawBusy = true;
     const token = ++drawToken;
     const page = pageOf();
     const total = totalOf();
     const doc = getDocument?.();
+    if (!doc) {
+      nodes.currentHint.textContent = '正在加载预览…';
+      nodes.nextHint.textContent = '';
+      retryDrawLater();
+      return;
+    }
+    drawBusy = true;
     try {
-      if (!doc) {
-        nodes.currentHint.textContent = '正在加载预览…';
-        nodes.nextHint.textContent = '';
-        return;
-      }
       nodes.currentHint.textContent = '正在渲染…';
       nodes.nextHint.textContent = '';
-      await renderPdfPage(doc, page, nodes.currentCanvas, 1600);
+      const current = await ensurePreview(page, doc, 1200);
       if (token !== drawToken || !open) return;
+      paint(nodes.currentCanvas, current, 1200);
       nodes.currentHint.textContent = '';
       if (page < total) {
-        await renderPdfPage(doc, page + 1, nodes.nextCanvas, 1100);
+        const next = await ensurePreview(page + 1, doc, 800);
         if (token !== drawToken || !open) return;
+        paint(nodes.nextCanvas, next, 800);
         nodes.nextHint.textContent = '';
       } else {
         clearCanvas(nodes.nextCanvas);
@@ -280,9 +374,11 @@ export function createPresenter({ container, getContext, getSession, getDocument
       }
       drawnPage = page;
       drawnDoc = doc;
+      drawBlockedUntil = 0;
     } catch {
       if (token !== drawToken || !open) return;
       nodes.currentHint.textContent = '预览加载中…';
+      retryDrawLater();
     } finally {
       drawBusy = false;
       if (drawPending && open) {
@@ -294,6 +390,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
 
   function requestDraw() {
     if (!open) return;
+    if (Date.now() < drawBlockedUntil) return;
     if (drawBusy) { drawPending = true; return; }
     void drawPreviews();
   }
@@ -322,6 +419,9 @@ export function createPresenter({ container, getContext, getSession, getDocument
     if (!editing) renderNoteText();
     setText(nodes.timer, formatTimer());
     setText(nodes.pause, timer.running ? '暂停' : '继续');
+    // 当前幻灯片有内嵌视频时才出现“本页视频”；编辑备注时收起，给输入框让位。
+    const canVideo = !editing && Boolean(hasVideo?.(slideOf()));
+    if (nodes.video.hidden === canVideo) nodes.video.hidden = !canVideo;
     const nextDoc = getDocument?.();
     if (page !== drawnPage || nextDoc !== drawnDoc) requestDraw();
   }
@@ -346,6 +446,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
     setStatus('');
     drawnPage = 0;
     drawnDoc = null;
+    drawBlockedUntil = 0;
     syncViewport();
     refreshOpen();
     nodes.close.focus();
@@ -460,6 +561,9 @@ export function createPresenter({ container, getContext, getSession, getDocument
   });
   nodes.edit.addEventListener('click', () => { if (editing) void saveNote(); else enterEdit(); });
   nodes.cancel.addEventListener('click', () => { if (!saving) exitEdit(); });
+  nodes.video.addEventListener('click', () => { if (!editing && !saving) openVideo?.(); });
+  nodes.fontDown.addEventListener('click', () => changeNoteFont(-1));
+  nodes.fontUp.addEventListener('click', () => changeNoteFont(1));
   overlay.addEventListener('keydown', event => {
     // 翻页快捷键挂在 document 上，弹窗内按键不能顺带翻页。
     event.stopPropagation();
@@ -487,7 +591,13 @@ export function createPresenter({ container, getContext, getSession, getDocument
   function update() {
     const next = getContext();
     const id = next?.url ? coursewareId(next.url) : '';
+    const url = next?.url || '';
     context = next;
+    // 换课件时丢弃上一份课件的预览缓存（同一个课件关掉再开仍复用）。
+    if (url !== previewUrl) {
+      previewUrl = url;
+      previewCache.clear();
+    }
     if (!id) {
       queriedId = '';
       if (deck || notes.size) { deck = ''; notes = new Map(); }
@@ -504,6 +614,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
   }
 
   const ticker = setInterval(update, 350);
+  applyNoteFont();
   update();
 
   return {

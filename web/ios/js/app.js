@@ -1,6 +1,6 @@
-import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261024-toolbar';
+import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261029-videopreview';
 let embeddedVideoControls = null;
-import { createPresenter } from './presenter.mjs?v=20261029-pdfcompat';
+import { createPresenter } from './presenter.mjs?v=20261029-videopreview';
 let presenterControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';
@@ -83,7 +83,7 @@ const state = {
   cwBoard: null,
   // 课件标注按页缓存笔迹（与 Android coursewarePdfStrokes 一致）
   cwStrokes: { store: new Map(), page: 0 },
-  cwPdf: { doc: null, url: '', pageCount: 0, rendering: false, pendingPage: 0, ignoreRemotePageUntil: 0 },
+  cwPdf: { doc: null, url: '', pageCount: 0, rendering: false, pendingPage: 0, renderedPage: 0, ignoreRemotePageUntil: 0 },
   // 课件预览视口（与安卓端 ZoomableImageView 的 userScale / translateX / translateY 同构）
   cwView: {
     scale: 1,
@@ -2306,6 +2306,8 @@ async function renderCoursewarePage(page, { atBottom = false } = {}) {
     await renderPdfPage(doc, target, canvas);
     if (!state.courseware) return;
     canvas.hidden = false;
+    // 演讲者视图会直接复制这张已经渲染好的页面，避免再渲染一遍。
+    state.cwPdf.renderedPage = target;
     $('cwStageHint').hidden = true;
     // 显式锁定显示比例：canvas 按页面比例铺满舞台宽度（FitWidth）
     applyCoursewareSurfaceRatio(canvas, canvas.width, canvas.height);
@@ -2348,6 +2350,7 @@ function releaseCoursewarePreview() {
   state.cwPdf.url = '';
   state.cwPdf.pageCount = 0;
   state.cwPdf.pendingPage = 0;
+  state.cwPdf.renderedPage = 0;
   state.cwStrokes.store.clear();
   state.cwStrokes.page = 0;
   setCoursewarePenMode(false);
@@ -3426,7 +3429,16 @@ function bindStaticEvents() {
     getSession: () => ({ apiBase: state.apiBase, token: state.token }),
     getDocument: () => (state.cwPdf.url === state.courseware?.url ? state.cwPdf.doc : null),
     slideFor: page => state.courseware?.mapping?.statePages?.[page - 1] || page,
-    navigate: page => jumpToCoursewarePage(page)
+    navigate: page => jumpToCoursewarePage(page),
+    // 当前幻灯片的内嵌视频：演讲者视图里提供“本页视频”入口（视频仍在大屏播放）。
+    hasVideo: slide => embeddedVideoControls?.hasVideosOnCurrentSlide(slide) === true,
+    openVideo: () => embeddedVideoControls?.open(),
+    // 主界面已经渲染好的当前页，演讲者视图直接复制，避免重复渲染等待。
+    getMainPreview: () => ({
+      page: state.cwPdf.renderedPage || 0,
+      rendering: state.cwPdf.rendering,
+      canvas: $('cwPageCanvas')
+    })
   });
   setupClipboardLink({
     getSession: () => ({ token: state.token, apiBase: state.apiBase }),

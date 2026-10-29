@@ -45,6 +45,12 @@ class EmbeddedVideoController(
         refresh()
     }
 
+    /** 当前幻灯片是否有可播放的视频（演讲者视图据此显示“本页视频”按钮）。 */
+    fun hasVideosOnCurrentSlide(): Boolean = videos().isNotEmpty()
+
+    /** 供演讲者视图直接打开视频选择 / 遥控面板，不依赖课件页底部的按钮。 */
+    fun openFromPresenter() = launch()
+
     private fun videos(): List<Video> {
         val array = metadata?.optJSONArray("videos") ?: return emptyList()
         val current = context ?: return emptyList()
