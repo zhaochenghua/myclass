@@ -1,6 +1,6 @@
 import { createEmbeddedVideos } from './embeddedVideos.mjs?v=20261029-videopreview';
 let embeddedVideoControls = null;
-import { createPresenter } from './presenter.mjs?v=20261029-videopreview';
+import { createPresenter } from './presenter.mjs?v=20261029-ipad-layout';
 let presenterControls = null;
 import { setupClipboardLink } from './clipboardLink.mjs?v=20261014-clipboard';
 import { loadPageMapping, pageMapping, slidePage, slideCount } from './coursewarePages.mjs?v=20261022-reader';

@@ -18,21 +18,24 @@ export function createPresenter({ container, getContext, getSession, getDocument
     .presenter-launch {padding:8px 12px;border:1px solid #64748b;border-radius:8px;background:#1f3a5f;color:white;cursor:pointer;font:inherit;white-space:nowrap}
     .presenter-launch[hidden] {display:none!important}
     .presenter-overlay {position:fixed;left:0;right:0;top:0;height:100%;z-index:1300;background:#060b10;color:#e8edf3;
-      display:flex;flex-direction:column;box-sizing:border-box;
+      display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;
       padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
     .presenter-overlay[hidden] {display:none!important}
-    .presenter-head {display:flex;align-items:center;gap:.6rem;padding:.45rem .8rem;flex:0 0 auto}
+    .presenter-head {display:flex;align-items:center;gap:.5rem;padding:.45rem .8rem;flex:0 0 auto;position:relative;z-index:2;background:#060b10}
     .presenter-head h2 {margin:0;font-size:1rem;font-weight:600;white-space:nowrap}
-    .presenter-progress {margin:0;color:#94a3b8;font-size:.85rem;flex:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .presenter-head button,.presenter-foot button {padding:.45rem .7rem;font:inherit;background:#263b4e;color:#fff;border:1px solid #8ba1b5;border-radius:.5rem;cursor:pointer}
+    .presenter-progress {margin:0;color:#94a3b8;font-size:.85rem;flex:1;min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .presenter-head button,.presenter-foot button {padding:.45rem .7rem;font:inherit;background:#263b4e;color:#fff;border:1px solid #8ba1b5;border-radius:.5rem;cursor:pointer;flex:0 0 auto}
     .presenter-head button:disabled,.presenter-foot button:disabled {opacity:.5;cursor:default}
     .presenter-head .presenter-font-down,.presenter-head .presenter-font-up {padding:.35rem .45rem;font-size:.8rem;line-height:1}
-    .presenter-body {flex:1;min-height:0;display:flex;flex-direction:column;gap:.5rem;padding:0 .7rem .2rem}
-    .presenter-pane {display:flex;flex-direction:column;min-height:0;background:#0b1620;border-radius:.6rem;padding:.3rem .5rem .5rem;box-sizing:border-box}
+    .presenter-body {flex:1;min-height:0;display:flex;flex-direction:column;gap:.5rem;padding:0 .7rem .2rem;overflow:hidden}
+    .presenter-pane {display:flex;flex-direction:column;min-height:0;background:#0b1620;border-radius:.6rem;padding:.3rem .5rem .5rem;box-sizing:border-box;overflow:hidden}
     .presenter-caption {margin:0;display:flex;justify-content:space-between;gap:.5rem;color:#94a3b8;font-size:.75rem;flex:0 0 auto}
-    .presenter-canvas {flex:1;min-height:0;display:flex;align-items:center;justify-content:center;position:relative;padding-top:.2rem}
-    .presenter-canvas canvas {max-width:100%;max-height:100%;width:auto;height:auto;display:block}
-    .presenter-hint {margin:0;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:.85rem;text-align:center}
+    .presenter-canvas {flex:1;min-height:0;position:relative;overflow:hidden;padding-top:.2rem}
+    /* iPadOS Safari 不会可靠地把 flex 高度传给 canvas 的 max-height：
+       用绝对定位 + 100% 约束，既不会撑破面板，也不会盖住页脚/关闭按钮。 */
+    .presenter-canvas canvas {position:absolute;left:0;right:0;top:0;bottom:0;margin:auto;
+      max-width:100%;max-height:100%;width:auto;height:auto;display:block}
+    .presenter-hint {margin:0;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:.85rem;text-align:center;z-index:1}
     .presenter-hint:empty {display:none!important}
     .presenter-main {flex:1.35}
     .presenter-side {flex:1.7;display:flex;flex-direction:column;gap:.5rem;min-height:0}
@@ -53,7 +56,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
     .presenter-note-editor {flex:1;min-height:0;width:100%;box-sizing:border-box;margin-top:.3rem;resize:none;
       background:#0b141c;color:#e8edf3;border:1px solid #3c4a5c;border-radius:.4rem;padding:.5rem;font:inherit;line-height:1.5}
     .presenter-note-editor[hidden] {display:none!important}
-    .presenter-foot {flex:0 0 auto;display:flex;align-items:center;gap:.4rem;padding:.35rem .7rem}
+    .presenter-foot {flex:0 0 auto;display:flex;align-items:center;gap:.4rem;padding:.35rem .7rem;position:relative;z-index:2;background:#060b10}
     .presenter-foot .presenter-prev,.presenter-foot .presenter-next-page {flex:1;min-width:0}
     .presenter-foot .presenter-next-page {background:#1d4ed8;border-color:#1d4ed8}
     .presenter-timer {min-width:4.2rem;text-align:center;font-variant-numeric:tabular-nums;font-size:1rem;white-space:nowrap}
@@ -399,10 +402,25 @@ export function createPresenter({ container, getContext, getSession, getDocument
 
   function syncViewport() {
     if (!open) { overlay.style.height = ''; overlay.style.top = ''; return; }
+    // iPadOS Safari 里 fixed 元素的 100% 高度是“布局视口”，会延伸到 Safari 工具栏
+    // 后面，导致页脚和关闭按钮落到屏幕外。按可视视口（visualViewport）精确铺满。
     const vv = window.visualViewport;
-    if (!vv) return;
-    overlay.style.height = `${vv.height}px`;
-    overlay.style.top = `${vv.offsetTop}px`;
+    if (!vv || !vv.height) {
+      overlay.style.height = '100%';
+      overlay.style.top = '0';
+      return;
+    }
+    overlay.style.height = `${Math.round(vv.height)}px`;
+    overlay.style.top = `${Math.round(vv.offsetTop)}px`;
+  }
+
+  /** 打开后连续两帧同步一次：iPad 的工具栏收起/地址栏高度变化是异步落定的 */
+  function syncViewportSoon() {
+    syncViewport();
+    requestAnimationFrame(() => {
+      syncViewport();
+      requestAnimationFrame(syncViewport);
+    });
   }
 
   function refreshOpen() {
@@ -447,7 +465,7 @@ export function createPresenter({ container, getContext, getSession, getDocument
     drawnPage = 0;
     drawnDoc = null;
     drawBlockedUntil = 0;
-    syncViewport();
+    syncViewportSoon();
     refreshOpen();
     nodes.close.focus();
   }
@@ -580,6 +598,8 @@ export function createPresenter({ container, getContext, getSession, getDocument
   });
   window.visualViewport?.addEventListener('resize', syncViewport);
   window.visualViewport?.addEventListener('scroll', syncViewport);
+  window.addEventListener('resize', syncViewport);
+  window.addEventListener('orientationchange', syncViewportSoon);
 
   // ---------------------------------------------------------------- 主循环
 
@@ -627,6 +647,8 @@ export function createPresenter({ container, getContext, getSession, getDocument
       style.remove();
       window.visualViewport?.removeEventListener('resize', syncViewport);
       window.visualViewport?.removeEventListener('scroll', syncViewport);
+      window.removeEventListener('resize', syncViewport);
+      window.removeEventListener('orientationchange', syncViewportSoon);
     }
   };
 }
