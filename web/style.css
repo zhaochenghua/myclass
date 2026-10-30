@@ -609,6 +609,7 @@ video {
 
 .annotation-toolbar {
   touch-action: none;
+  -webkit-backdrop-filter: blur(12px);
   position: absolute;
   right: 1rem;
   bottom: 0;
@@ -626,6 +627,15 @@ video {
 }
 
 .annotation-toolbar > * { flex-shrink: 0; }
+
+/* iOS Safari 会给 <button> 套原生外观，导致圆角/内联 SVG 被裁切或丢失；
+   统一关掉原生外观，让按钮完全按 CSS 绘制。 */
+.annotation-toolbar button,
+.blackboard-toolbar button,
+.annotation-color {
+  -webkit-appearance: none;
+  appearance: none;
+}
 .annotation-toolbar[hidden] { display: none; }
 
 /* Keep page controls stationary while per-page video availability changes. */
@@ -1897,6 +1907,7 @@ video {
 
 .blackboard-toolbar {
   touch-action: none;
+  -webkit-backdrop-filter: blur(12px);
   width: max-content;
   max-width: calc(100vw - 2.4rem);
   position: absolute;
