@@ -3926,7 +3926,31 @@ function absorbPalmTouch(event) {
   return !!event && event.pointerType !== 'pen' && stylusBusy();
 }
 
+/** 手掌接触面积（CSS px）明显大于手指；部分红外屏不报尺寸时靠“笔在写”判断 */
+const PALM_TOUCH_SIZE = 30;
+
+function touchContactSize(event) {
+  return Math.max(Number(event?.width) || 0, Number(event?.height) || 0);
+}
+
+/**
+ * 是否按掌托处理：接触面积大、手写笔刚写过，或笔迹正在画时落下的非笔触点。
+ * 掌托不画线，而是临时当橡皮擦用（抬手后仍是原来的画笔）。
+ */
+function isPalmContact(event, activeStrokes) {
+  if (!event || event.pointerType !== 'touch') return false;
+  if (touchContactSize(event) >= PALM_TOUCH_SIZE) return true;
+  if (stylusBusy()) return true;
+  return [...(activeStrokes?.values?.() || [])].some(stroke => !stroke.isPalm && stroke.pointerType === 'pen');
+}
+
 function beginAnnotationStroke(event) {
+  noteStylus(event);
+  // 手掌触屏：本触点临时当橡皮擦，抬手后自动恢复为画笔（不改工具状态）
+  if (state.annotations.tool === 'pen' && isPalmContact(event, state.annotations.activeStrokes)) {
+    startAnnotationStroke(event, true);
+    return;
+  }
   if (absorbPalmTouch(event)) return;
   if (state.courseware?.pdfDocument && state.courseware.displayedPage !== state.courseware.page) return;
   if (handleHandwritingTouch(event, 'down')) return;
@@ -3944,7 +3968,12 @@ function beginAnnotationStroke(event) {
     if (event.isPrimary) beginCoursewarePan(event);
     return;
   }
-  if ([...state.annotations.activeStrokes.keys()].some(id => typeof id === 'number')) return;
+  // 掌托橡皮擦与手写笔可以同时存在，只限制真正的画笔/手指笔迹同时只有一笔
+  if ([...state.annotations.activeStrokes.values()].some(stroke => !stroke.isPalm)) return;
+  startAnnotationStroke(event, false);
+}
+
+function startAnnotationStroke(event, forceEraser) {
   const point = pointerEventToSourcePoint(event);
   if (!point) {
     return;
@@ -3954,7 +3983,7 @@ function beginAnnotationStroke(event) {
   elements.annotationModeMenu.classList.remove('is-open');
   setMoreColorsOpen(false);
   elements.annotationCanvas.setPointerCapture(event.pointerId);
-  const isEraser = state.annotations.tool === 'eraser';
+  const isEraser = forceEraser || state.annotations.tool === 'eraser';
   const isLine = !isEraser && state.annotations.lineMode;
   // 记下起笔时间，后续每个点带上相对时间戳，供速度笔锋计算线宽
   point.t = 0;
@@ -3963,6 +3992,8 @@ function beginAnnotationStroke(event) {
   const penAnchor = pageInkAnchor(page, state.annotations.penWidth);
   state.annotations.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
+    pointerType: event.pointerType,
+    isPalm: forceEraser,
     color: isEraser ? '#000' : state.annotations.currentColor,
     // 线宽 = 画笔档位 / 本页锚定缩放：同一页粗细一致，放大后落笔更细
     width: isEraser
@@ -3982,7 +4013,9 @@ function beginAnnotationStroke(event) {
 }
 
 function continueAnnotationStroke(event) {
-  if (absorbPalmTouch(event)) return;
+  noteStylus(event);
+  // 掌托橡皮擦同样是一条本机笔迹：即使手写笔正在写，也要继续追加它的点
+  if (!state.annotations.activeStrokes.has(event.pointerId) && absorbPalmTouch(event)) return;
   if (handleHandwritingTouch(event, 'move')) return;
   if (continueLockedVideoPan(event)) return;
   // 投屏图片：正在平移/捏合时优先处理，避免中途切工具导致手势错乱
@@ -4418,8 +4451,11 @@ function setAnnotationColor(color) {
     return;
   }
   state.annotations.currentColor = color;
+  // 切换颜色后回到默认实线：避免把上一次留下的虚线/点划线带进新课
+  state.annotations.mode = 'solid';
   setAnnotationTool('pen');
   updateAnnotationColorButtons();
+  updateAnnotationModeButtons();
   updateModeMenuIconColor(elements.annotationModeMenu, color);
 }
 
@@ -4950,31 +4986,67 @@ function annotationInkWidth(stroke, contentWidth) {
   return Math.max(0.8, ratio * Math.max(1, Number(contentWidth) || 1));
 }
 
+/**
+ * 工程制图风格的虚线 / 点划线。必须配平头笔帽：圆头会在每段两端各伸出半个线宽，
+ * 把点划线的间隙吃掉（原来的 1.2×线宽间隙实际只剩 0.2×），远看就是一条实线。
+ */
+function inkDashPattern(mode, width) {
+  if (mode === 'dashed') return [width * 3.4, width * 2.2];
+  if (mode === 'dashdot') return [width * 6.5, width * 2.2, width * 1.1, width * 2.2];
+  return null;
+}
+
+/** 方块橡皮：沿点列按 size×size 的方块连续盖印（点列已换算到当前绘制坐标系） */
+function stampSquareErase(context, points, size) {
+  const side = Math.max(1, size);
+  const half = side / 2;
+  let previous = null;
+  for (const point of points) {
+    if (!previous) {
+      context.fillRect(point.x - half, point.y - half, side, side);
+    } else {
+      const distance = Math.hypot(point.x - previous.x, point.y - previous.y);
+      const steps = Math.max(1, Math.ceil(distance / Math.max(1, side * 0.4)));
+      for (let i = 1; i <= steps; i += 1) {
+        const x = previous.x + (point.x - previous.x) * (i / steps);
+        const y = previous.y + (point.y - previous.y) * (i / steps);
+        context.fillRect(x - half, y - half, side, side);
+      }
+    }
+    previous = point;
+  }
+}
+
 function drawAnnotationStroke(context, stroke, canvasRect, videoRect, crop) {
   const width = annotationInkWidth(stroke, videoRect.width);
   context.save();
   if (stroke.isEraser) {
-    // 标注画布透明（叠在视频上），板擦用 destination-out 真正擦除下层笔画
+    // 标注画布透明（叠在视频上）：方块橡皮沿笔迹盖印，再 destination-out 真正擦除下层笔画
     context.globalCompositeOperation = 'destination-out';
-    context.strokeStyle = '#000';
     context.fillStyle = '#000';
-    context.lineWidth = width;
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
-  } else {
-    context.strokeStyle = stroke.color;
-    context.fillStyle = stroke.color;
-    context.lineWidth = width;
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
-    if (stroke.mode === 'dashed') {
-      context.setLineDash([width * 2.2, width * 1.6]);
-    } else if (stroke.mode === 'dashdot') {
-      context.setLineDash([width * 2.2, width * 1.2, 0.1, width * 1.2]);
-    } else if (stroke.mode === 'highlighter') {
-      context.lineWidth = width * 5;
-      context.globalAlpha = 0.45;
+    const erasePoints = [];
+    for (const point of stroke.points) {
+      const canvasPoint = sourcePointToCanvasPoint(point, canvasRect, videoRect, crop);
+      if (canvasPoint.visible) erasePoints.push(canvasPoint);
     }
+    stampSquareErase(context, erasePoints, width);
+    context.restore();
+    return;
+  }
+  context.strokeStyle = stroke.color;
+  context.fillStyle = stroke.color;
+  context.lineWidth = width;
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  if (stroke.mode === 'dashed') {
+    context.lineCap = 'butt';
+    context.setLineDash(inkDashPattern('dashed', width));
+  } else if (stroke.mode === 'dashdot') {
+    context.lineCap = 'butt';
+    context.setLineDash(inkDashPattern('dashdot', width));
+  } else if (stroke.mode === 'highlighter') {
+    context.lineWidth = width * 5;
+    context.globalAlpha = 0.45;
   }
 
   // 实线画笔走手写轮廓：线宽随压感 / 书写速度变化，起收笔收尖。
@@ -5391,8 +5463,14 @@ function toggleBlackboard(forceState) {
 }
 
 function beginBlackboardStroke(event) {
-  if (absorbPalmTouch(event)) return;
+  noteStylus(event);
   if (!state.blackboard.active) return;
+  // 手掌触屏：临时当橡皮擦，抬手后恢复画笔
+  if (state.blackboard.tool === 'pen' && isPalmContact(event, state.blackboard.activeStrokes)) {
+    startBlackboardStroke(event, true);
+    return;
+  }
+  if (absorbPalmTouch(event)) return;
   if (handleHandwritingTouch(event, 'down', true)) return;
 
   if (state.blackboard.tool === 'hand' || state.blackboard.tool === 'select') {
@@ -5416,19 +5494,25 @@ function beginBlackboardStroke(event) {
     return;
   }
 
-  if (state.blackboard.activeStrokes.size) return;
+  if ([...state.blackboard.activeStrokes.values()].some(stroke => !stroke.isPalm)) return;
+  startBlackboardStroke(event, false);
+}
+
+function startBlackboardStroke(event, forceEraser) {
   const point = blackboardPointerToPoint(event);
   if (!point) return;
 
   event.preventDefault();
   elements.blackboardCanvas.setPointerCapture(event.pointerId);
 
-  const isEraser = state.blackboard.tool === 'eraser';
+  const isEraser = forceEraser || state.blackboard.tool === 'eraser';
   const isLine = !isEraser && state.blackboard.lineMode;
   point.t = 0;
   point.p = pointerPressure(event);
   state.blackboard.activeStrokes.set(event.pointerId, {
     pointerId: event.pointerId,
+    pointerType: event.pointerType,
+    isPalm: forceEraser,
     color: isEraser ? '#2c2f36' : state.blackboard.currentColor,
     width: isEraser ? state.blackboard.eraserWidth : state.annotations.penWidth + 2,
     isEraser: isEraser,
@@ -5442,7 +5526,9 @@ function beginBlackboardStroke(event) {
 }
 
 function continueBlackboardStroke(event) {
-  if (absorbPalmTouch(event)) return;
+  noteStylus(event);
+  // 掌托橡皮擦也是一条本机笔迹，手写笔正在写时也要继续
+  if (!state.blackboard.activeStrokes.has(event.pointerId) && absorbPalmTouch(event)) return;
   if (!state.blackboard.active) return;
   if (handleHandwritingTouch(event, 'move', true)) return;
 
@@ -5651,20 +5737,27 @@ function renderBlackboard(rebuild = true) {
 function drawBlackboardStroke(ctx, stroke) {
   if (stroke.points.length === 0) return;
   ctx.save();
+  if (stroke.isEraser) {
+    // 方块橡皮：用黑板背景色方块盖印（黑板没有透明层，只能覆盖）
+    ctx.fillStyle = stroke.color;
+    stampSquareErase(ctx, stroke.points, stroke.width);
+    ctx.restore();
+    return;
+  }
   ctx.strokeStyle = stroke.color;
   ctx.fillStyle = stroke.color;
   ctx.lineWidth = stroke.width;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  if (!stroke.isEraser) {
-    if (stroke.mode === 'dashed') {
-      ctx.setLineDash([stroke.width * 2.2, stroke.width * 1.6]);
-    } else if (stroke.mode === 'dashdot') {
-      ctx.setLineDash([stroke.width * 2.2, stroke.width * 1.2, 0.1, stroke.width * 1.2]);
-    } else if (stroke.mode === 'highlighter') {
-      ctx.lineWidth = stroke.width * 5;
-      ctx.globalAlpha = 0.45;
-    }
+  if (stroke.mode === 'dashed') {
+    ctx.lineCap = 'butt';
+    ctx.setLineDash(inkDashPattern('dashed', stroke.width));
+  } else if (stroke.mode === 'dashdot') {
+    ctx.lineCap = 'butt';
+    ctx.setLineDash(inkDashPattern('dashdot', stroke.width));
+  } else if (stroke.mode === 'highlighter') {
+    ctx.lineWidth = stroke.width * 5;
+    ctx.globalAlpha = 0.45;
   }
 
   // 黑板坐标是世界像素，和课件标注走同一套手写管线（去重 / 平滑 / 速度笔锋 / 起收笔收尖）。
@@ -5988,9 +6081,12 @@ function updateBlackboardModeButtons() {
 function setBlackboardColor(color) {
   if (!color) return;
   state.blackboard.currentColor = color;
+  // 切换颜色后回到默认实线
+  state.blackboard.mode = 'solid';
   // 选颜色自动切回画笔
   setBlackboardTool('pen');
   updateBlackboardColorButtons();
+  updateBlackboardModeButtons();
   updateModeMenuIconColor(elements.blackboardModeMenu, color);
 }
 

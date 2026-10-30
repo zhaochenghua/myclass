@@ -765,7 +765,7 @@ video {
   pointer-events: none;
   z-index: 100;
   border: 2px solid var(--warm);
-  border-radius: 50%;
+  border-radius: 5px;
   background: rgba(255, 209, 102, 0.15);
   transform: translate(-50%, -50%);
   display: none;
@@ -1928,7 +1928,7 @@ video {
   pointer-events: none;
   z-index: 100;
   border: 2px solid var(--warm);
-  border-radius: 50%;
+  border-radius: 5px;
   background: rgba(255, 209, 102, 0.15);
   transform: translate(-50%, -50%);
   display: none;
