@@ -3134,11 +3134,16 @@ function openHtmlCourseware(item) {
   const view = ensureHtmlCoursewareBar();
   view.title.textContent = title;
   view.bar.hidden = false;
+  // 工具条是行内 display:flex，hidden 属性会被行内样式覆盖，必须显式切换 display
+  view.bar.style.display = 'flex';
   toast('网页课件已在大屏打开');
 }
 
 function closeHtmlCoursewareScreen(notify = true) {
-  if (htmlCoursewareBar) htmlCoursewareBar.bar.hidden = true;
+  if (htmlCoursewareBar) {
+    htmlCoursewareBar.bar.hidden = true;
+    htmlCoursewareBar.bar.style.display = 'none';
+  }
   if (notify) state.signaling?.send({ type: 'courseware.close' });
 }
 
