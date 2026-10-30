@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>上课投屏平台</title>
-    <link rel="stylesheet" href="./style.css?v=20261031-safari">
+    <link rel="stylesheet" href="./style.css?v=20261031-collapse">
   </head>
   <body>
     <main class="stage" aria-live="polite">
@@ -209,6 +209,7 @@
           <button class="annotation-button blackboard-toggle-btn" id="blackboardToggleButton" type="button">黑板</button>
           <!-- 手机端断开时大屏自己收尾：占用原"本页视频"按钮的位置（没有内嵌视频时这里本来是空的） -->
           <button class="annotation-button screen-end-button" id="screenEndButton" type="button" hidden>结束投屏</button>
+          <button class="toolbar-collapse" id="annotationToolbarCollapse" type="button" aria-label="收起工具栏" aria-expanded="true" title="收起工具栏">&gt;</button>
         </div>
         <div class="video-status" id="videoStatus">等待教师连接...</div>
         <span class="relay-badge" id="relayBadge" hidden>中继模式</span>
@@ -340,6 +341,7 @@
           <span id="studentRollBlackboardSlot"></span>
           <div class="toolbar-divider"></div>
           <button class="annotation-button" id="blackboardCloseButton" type="button">关闭黑板</button>
+          <button class="toolbar-collapse" id="blackboardToolbarCollapse" type="button" aria-label="收起工具栏" aria-expanded="true" title="收起工具栏">&gt;</button>
         </div>
       </div>
 
@@ -381,7 +383,7 @@
     <script defer src="./touchCalibrationMath.js?v=20261014-calibration"></script>
     <script defer src="./touchCalibration.js?v=20261024-stable-ink"></script>
     <script defer src="./inkRenderer.js?v=20261027-ink-anchor"></script>
-    <script defer src="./app.js?v=20261030-html3"></script>
+    <script defer src="./app.js?v=20261031-collapse"></script>
   </body>
 </html>
 

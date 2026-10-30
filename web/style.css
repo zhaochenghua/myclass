@@ -628,6 +628,31 @@ video {
 
 .annotation-toolbar > * { flex-shrink: 0; }
 
+/* 最右侧窄按钮：暂时收起工具栏，避免挡住投屏画面 */
+.toolbar-collapse {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  min-width: 1.6rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.annotation-toolbar.is-collapsed > :not(.toolbar-collapse),
+.blackboard-toolbar.is-collapsed > :not(.toolbar-collapse) {
+  /* 内联 display 的按钮（例如“本页视频”）也要一起收起 */
+  display: none !important;
+}
+
 /* iOS Safari 会给 <button> 套原生外观，导致圆角/内联 SVG 被裁切或丢失；
    统一关掉原生外观，让按钮完全按 CSS 绘制。 */
 .annotation-toolbar button,
@@ -652,6 +677,12 @@ video {
   display: block !important;
   visibility: hidden;
   pointer-events: none;
+}
+/* 收起时连“本页视频”占位也一起收起，否则右端会空出一截 */
+.annotation-toolbar.is-collapsed .embedded-launch,
+.annotation-toolbar.is-collapsed .embedded-launch[hidden] {
+  display: none !important;
+  visibility: hidden !important;
 }
 .annotation-tool-icon {
   width: 1.1em;

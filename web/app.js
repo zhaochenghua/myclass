@@ -533,6 +533,8 @@ async function bootstrap() {
     elements.htmlCoursewareReload?.addEventListener('click', reloadHtmlCourseware);
     elements.htmlCoursewareWindow?.addEventListener('click', openHtmlCoursewareWindow);
     elements.htmlCoursewareClose?.addEventListener('click', () => closeHtmlCourseware());
+    setupToolbarCollapse(elements.annotationToolbar, document.getElementById('annotationToolbarCollapse'));
+    setupToolbarCollapse(document.querySelector('.blackboard-toolbar'), document.getElementById('blackboardToolbarCollapse'));
     // 黑板事件
     elements.blackboardCanvas.addEventListener('pointerdown', event => beginBlackboardStroke(TouchCalibration.eventFor(event)));
     elements.blackboardCanvas.addEventListener('pointermove', event => continueBlackboardStroke(TouchCalibration.eventFor(event)));
@@ -4694,6 +4696,19 @@ function setupResponsiveToolbars() {
   window.addEventListener('resize', schedule);
   document.addEventListener('fullscreenchange', schedule);
   schedule();
+}
+
+/** 工具栏最右侧的“>”按钮：暂时收起工具栏，避免挡住投屏画面 */
+function setupToolbarCollapse(toolbar, button) {
+  if (!toolbar || !button) return;
+  button.addEventListener('click', () => {
+    const collapsed = toolbar.classList.toggle('is-collapsed');
+    button.textContent = collapsed ? '<' : '>';
+    button.setAttribute('aria-expanded', String(!collapsed));
+    const label = collapsed ? '展开工具栏' : '收起工具栏';
+    button.setAttribute('aria-label', label);
+    button.title = label;
+  });
 }
 
 function setupEraserSizeMenu(button, settings, selectEraser, cursor) {
