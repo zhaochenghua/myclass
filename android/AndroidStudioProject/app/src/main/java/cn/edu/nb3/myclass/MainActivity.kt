@@ -3702,14 +3702,14 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     /** 网页课件：大屏用沙箱 iframe 显示，手机只发控制消息（不执行网页脚本） */
     private fun showHtmlCoursewareDialog(item: StoredCoursewareItem) {
+        // 发相对地址：大屏按自己的服务器地址解析，手机与大屏不在同一网络也能打开
         val raw = item.htmlUrl.ifBlank { item.url }
-        val url = runCatching { requireNotNull(absoluteCoursewareUrl(raw)) }.getOrNull()
-        if (url == null) {
+        if (raw.isBlank()) {
             toast("网页课件地址无效")
             return
         }
         val title = item.title.ifBlank { "网页课件" }
-        if (signalingClient?.sendCoursewareOpen(url, title, kind = "html") != true) {
+        if (signalingClient?.sendCoursewareOpen(raw, title, kind = "html") != true) {
             toast("请先连接教室端")
             return
         }

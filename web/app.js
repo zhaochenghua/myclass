@@ -5463,11 +5463,13 @@ async function loadTeacherCourseware() {
         const fileName = c.fileName || c.url || '';
         const isVideo = /\.(mp4|mov|avi|webm|mkv|3gp)(\?|$)/i.test(fileName);
         const isLink = !!c.linkUrl;
+        const isHtml = c.kind === 'html' || /\.html?(\?|$)/i.test(fileName);
         const isCourseware = /\.(ppt|pptx)(\?|$)/i.test(fileName);
         const isDocument = /\.(pdf|doc|docx|xls|xlsx)(\?|$)/i.test(fileName);
         let badge = '';
         if (isLink) badge = '<span class="courseware-link-badge">链接</span>';
         else if (isVideo) badge = '<span class="courseware-video-badge">视频</span>';
+        else if (isHtml) badge = '<span class="courseware-doc-badge">网页</span>';
         else if (isCourseware) badge = '<span class="courseware-doc-badge">课件</span>';
         else if (isDocument) badge = '<span class="courseware-doc-badge">文档</span>';
         return `
@@ -5509,6 +5511,15 @@ function openDirectCourseware(cw) {
   // 链接类型课件：弹窗提示用户在大屏端打开
   if (cw.linkUrl) {
     showLinkPrompt(cw.title, cw.linkUrl);
+    return;
+  }
+
+  // 网页课件：大屏自己也能直接打开（沙箱 iframe + 右上角控制条）
+  if (cw.kind === 'html' || /\.html?(\?|$)/i.test(cw.htmlUrl || cw.url || '')) {
+    openHtmlCourseware({
+      url: cw.htmlUrl || cw.url,
+      title: cw.title || '网页课件'
+    });
     return;
   }
 
