@@ -241,13 +241,16 @@ async function connectCampus() {
 
   // 启动即做一次版本自检：服务端已升级而本机仍是旧代码时提示更新
   checkForUpdate();
-  // PWA 常年挂在后台不重启，只靠启动自检会永远收不到更新：
-  // 回到前台时再查一次，另外每 10 分钟兜底查一次（同一版本点过"稍后"不会再弹）
+  // PWA 常年挂在后台不重启：回到前台 / 从浏览器缓存恢复时重新拉一次 /api/config，
+  // 否则 state.config 还是旧的版本号，光调用 checkForUpdate 永远发现不了新版本。
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state.config) checkForUpdate();
+    if (document.visibilityState === 'visible') void refreshConfigAndCheckUpdate();
+  });
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) void refreshConfigAndCheckUpdate();
   });
   setInterval(() => {
-    if (document.visibilityState === 'visible' && state.config) checkForUpdate();
+    if (document.visibilityState === 'visible') void refreshConfigAndCheckUpdate();
   }, 10 * 60 * 1000);
 
   const token = storage.get('token');
@@ -3868,6 +3871,22 @@ function checkForUpdate() {
   if (seen === latest) return;
   if (dismissedVersion() === latest) return; // 这个版本老师点过“稍后”，不再每次弹
   showUpdateDialog(seen, latest);
+}
+
+let lastUpdateConfigAt = 0;
+
+/** 回前台 / 从浏览器缓存恢复时重新拉一次配置，再比对版本 */
+async function refreshConfigAndCheckUpdate() {
+  const now = Date.now();
+  if (now - lastUpdateConfigAt < 15000) return;
+  lastUpdateConfigAt = now;
+  try {
+    const config = await loadConfig();
+    if (config && typeof config === 'object') state.config = { ...state.config, ...config };
+  } catch {
+    // 网络异常时保留旧配置，下次回前台再试
+  }
+  checkForUpdate();
 }
 
 /** 去掉地址栏里的缓存穿透参数（applyUpdate / “清除缓存并重新打开”写入的 ?v=）。
