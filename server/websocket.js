@@ -26,6 +26,8 @@ const TEACHER_ONLY_MESSAGE_TYPES = new Set([
   'courseware.embedded-video',
   'courseware.annotation',
   'courseware.close',
+  'courseware.html.reload',
+  'courseware.html.window',
   'courseware.image.viewport',
   'courseware.navigate',
   'courseware.open',
@@ -145,6 +147,8 @@ function handleMessage(socket, rawMessage, roomManager, options) {
     case 'webrtc.ice-candidate':
     case 'courseware.close':
     case 'courseware.embedded-video':
+    case 'courseware.html.reload':
+    case 'courseware.html.window':
     case 'viewer.embedded-video':
     case 'courseware.annotation':
     case 'courseware.image.viewport':

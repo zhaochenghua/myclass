@@ -564,11 +564,13 @@ video {
 .html-courseware-bar {
   position: absolute;
   top: 0.8rem;
-  right: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 4;
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  max-width: 56vw;
   padding: 0.4rem 0.6rem;
   border-radius: 0.6rem;
   background: rgba(15, 23, 42, 0.9);
@@ -590,6 +592,7 @@ video {
 }
 
 .html-courseware-action {
+  flex: 0 0 auto;
   padding: 0.35rem 0.7rem;
   border-radius: 0.4rem;
   border: 1px solid #64748b;

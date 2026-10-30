@@ -1417,7 +1417,8 @@ async function handleSignalMessage(message) {
       reloadHtmlCourseware();
       break;
     case 'courseware.html.window':
-      openHtmlCoursewareWindow();
+      // 手机端按“新窗口”时，大屏先弹确认框，避免浏览器拦截无手势的弹窗
+      if (htmlCourseware.active) showLinkPrompt(htmlCourseware.title, htmlCourseware.url);
       break;
     case 'courseware.navigate':
       if (htmlCourseware.active) break;
