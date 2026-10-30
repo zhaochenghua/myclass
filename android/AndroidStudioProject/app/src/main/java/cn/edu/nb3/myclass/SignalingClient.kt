@@ -121,7 +121,8 @@ class SignalingClient(
     fun requestStudentSelection(): Boolean =
         sendJson(JSONObject().put("type", "student.selection.get").put("requestId", ""))
 
-    fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1, linkUrl: String? = null): Boolean =
+    fun sendCoursewareOpen(url: String, title: String, page: Int = 1, screen: Int = 1,
+                           linkUrl: String? = null, kind: String? = null): Boolean =
         sendJson(
             JSONObject()
                 .put("type", "courseware.open")
@@ -129,8 +130,15 @@ class SignalingClient(
                 .put("title", title)
                 .put("page", page)
                 .put("screen", screen)
-                .apply { linkUrl?.let { put("linkUrl", it) } }
+                .apply {
+                    linkUrl?.let { put("linkUrl", it) }
+                    kind?.let { put("kind", it) }
+                }
         )
+
+    /** 网页课件：刷 new / 独立窗口 / 关闭（关闭复用 sendCoursewareClose） */
+    fun sendHtmlCoursewareControl(action: String): Boolean =
+        sendJson(JSONObject().put("type", "courseware.html.$action"))
 
     fun sendCoursewareNavigate(delta: Int): Boolean =
         sendJson(

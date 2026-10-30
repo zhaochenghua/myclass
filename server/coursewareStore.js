@@ -8,7 +8,8 @@ const { extractPptxNotes, MAX_NOTE_CHARS, MAX_SLIDES } = require('./pptxNotes');
 const OFFICE = new Set(['.ppt', '.pptx', '.doc', '.docx']);
 const VIDEO = new Set(['.mp4', '.mov', '.avi', '.webm', '.mkv', '.3gp']);
 const IMAGE = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
-const EXTENSIONS = ['.pdf', '.zip', ...OFFICE, ...VIDEO, ...IMAGE];
+const HTML = new Set(['.html', '.htm']);
+const EXTENSIONS = ['.pdf', '.zip', '.html', '.htm', ...OFFICE, ...VIDEO, ...IMAGE];
 // Upper bound for one teacher's edited notes across a whole deck.
 const MAX_NOTE_TOTAL_CHARS = 1024 * 1024;
 
@@ -137,7 +138,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
   }
 
   function objectDirectory(key) {
-    if (!/^[a-f0-9]{64}\.(pdf|zip|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)(\.[a-z0-9-]{1,64})?$/.test(key)) {
+    if (!/^[a-f0-9]{64}\.(pdf|zip|html?|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)(\.[a-z0-9-]{1,64})?$/.test(key)) {
       throw new Error('Invalid courseware storage key');
     }
     return path.join(objectsRoot, key.slice(0, 2), key);
@@ -242,7 +243,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     if (uploadRequestId && !/^[a-zA-Z0-9-]{1,80}$/.test(uploadRequestId)) throw storageError(400, '无效上传编号');
     const ext = path.extname(originalName).toLowerCase();
     if (!EXTENSIONS.includes(ext)) {
-      throw storageError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP、图片、视频文件');
+      throw storageError(400, '仅支持 PDF、PPT、PPTX、DOC、DOCX、ZIP、HTML、图片、视频文件');
     }
     // Stream hashing keeps memory usage bounded even for multi-GB videos.
     const profile = OFFICE.has(ext) ? officeProfile(ext) : '';
@@ -302,6 +303,13 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
           result.originalSize = originalStat.size;
         } else {
           result.downloadOnly = ext === '.zip';
+          if (HTML.has(ext)) {
+            // 单文件网页课件：大屏以沙箱 iframe 打开，手机只发控制消息
+            result.kind = 'html';
+            result.htmlUrl = result.url;
+            result.originalUrl = result.url;
+            result.originalSize = originalStat.size;
+          }
           if (VIDEO.has(ext)) result.videoUrl = result.url;
           if (IMAGE.has(ext)) result.imageUrl = result.url;
         }

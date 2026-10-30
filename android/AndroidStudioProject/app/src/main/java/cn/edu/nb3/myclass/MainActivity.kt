@@ -135,7 +135,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val originalUrl: String = "",
         val linkUrl: String = "",
         val lastPage: Int = 1,
-        val savedPageCount: Int = 0
+        val savedPageCount: Int = 0,
+        val kind: String = "",
+        val htmlUrl: String = ""
     )
 
     private var currentScreen = Screen.Connect
@@ -279,6 +281,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private var presentationTimerUrl = ""
     /** 演讲者视图翻页：由课件播放页注册，按“页”直接切换并同步大屏 */
     private var coursewarePdfShowPage: ((Int) -> Unit)? = null
+    private var htmlCoursewareDialog: AlertDialog? = null
     private val coursewarePresenter by lazy {
         CoursewarePresenter(this, lectureNotes, presentationTimer,
             totalPages = { coursewarePdf?.pageCount ?: 0 },
@@ -642,6 +645,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     override fun onDestroy() {
         managementPreview?.dismiss()
+        htmlCoursewareDialog?.dismiss()
         embeddedVideos.destroy()
         lectureNotes.destroy()
         coursewarePresenter.dismiss()
@@ -3590,7 +3594,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     originalUrl = originalUrl,
                     linkUrl = linkUrl,
                     lastPage = item.optJSONObject("playbackProgress")?.optInt("page", 1) ?: 1,
-                    savedPageCount = item.optJSONObject("playbackProgress")?.optInt("pageCount", 0) ?: 0
+                    savedPageCount = item.optJSONObject("playbackProgress")?.optInt("pageCount", 0) ?: 0,
+                    kind = item.optString("kind", ""),
+                    htmlUrl = item.optString("htmlUrl", "")
                 )
             }
         }
@@ -3694,7 +3700,52 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
     }
 
+    /** 网页课件：大屏用沙箱 iframe 显示，手机只发控制消息（不执行网页脚本） */
+    private fun showHtmlCoursewareDialog(item: StoredCoursewareItem) {
+        val raw = item.htmlUrl.ifBlank { item.url }
+        val url = runCatching { requireNotNull(absoluteCoursewareUrl(raw)) }.getOrNull()
+        if (url == null) {
+            toast("网页课件地址无效")
+            return
+        }
+        val title = item.title.ifBlank { "网页课件" }
+        if (signalingClient?.sendCoursewareOpen(url, title, kind = "html") != true) {
+            toast("请先连接教室端")
+            return
+        }
+        htmlCoursewareDialog?.dismiss()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage("网页课件已在大屏打开。\n大屏默认可用触摸直接操作网页；点大屏上的画笔可在网页上批注。\n特殊网页可用“新窗口”在独立浏览器窗口打开。")
+            .setNeutralButton("刷新", null)
+            .setNegativeButton("新窗口", null)
+            .setPositiveButton("关闭", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                signalingClient?.sendHtmlCoursewareControl("reload")
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+                signalingClient?.sendHtmlCoursewareControl("window")
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                signalingClient?.sendCoursewareClose()
+                dialog.dismiss()
+            }
+        }
+        dialog.setOnDismissListener { if (htmlCoursewareDialog === dialog) htmlCoursewareDialog = null }
+        htmlCoursewareDialog = dialog
+        dialog.show()
+    }
+
     private fun openStoredCourseware(item: StoredCoursewareItem, sourceItems: List<StoredCoursewareItem> = listOf(item)) {
+        val isHtml = item.kind == "html" ||
+            item.url.substringBefore('?').endsWith(".html", ignoreCase = true) ||
+            item.url.substringBefore('?').endsWith(".htm", ignoreCase = true)
+        if (isHtml && item.linkUrl.isBlank()) {
+            showHtmlCoursewareDialog(item)
+            return
+        }
         val isPdf = item.linkUrl.isBlank() && mediaKindOf(item.url) == CastMediaKind.Pdf
         val remembered = rememberedCoursewarePage(item)
         if (isPdf && remembered > 1) {
@@ -3812,6 +3863,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val ext = coursewareFormatLabel(item).removeSurrounding("[", "]")
         return when {
             item.linkUrl.isNotBlank() -> "↗ 链接" to 0xff475569.toInt()
+            item.kind == "html" || ext in listOf("HTML", "HTM") -> "网页" to 0xff0f766e.toInt()
             ext in listOf("PPT", "PPTX", "ODP") -> "PPT" to 0xffb54708.toInt()
             ext in listOf("DOC", "DOCX", "ODT") -> "Word" to 0xff185abd.toInt()
             ext in listOf("XLS", "XLSX", "ODS", "CSV") -> "Excel" to 0xff137333.toInt()
@@ -6628,6 +6680,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
      */
     private fun handleRoomInvalid(message: String? = null) {
         classPickerDraft = null
+        htmlCoursewareDialog?.dismiss()
         classPickerDialog?.dismiss()
         classPickerRoom = null
         pendingSelectionId = null

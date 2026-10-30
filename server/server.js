@@ -897,12 +897,26 @@ app.get(`${PATH_PREFIX}/public/courseware/:file.video/:index`, async (req, res, 
   } catch (error) { next(error); }
 });
 app.use(`${PATH_PREFIX}/public/courseware`, (req, res, next) => {
-  if (!/^\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.(pdf|zip|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)$/i.test(req.path)) {
+  if (!/^\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.(pdf|zip|html?|pptx?|docx?|mp4|mov|avi|webm|mkv|3gp|jpe?g|png|gif|webp|bmp)$/i.test(req.path)) {
     res.sendStatus(404);
     return;
   }
   next();
-}, express.static(coursewareRoot, { index: false, fallthrough: false, etag: true, maxAge: '1h' }));
+}, express.static(coursewareRoot, {
+  index: false,
+  fallthrough: false,
+  etag: true,
+  maxAge: '1h',
+  setHeaders: (res, filePath) => {
+    // 老师上传的任意 HTML：即使绕过 iframe 直接在浏览器打开，也用 CSP 沙箱
+    // 限制成不透明源，拿不到课堂页面/管理页的同源存储与账号数据。
+    if (/\.html?$/i.test(filePath)) {
+      res.setHeader('Content-Security-Policy',
+        'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock allow-fullscreen');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
+  }
+}));
 
 // Also serve .mjs from web root for bundled pdfjs
 app.use(

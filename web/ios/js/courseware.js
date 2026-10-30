@@ -119,6 +119,7 @@ function toBase64Utf8(text) {
 
 export function coursewareFormatLabel(item) {
   if (item?.linkUrl) return '链接';
+  if (item?.kind === 'html' || /\.html?(\?|$)/i.test(item?.url || '')) return '网页';
   const source = item?.originalUrl || item?.url || '';
   const ext = String(source).split('?')[0].split('.').pop();
   return ext && ext.length <= 5 ? ext.toUpperCase() : '文件';

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>上课投屏平台</title>
-    <link rel="stylesheet" href="./style.css?v=20261030-palm-eraser">
+    <link rel="stylesheet" href="./style.css?v=20261030-html">
   </head>
   <body>
     <main class="stage" aria-live="polite">
@@ -130,7 +130,19 @@
         <div class="image-player-overlay" id="imagePlayerOverlay" hidden>
           <img id="coursewareImage" alt="">
         </div>
+        <!-- 网页课件：老师上传的 HTML，沙箱 iframe 显示；标注画布叠在上面 -->
+        <div class="html-courseware" id="htmlCourseware" hidden>
+          <iframe class="html-courseware-frame" id="htmlCoursewareFrame" title="网页课件"
+            sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock allow-fullscreen"
+            allow="fullscreen; autoplay"></iframe>
+        </div>
         <canvas class="annotation-canvas" id="annotationCanvas"></canvas>
+        <div class="html-courseware-bar" id="htmlCoursewareBar" hidden>
+          <span class="html-courseware-title" id="htmlCoursewareTitle">网页课件</span>
+          <button class="html-courseware-action" id="htmlCoursewareReload" type="button">刷新</button>
+          <button class="html-courseware-action" id="htmlCoursewareWindow" type="button">新窗口打开</button>
+          <button class="html-courseware-action" id="htmlCoursewareClose" type="button">关闭</button>
+        </div>
         <div class="annotation-eraser-cursor" id="annotationEraserCursor"></div>
         <div class="annotation-toolbar" id="annotationToolbar" aria-label="画笔工具">
           <button class="annotation-mode" id="panToolButton" type="button" title="指针（拖动画面）" aria-label="指针" hidden>
@@ -369,7 +381,7 @@
     <script defer src="./touchCalibrationMath.js?v=20261014-calibration"></script>
     <script defer src="./touchCalibration.js?v=20261024-stable-ink"></script>
     <script defer src="./inkRenderer.js?v=20261027-ink-anchor"></script>
-    <script defer src="./app.js?v=20261030-palm-eraser"></script>
+    <script defer src="./app.js?v=20261030-html"></script>
   </body>
 </html>
 

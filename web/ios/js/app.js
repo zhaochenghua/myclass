@@ -31,7 +31,7 @@ import { createClassroom } from './classroom.js?v=20260919f';
 import { LivePublisher } from './publisher.js';
 import { MediaPipeline } from './pipeline.js?v=20260920a';
 import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
-import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261012-ios3';
+import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261030-html';
 import { mediaKind, prepareImageFile, ensureMediaUploaded } from './mediaFiles.mjs?v=20261012-ios3';
 import { AnnotationBoard, stylusBusy, PEN_WIDTH_LEVELS } from './annotation.js?v=20261022-start';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261029-pdfcompat';
@@ -592,6 +592,7 @@ function leaveRoom() {
 function disconnectAndBack() {
   stopLive({ notify: true });
   stopCourseware({ silent: true });
+  closeHtmlCoursewareScreen(false);
   resetMediaCastState();
   leaveRoom();
   showConnect();
@@ -2991,8 +2992,8 @@ function renderCoursewareList(items, forManage) {
     main.querySelector('.cw-item-name').textContent = item.title || item.fileName || '未命名课件';
     main.querySelector('.cw-item-meta').textContent =
       `${formatBytes(item.size)} · ${formatDate(item.createdAt)}`;
-    const thumbnail = coursewareListPreviews.add(item, cwTypeText, item.linkUrl ? null :
-      () => documentPreview.open(item));
+    const thumbnail = coursewareListPreviews.add(item, cwTypeText,
+      item.linkUrl || item.kind === 'html' ? null : () => documentPreview.open(item));
     const progress = /\.pdf(?:[?#]|$)/i.test(item.url || '') ? playbackProgress(item) : null;
     if (progress) {
       main.classList.add('has-playback-progress');
@@ -3088,9 +3089,66 @@ async function uploadCourseware(file) {
   }
 }
 
+// ---------------------------------------------------------------- 网页课件（HTML）
+// 大屏以沙箱 iframe 显示老师上传的 HTML；手机只发控制消息，不执行网页脚本。
+let htmlCoursewareBar = null;
+
+function ensureHtmlCoursewareBar() {
+  if (htmlCoursewareBar) return htmlCoursewareBar;
+  const bar = document.createElement('div');
+  bar.hidden = true;
+  bar.style.cssText = 'position:fixed;left:10px;right:10px;bottom:calc(env(safe-area-inset-bottom) + 10px);' +
+    'z-index:1400;display:flex;align-items:center;gap:6px;padding:8px 10px;border-radius:12px;' +
+    'background:rgba(15,23,42,.95);color:#fff;box-shadow:0 10px 30px #0008;font-size:14px';
+  const title = document.createElement('span');
+  title.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  const action = (text, handler) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = text;
+    button.style.cssText = 'flex:0 0 auto;padding:6px 10px;border-radius:8px;border:1px solid #64748b;' +
+      'background:#1e293b;color:#fff;font:inherit;cursor:pointer';
+    button.addEventListener('click', handler);
+    return button;
+  };
+  bar.append(title,
+    action('刷新', () => state.signaling?.send({ type: 'courseware.html.reload' })),
+    action('新窗口', () => state.signaling?.send({ type: 'courseware.html.window' })),
+    action('关闭', () => closeHtmlCoursewareScreen()));
+  document.body.appendChild(bar);
+  htmlCoursewareBar = { bar, title };
+  return htmlCoursewareBar;
+}
+
+function openHtmlCourseware(item) {
+  const url = item.htmlUrl || item.url;
+  if (!url) {
+    toast('网页课件地址无效', { warn: true });
+    return;
+  }
+  const title = item.title || item.fileName || '网页课件';
+  if (state.signaling?.send({ type: 'courseware.open', kind: 'html', url, title }) !== true) {
+    toast('请先连接教室端', { warn: true });
+    return;
+  }
+  const view = ensureHtmlCoursewareBar();
+  view.title.textContent = title;
+  view.bar.hidden = false;
+  toast('网页课件已在大屏打开');
+}
+
+function closeHtmlCoursewareScreen(notify = true) {
+  if (htmlCoursewareBar) htmlCoursewareBar.bar.hidden = true;
+  if (notify) state.signaling?.send({ type: 'courseware.close' });
+}
+
 function openCourseware(item) {
   if (!state.joined) {
     toast('请先连接教室端', { warn: true });
+    return;
+  }
+  if (item.kind === 'html' || /\.html?(\?|$)/i.test(item.url || '')) {
+    openHtmlCourseware(item);
     return;
   }
 

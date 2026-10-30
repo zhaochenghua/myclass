@@ -195,6 +195,13 @@ const elements = {
   coursewareCanvas: document.getElementById('coursewareCanvas'),
   annotationCanvas: document.getElementById('annotationCanvas'),
   annotationToolbar: document.getElementById('annotationToolbar'),
+  htmlCourseware: document.getElementById('htmlCourseware'),
+  htmlCoursewareFrame: document.getElementById('htmlCoursewareFrame'),
+  htmlCoursewareBar: document.getElementById('htmlCoursewareBar'),
+  htmlCoursewareTitle: document.getElementById('htmlCoursewareTitle'),
+  htmlCoursewareReload: document.getElementById('htmlCoursewareReload'),
+  htmlCoursewareWindow: document.getElementById('htmlCoursewareWindow'),
+  htmlCoursewareClose: document.getElementById('htmlCoursewareClose'),
   penToolButton: document.getElementById('penToolButton'),
   panToolButton: document.getElementById('panToolButton'),
   annotationEraserButton: document.getElementById('annotationEraserButton'),
@@ -522,6 +529,10 @@ async function bootstrap() {
     // 投屏图片的滚轮缩放与双击复位
     elements.annotationCanvas.addEventListener('wheel', handleImageWheel, { passive: false });
     elements.annotationCanvas.addEventListener('dblclick', handleImageDoubleClick);
+    // 网页课件控制条：刷新 / 独立窗口打开 / 关闭
+    elements.htmlCoursewareReload?.addEventListener('click', reloadHtmlCourseware);
+    elements.htmlCoursewareWindow?.addEventListener('click', openHtmlCoursewareWindow);
+    elements.htmlCoursewareClose?.addEventListener('click', () => closeHtmlCourseware());
     // 黑板事件
     elements.blackboardCanvas.addEventListener('pointerdown', event => beginBlackboardStroke(TouchCalibration.eventFor(event)));
     elements.blackboardCanvas.addEventListener('pointermove', event => continueBlackboardStroke(TouchCalibration.eventFor(event)));
@@ -1394,20 +1405,34 @@ async function handleSignalMessage(message) {
       break;
     case 'courseware.open':
       state.coursewareFromViewer = false;
+      if (isHtmlCoursewareMessage(message)) {
+        openHtmlCourseware(message);
+        break;
+      }
+      if (htmlCourseware.active) closeHtmlCourseware('网页课件已关闭');
       if (state.blackboard.active) toggleBlackboard(false);
       openCourseware(message);
       break;
+    case 'courseware.html.reload':
+      reloadHtmlCourseware();
+      break;
+    case 'courseware.html.window':
+      openHtmlCoursewareWindow();
+      break;
     case 'courseware.navigate':
+      if (htmlCourseware.active) break;
       if (state.blackboard.active) toggleBlackboard(false);
       navigateCourseware(message.delta);
       break;
     case 'courseware.page':
+      if (htmlCourseware.active) break;
       if (state.blackboard.active) toggleBlackboard(false);
       showCoursewarePage(message.page);
       break;
     case 'courseware.close':
       state.coursewareFromViewer = false;
-      closeCourseware('课件已结束');
+      if (htmlCourseware.active) closeHtmlCourseware('网页课件已关闭');
+      else closeCourseware('课件已结束');
       break;
     case 'courseware.video.control':
       handleCoursewareVideoControl(message);
@@ -1702,6 +1727,112 @@ function cleanupPeerConnection(resetPresentation = true) {
   updateVideoPresentation();
 }
 
+function isHtmlCoursewareMessage(message) {
+  if (!message) return false;
+  if (message.kind === 'html') return true;
+  return /\.html?(\?|$)/i.test(String(message.url || message.htmlUrl || ''));
+}
+
+/** 网页课件盖在现有画面之上：不销毁下面的课件/摄像头，关闭即恢复 */
+function openHtmlCourseware(message) {
+  const url = typeof message?.htmlUrl === 'string' && message.htmlUrl
+    ? message.htmlUrl
+    : (typeof message?.url === 'string' ? message.url : '');
+  if (!url) return;
+  if (htmlCourseware.active) {
+    htmlCourseware.title = typeof message.title === 'string' ? message.title : htmlCourseware.title;
+    elements.htmlCoursewareTitle.textContent = htmlCourseware.title;
+    if (htmlCourseware.url !== url) {
+      htmlCourseware.url = url;
+      elements.htmlCoursewareFrame.src = url;
+    }
+    return;
+  }
+  htmlCourseware.previous = {
+    wasCourseware: state.presentationMode === 'courseware',
+    joinHidden: elements.joinView.hidden,
+    videoHidden: elements.videoView.hidden,
+    toolbarHidden: elements.annotationToolbar.hidden,
+    panHidden: elements.panToolButton.hidden,
+    tool: state.annotations.tool
+  };
+  htmlCourseware.active = true;
+  htmlCourseware.url = url;
+  htmlCourseware.title = typeof message.title === 'string' ? message.title : '网页课件';
+  elements.htmlCourseware.hidden = false;
+  elements.htmlCoursewareBar.hidden = false;
+  elements.htmlCoursewareTitle.textContent = htmlCourseware.title;
+  elements.htmlCoursewareFrame.src = url;
+  document.body.classList.add('is-streaming');
+  elements.joinView.hidden = true;
+  elements.videoView.hidden = false;
+  elements.videoStatus.hidden = true;
+  elements.annotationToolbar.hidden = false;
+  elements.panToolButton.hidden = false;
+  // 默认交给网页交互；老师点画笔/颜色时才由标注画布接管触摸
+  setAnnotationTool('pan');
+  updateHtmlCoursewareInteraction();
+  drawAnnotations();
+}
+
+function closeHtmlCourseware(statusText = '网页课件已关闭') {
+  if (!htmlCourseware.active) return;
+  const previous = htmlCourseware.previous || {};
+  htmlCourseware.active = false;
+  htmlCourseware.url = '';
+  htmlCourseware.previous = null;
+  elements.htmlCourseware.hidden = true;
+  elements.htmlCoursewareBar.hidden = true;
+  elements.htmlCoursewareFrame.src = 'about:blank';
+  elements.annotationCanvas.style.pointerEvents = '';
+  if (previous.wasCourseware) {
+    // 回到打开前的课件：页码、缩放、笔迹都保持原样
+    elements.videoView.hidden = false;
+    elements.joinView.hidden = true;
+    document.body.classList.add('is-streaming');
+    elements.annotationToolbar.hidden = false;
+    elements.panToolButton.hidden = !!previous.panHidden;
+    setAnnotationTool(previous.tool === 'eraser' ? 'eraser' : 'pen');
+    drawAnnotations();
+    updateAnnotationButtons();
+  } else {
+    elements.panToolButton.hidden = true;
+    closeCourseware(statusText);
+  }
+}
+
+function reloadHtmlCourseware() {
+  if (!htmlCourseware.active || !htmlCourseware.url) return;
+  try {
+    const url = new URL(htmlCourseware.url, location.href);
+    url.searchParams.set('_reload', String(Date.now()));
+    elements.htmlCoursewareFrame.src = url.href;
+  } catch {
+    elements.htmlCoursewareFrame.src = htmlCourseware.url;
+  }
+}
+
+/** 部分互动课件在 iframe 里受限，可放到独立浏览器窗口打开 */
+function openHtmlCoursewareWindow() {
+  if (!htmlCourseware.active || !htmlCourseware.url) return;
+  const opened = window.open(htmlCourseware.url, `myclass-html-${Date.now()}`, 'popup=yes,width=1280,height=860');
+  if (!opened) {
+    setConnectionNotice('浏览器拦截了新窗口：请允许弹窗后，再点大屏右上角的“新窗口打开”');
+    return;
+  }
+  setConnectionNotice('网页课件已在新窗口打开，关闭该窗口即可回到大屏');
+  setTimeout(() => setConnectionNotice(''), 5000);
+}
+
+/** 指针工具 = 触摸交给网页；画笔/板擦 = 标注画布接管触摸 */
+function updateHtmlCoursewareInteraction() {
+  if (!htmlCourseware.active) {
+    elements.annotationCanvas.style.pointerEvents = '';
+    return;
+  }
+  elements.annotationCanvas.style.pointerEvents = state.annotations.tool === 'pan' ? 'none' : 'auto';
+}
+
 function openCourseware(message) {
   elements.videoStatus.classList.remove('courseware-error');
   displayedFileUrl = message.url;
@@ -1808,6 +1939,10 @@ function openCourseware(message) {
 }
 
 let displayedFileUrl = null;
+// 网页课件（老师上传的 HTML）：只做覆盖层，不销毁下面的课件/摄像头，关闭即恢复。
+// 批注用独立页码（-1），避免和下面的 PDF 页笔迹混在一起。
+const HTML_ANNOTATION_PAGE = -1;
+const htmlCourseware = { active: false, url: '', title: '', previous: null, tool: 'pen' };
 function sameFileUrl(a, b) {
   if (!a || !b) return false;
   try { return new URL(a, location.href).href === new URL(b, location.href).href; } catch { return false; }
@@ -2388,6 +2523,8 @@ function flushTeacherActiveStrokes() {
 
 /** 当前课件页码；非课件场景返回 0，表示不区分页 */
 function currentCoursewarePage() {
+  // 网页课件的批注用独立页码，关闭后回到原课件时不会混入 PDF 页笔迹
+  if (htmlCourseware.active) return HTML_ANNOTATION_PAGE;
   return state.courseware ? state.courseware.page : (!elements.imagePlayerOverlay.hidden ? 1 : 0);
 }
 
@@ -4625,6 +4762,7 @@ function setAnnotationTool(tool) {
     elements.annotationCanvas.classList.remove('is-panning', 'is-pinching');
   }
   updateAnnotationToolButtons();
+  updateHtmlCoursewareInteraction();
 }
 
 function updateAnnotationToolButtons() {
@@ -5123,6 +5261,8 @@ function currentFrameCrop() {
 }
 
 function currentVideoContentRect() {
+  // 网页课件：笔迹坐标按整个舞台算，标注层正好盖在 iframe 上
+  if (htmlCourseware.active) return elements.videoView.getBoundingClientRect();
   if (isLocalVideoViewEnabled()) return lockedVideoContentRect();
   if (state.presentationMode === 'courseware') {
     // 图片课件：标注绑定到图片内容区域（其 transform 已随手机端视口放大/平移，
