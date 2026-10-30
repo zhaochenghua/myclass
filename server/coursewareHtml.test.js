@@ -36,6 +36,20 @@ test('HTML courseware uploads, lists as html and is served inside a CSP sandbox'
   assert.match(csp, /^sandbox /);
   assert.match(csp, /allow-scripts/);
   assert.doesNotMatch(csp, /allow-same-origin/);
+  // 只要有一个非法标记（例如 allow-fullscreen），浏览器会整条忽略 sandbox 指令，
+  // 相当于网页完全没被沙箱限制。这里逐个校验标记，防止再次写错。
+  const SANDBOX_FLAGS = new Set([
+    'allow-downloads', 'allow-forms', 'allow-modals', 'allow-orientation-lock',
+    'allow-pointer-lock', 'allow-popups', 'allow-popups-to-escape-sandbox',
+    'allow-presentation', 'allow-same-origin', 'allow-scripts',
+    'allow-storage-access-by-user-activation', 'allow-top-navigation',
+    'allow-top-navigation-by-user-activation'
+  ]);
+  const flags = csp.replace(/^sandbox\s*/, '').trim().split(/\s+/).filter(Boolean);
+  assert(flags.length > 0);
+  for (const flag of flags) {
+    assert(SANDBOX_FLAGS.has(flag), `非法沙箱标记：${flag}`);
+  }
   assert.equal(page.headers.get('x-content-type-options'), 'nosniff');
   assert.match(await page.text(), /HTML 课件/);
 

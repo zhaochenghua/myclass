@@ -912,7 +912,7 @@ app.use(`${PATH_PREFIX}/public/courseware`, (req, res, next) => {
     // 限制成不透明源，拿不到课堂页面/管理页的同源存储与账号数据。
     if (/\.html?$/i.test(filePath)) {
       res.setHeader('Content-Security-Policy',
-        'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock allow-fullscreen');
+        'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock');
       res.setHeader('X-Content-Type-Options', 'nosniff');
     }
   }
