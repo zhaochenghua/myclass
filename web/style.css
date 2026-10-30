@@ -630,6 +630,8 @@ video {
 
 /* 最右侧窄按钮：暂时收起工具栏，避免挡住投屏画面 */
 .toolbar-collapse {
+  /* 始终排到工具栏最右侧：动态追加的“本页视频”等按钮也不会把它挤到中间 */
+  order: 999;
   flex: 0 0 auto;
   width: 1.6rem;
   min-width: 1.6rem;
@@ -647,8 +649,7 @@ video {
   appearance: none;
 }
 
-.annotation-toolbar.is-collapsed > :not(.toolbar-collapse),
-.blackboard-toolbar.is-collapsed > :not(.toolbar-collapse) {
+.annotation-toolbar.is-collapsed > :not(.toolbar-collapse) {
   /* 内联 display 的按钮（例如“本页视频”）也要一起收起 */
   display: none !important;
 }

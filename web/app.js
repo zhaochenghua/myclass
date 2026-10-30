@@ -534,7 +534,6 @@ async function bootstrap() {
     elements.htmlCoursewareWindow?.addEventListener('click', openHtmlCoursewareWindow);
     elements.htmlCoursewareClose?.addEventListener('click', () => closeHtmlCourseware());
     setupToolbarCollapse(elements.annotationToolbar, document.getElementById('annotationToolbarCollapse'));
-    setupToolbarCollapse(document.querySelector('.blackboard-toolbar'), document.getElementById('blackboardToolbarCollapse'));
     // 黑板事件
     elements.blackboardCanvas.addEventListener('pointerdown', event => beginBlackboardStroke(TouchCalibration.eventFor(event)));
     elements.blackboardCanvas.addEventListener('pointermove', event => continueBlackboardStroke(TouchCalibration.eventFor(event)));
