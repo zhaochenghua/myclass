@@ -20,7 +20,8 @@ object ExternalFileReceiver {
     enum class HandleResult { IGNORED, FILE, LINK, DUPLICATE }
     private val queue = mutableListOf<Pending>()
     private var restored = false
-    private val extensions = setOf("pdf", "ppt", "pptx", "doc", "docx", "zip", "mp4", "mov", "avi", "webm", "mkv", "3gp", "jpg", "jpeg", "png", "gif", "webp", "bmp")
+    private val extensions = setOf("pdf", "ppt", "pptx", "doc", "docx", "zip", "html", "htm",
+        "mp4", "mov", "avi", "webm", "mkv", "3gp", "jpg", "jpeg", "png", "gif", "webp", "bmp")
     private fun prefs(context: Context) = context.getSharedPreferences("myclass_queue", Context.MODE_PRIVATE)
     private fun owner(context: Context) = context.getSharedPreferences("myclass_auth", Context.MODE_PRIVATE).getString("username", "").orEmpty()
     fun file(context: Context, item: Pending) = File(context.filesDir, "imports/${item.id}/payload")
@@ -117,7 +118,7 @@ object ExternalFileReceiver {
         } ?: uri.lastPathSegment ?: "courseware"
         val name = rawName.substringAfterLast('/').substringAfterLast('\\').replace(Regex("[\\r\\n]"), "_")
         val ext = name.substringAfterLast('.', "").lowercase()
-        if (ext !in extensions) throw IOException("不支持该格式，请选择文档、图片、视频或 ZIP")
+        if (ext !in extensions) throw IOException("不支持该格式，请选择文档、网页、图片、视频或 ZIP")
         val item = Pending(UUID.randomUUID().toString(), name, owner = owner(context))
         val target = file(context, item)
         target.parentFile?.mkdirs()
