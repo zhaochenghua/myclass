@@ -4056,6 +4056,11 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             textAlignment = View.TEXT_ALIGNMENT_GRAVITY
             text = coursewareButtonText(item)
             textSize = 14f
+            // 原来的大圆角看起来像椭圆，文字可用宽度被白白吃掉；改成小圆角并收窄内边距。
+            cornerRadius = dp(8)
+            insetTop = 0
+            insetBottom = 0
+            setPadding(dp(8), dp(4), dp(8), dp(4))
             playbackProgress = rememberedCoursewareProgress(item)
         }
 
@@ -4067,19 +4072,22 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
 
     private fun coursewareButtonText(item: StoredCoursewareItem): CharSequence {
         val (label, color) = coursewareTypeBadge(item)
-        val badge = "\u00a0${label.replace(' ', '\u00a0')}\u00a0"
-        val title = if (item.linkUrl.isNotBlank()) {
-            item.title
-        } else {
-            val size = formatCoursewareSize(item.size)
-            // 长文件名先占满两行，再把大小放到第三行，避免“1 KB”被拆成“1 / KB”。
-            if (item.title.length > 18) "${item.title}\n$size" else "${item.title}  $size"
-        }
-        return android.text.SpannableString("$badge ${title}").apply {
+        val size = if (item.linkUrl.isNotBlank()) "" else formatCoursewareSize(item.size)
+        val title = item.title.ifBlank { "未命名课件" }
+        // 类型和大小放到第二行，文件名独占第一行，能把长标题完整显示到两行。
+        val meta = if (size.isBlank()) label else "$label · $size"
+        val text = "$title\n$meta"
+        return android.text.SpannableString(text).apply {
             val flags = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            setSpan(android.text.style.BackgroundColorSpan(color), 0, badge.length, flags)
-            setSpan(android.text.style.ForegroundColorSpan(android.graphics.Color.WHITE), 0, badge.length, flags)
-            setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, badge.length, flags)
+            val metaStart = title.length + 1
+            val labelEnd = (metaStart + label.length).coerceAtMost(text.length)
+            setSpan(android.text.style.BackgroundColorSpan(color), metaStart, labelEnd, flags)
+            setSpan(android.text.style.ForegroundColorSpan(android.graphics.Color.WHITE), metaStart, labelEnd, flags)
+            setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), metaStart, labelEnd, flags)
+            setSpan(android.text.style.RelativeSizeSpan(0.76f), metaStart, text.length, flags)
+            setSpan(android.text.style.ForegroundColorSpan(
+                ContextCompat.getColor(this@MainActivity, R.color.myclass_muted)
+            ), labelEnd, text.length, flags)
         }
     }
 
