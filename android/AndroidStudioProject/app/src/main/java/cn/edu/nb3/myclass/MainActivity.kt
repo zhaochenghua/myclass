@@ -791,7 +791,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         }
         originalRoot?.let { findScroll(it)?.let { scroll -> coursewareListScrollY = scroll.scrollY } }
         Thread {
-            runCatching { fetchServerCoursewareListBlocking() }.onSuccess { items ->
+            runCatching {
+                fetchServerCoursewareListBlocking(if (server && studentSelectionConfirmed) selectedTeachingClassId else "")
+            }.onSuccess { items ->
                 runOnUiThread {
                     if (isDestroyed || serial != importListRefreshSerial || generation != authGeneration ||
                         currentScreen != screen || coursewareSubScreen != subScreen || content.getChildAt(0) !== originalRoot) return@runOnUiThread
@@ -1917,11 +1919,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 toast("设置尚未保存，请重试")
                 return@runOnUiThread
             }
+            val previousClassId = selectedTeachingClassId
+            val wasConfirmed = studentSelectionConfirmed
             selectedTeachingClassId = message.optString("classId")
             studentDrawMode = message.optString("mode", "name")
             studentDrawCount = message.optInt("count", 50).coerceIn(1, 80)
             studentSelectionConfirmed = message.optBoolean("confirmed")
             classSettingsButton?.text = classSettingsLabel()
+            // 上课中切换班级时，服务器课件列表的“上次进度”要换成新班级的进度。
+            if ((previousClassId != selectedTeachingClassId || wasConfirmed != studentSelectionConfirmed) &&
+                currentScreen == Screen.Courseware && coursewareSubScreen == CoursewareSubScreen.ServerList) {
+                loadServerCoursewareList()
+            }
             if (pending) {
                 classPickerDraft = null
                 classPickerDialog?.dismiss()
@@ -3282,7 +3291,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         showCoursewareListLoadingScreen()
         Thread {
             runCatching {
-                fetchServerCoursewareListBlocking()
+                fetchServerCoursewareListBlocking(if (studentSelectionConfirmed) selectedTeachingClassId else "")
             }.onSuccess { items ->
                 runOnUiThread {
                     showServerCoursewareList(items)
@@ -3349,6 +3358,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         currentScreen = if (management) Screen.CoursewareManagement else Screen.Courseware
         if (!management) coursewareSubScreen = CoursewareSubScreen.ServerList
         val screenTitle = if (management) "课件管理" else "服务器课件"
+        val classScope = if (management || !studentSelectionConfirmed) "" else
+            teachingClasses.find { it.id == selectedTeachingClassId }?.name.orEmpty()
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
         val uploadBtn = primaryButton(if (management) "上传课件" else "本地上传").apply {
@@ -3385,6 +3396,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
             leftPanel.addView(titleText(screenTitle, 22f))
+            if (classScope.isNotBlank()) leftPanel.addView(bodyText("当前班级：$classScope · 课件进度按班级分别保存").apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) }
+            })
 
             if (items.isEmpty()) {
                 leftPanel.addView(bodyText(if (management) "暂无课件" else "服务器还没有暂存课件").apply {
@@ -3482,6 +3499,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
             }
             root.addView(titleText(screenTitle, 28f))
+            if (classScope.isNotBlank()) root.addView(bodyText("当前班级：$classScope · 课件进度按班级分别保存").apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) }
+            })
 
             if (items.isEmpty()) {
                 root.addView(bodyText(if (management) "暂无课件" else "服务器还没有暂存课件").apply {
@@ -3565,9 +3588,10 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             setOnClickListener { triggerPendingUploadIfReady() }
         })
     }
-    private fun fetchServerCoursewareListBlocking(): List<StoredCoursewareItem> {
+    private fun fetchServerCoursewareListBlocking(classId: String = ""): List<StoredCoursewareItem> {
+        val query = if (classId.isBlank()) "" else "?classId=${Uri.encode(classId)}"
         val request = Request.Builder()
-            .url("${serverBaseUrl().trimEnd('/')}/api/courseware")
+            .url("${serverBaseUrl().trimEnd('/')}/api/courseware$query")
             .get()
             .also { addAuthHeader(it) }
             .build()
@@ -3751,6 +3775,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         if (isPdf && remembered > 1) {
             val generation = authGeneration
             val screen = currentScreen
+            val className = if (studentSelectionConfirmed) teachingClasses.find { it.id == selectedTeachingClassId }?.name else null
+            val classScope = if (className.isNullOrBlank()) "" else "（$className）"
             val loading = AlertDialog.Builder(this).setMessage("正在读取课件页码…").show()
             Thread {
                 val result = runCatching {
@@ -3779,7 +3805,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     val slide = result.getOrNull()
                     AlertDialog.Builder(this)
                         .setTitle("继续播放课件")
-                        .setMessage(if (slide != null) "上次播放到第${slide}页，从哪里开始？" else "暂时无法读取原始页码，是否从上次位置继续？")
+                        .setMessage(if (slide != null) "上次播放到第${slide}页${classScope}，从哪里开始？" else "暂时无法读取原始页码，是否从上次位置继续？")
                         .setNegativeButton("从第1页开始") { _, _ -> openStoredCoursewareNow(item, sourceItems, 1) }
                         .setPositiveButton(if (slide != null) "从第${slide}页继续" else "从上次位置继续") { _, _ -> openStoredCoursewareNow(item, sourceItems, remembered) }
                         .setOnCancelListener { openStoredCoursewareNow(item, sourceItems, remembered) }

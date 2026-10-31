@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const { startTestServer } = require('./testSupport');
 
 test('class APIs require authentication, isolate teachers and validate edits/deletion', async t => {
@@ -27,8 +29,7 @@ test('class APIs require authentication, isolate teachers and validate edits/del
   assert.equal((await server.api(route)).status, 404);
 });
 
-test('draw log API is teacher-scoped, keeps the round after clearing and stays out of class lists', async t => {
-  const server = await startTestServer();
+test('draw log API is teacher-scoped, keeps the round after clearing and stays out of class lists', async t => {  const server = await startTestServer();
   t.after(server.close);
   const { item } = await (await server.api('/classes', 'alice', 'POST', { name: '一班' })).json();
   const students = [{ number: '01', name: '张三' }, { number: '02', name: '李四' }];
@@ -53,4 +54,40 @@ test('draw log API is teacher-scoped, keeps the round after clearing and stays o
   // Clearing history must not let the next draw repeat the same round.
   const next = await (await server.api(`/classes/${item.id}/draw`, 'alice', 'POST', { mode: 'number' })).json();
   assert.equal(next.round, 2);
+});
+
+test('courseware list returns the requested class progress and class deletion clears it', async t => {
+  const now = new Date().toISOString();
+  const server = await startTestServer({
+    seed: async ({ serverRoot, coursewareRoot }) => {
+      await fs.writeFile(path.join(serverRoot, 'data', 'classes.json'), JSON.stringify([{
+        id: 'class-1', ownerId: 'alice', name: '高二（1）班',
+        students: [{ number: '01', name: '张三' }], revision: 1, updatedAt: now
+      }]));
+      await fs.mkdir(coursewareRoot, { recursive: true });
+      await fs.writeFile(path.join(coursewareRoot, 'book1.pdf'), 'pdf');
+      await fs.writeFile(path.join(coursewareRoot, 'index.json'), JSON.stringify([{
+        id: 'book1', userId: 'admin', title: '班级进度测试课件', fileName: 'book1.pdf',
+        url: '/myclass/public/courseware/book1.pdf', size: 3, createdAt: now,
+        playbackByUser: { alice: { page: 2, pageCount: 10, updatedAt: now } },
+        playbackByClass: { alice: { 'class-1': { page: 7, pageCount: 10, updatedAt: now } } }
+      }]));
+    }
+  });
+  t.after(server.close);
+
+  const genericResponse = await server.api('/courseware');
+  const generic = await genericResponse.json();
+  assert.equal(generic.items[0].playbackProgress.page, 2);
+  assert.equal(generic.items[0].playbackByClass, undefined);
+  assert.equal(genericResponse.headers.get('cache-control'), 'no-store');
+  const classed = await (await server.api('/courseware?classId=class-1')).json();
+  assert.equal(classed.items[0].playbackProgress.page, 7);
+  assert.equal((await server.api('/courseware?classId=bad%20class')).status, 400);
+
+  assert.equal((await server.api('/classes/class-1?revision=1', 'alice', 'DELETE')).status, 200);
+  const after = await (await server.api('/courseware?classId=class-1')).json();
+  assert.equal(after.items[0].playbackProgress, null);
+  // The unselected-class progress is deliberately kept.
+  assert.equal((await (await server.api('/courseware')).json()).items[0].playbackProgress.page, 2);
 });

@@ -630,6 +630,9 @@ app.put(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) =>
 app.delete(`${PATH_PREFIX}/api/classes/:id`, requireAuth, async (req, res, next) => {
   try {
     await classStore.remove(req.user.id, req.params.id, Number(req.query.revision));
+    // 班级删除后清理对应的课件播放进度，避免留下永远选不到的班级数据。
+    await coursewareStore.removeClassPlayback(req.user.id, req.params.id)
+      .catch(error => console.warn('清理班级课件进度失败:', error.message));
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
@@ -640,7 +643,13 @@ app.get(`${PATH_PREFIX}/api/courseware`, requireAuth, async (req, res, next) => 
     // 普通用户只能查看自己的+共享课件；管理员可查看全部
     const isAdmin = req.user.role === 'admin';
     const userId = (req.query.all === 'true' && isAdmin) ? null : req.user.id;
-    const items = await listStoredCourseware(userId);
+    // 课件列表在按班级上课时只返回该班的播放进度；不传则沿用未选班级的通用进度。
+    const classId = typeof req.query.classId === 'string' ? req.query.classId : '';
+    if (classId && !/^[A-Za-z0-9_-]{1,64}$/.test(classId)) {
+      res.status(400).json({ error: '无效班级' });
+      return;
+    }
+    const items = await listStoredCourseware(userId, classId);
     if (req.query.all === 'true' && isAdmin) {
       const users = await readUsers();
       const userMap = Object.fromEntries(users.map(u => [u.id, u.username]));
@@ -648,7 +657,7 @@ app.get(`${PATH_PREFIX}/api/courseware`, requireAuth, async (req, res, next) => 
         item.owner = userMap[item.userId] || (item.userId === 'admin' ? '所有人' : (item.userId || '未知'));
       });
     }
-    res.json({ items });
+    res.set('Cache-Control', 'no-store').json({ items });
   } catch (error) {
     next(error);
   }

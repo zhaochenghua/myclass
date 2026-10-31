@@ -1,12 +1,16 @@
 import { $, toast } from './util.js?v=20260919f';
 
-export function createClassroom(state) {
+export function createClassroom(state, { onChange } = {}) {
   let classes = [], selected = { classId: '', mode: 'name', count: 50, confirmed: false };
   let room = null, generation = 0, selectionRequest = null, rollRequest = null, viewerOnline = true;
   let selectionTimer, rollTimer, openGeneration = 0;
   const dialog = $('classroomDialog');
   const id = () => `phone-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const send = payload => state.joined && state.signaling?.joined && viewerOnline && state.signaling.send(payload);
+  const notifyChange = previous => {
+    if (selected.classId === previous.classId && selected.confirmed === previous.confirmed) return;
+    try { onChange?.(selected.classId); } catch { /* never block the classroom UI */ }
+  };
   const render = () => {
     const item = classes.find(item => item.id === selected.classId);
     $('menuClassroom').textContent = item ? `班级：${item.name} · ${selected.mode === 'name' ? '抽姓名' : '抽学号'}` : '班级 / 抽取设置';
@@ -66,10 +70,12 @@ export function createClassroom(state) {
   function receive(message) {
     if (!state.joined || (message.requestId && message.requestId !== selectionRequest) || (selectionRequest && !message.requestId)) return;
     const pending = !!selectionRequest;
+    const previous = { classId: selected.classId, confirmed: selected.confirmed };
     clearTimeout(selectionTimer); selectionRequest = null; $('classroomApply').disabled = false;
     if (message.error) { $('classroomError').textContent = message.error; toast(message.error, { warn: true }); return; }
     selected = { classId: message.classId, mode: message.mode, count: message.count, confirmed: message.confirmed };
     render();
+    notifyChange(previous);
     if (pending) { dialog.hidden = true; toast('班级与抽取设置已同步到大屏'); }
   }
   function draw() {
@@ -88,8 +94,10 @@ export function createClassroom(state) {
   }
   function reset() {
     generation++; openGeneration++; room = null; classes = []; selectionRequest = null;
+    const previous = { classId: selected.classId, confirmed: selected.confirmed };
     selected = { classId: '', mode: 'name', count: 50, confirmed: false };
     clearTimeout(selectionTimer); finishRoll(); dialog.hidden = true; render();
+    notifyChange(previous);
   }
   function sync() {
     if (selected.confirmed) apply({ classId: selected.classId, mode: selected.mode, count: selected.count });
@@ -107,6 +115,10 @@ export function createClassroom(state) {
   $('classroomRetry').addEventListener('click', () => open());
   return {
     reset, receive,
+    currentClassId() { return selected.confirmed ? (selected.classId || '') : ''; },
+    currentClassName() {
+      return selected.confirmed ? (classes.find(item => item.id === selected.classId)?.name || '') : '';
+    },
     joined() { if (room !== state.roomCode) { reset(); room = state.roomCode; open(true); } sync(); },
     viewer(online) { const restored = !viewerOnline && online; viewerOnline = online; if (restored && state.signaling?.joined) sync(); },
     result(message) {

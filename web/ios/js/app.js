@@ -27,11 +27,11 @@ import {
   isIos
 } from './util.js?v=20260919f';
 import { SignalingClient, resolveWebSocketUrl } from './signaling.js?v=20261022-shared-viewport';
-import { createClassroom } from './classroom.js?v=20260919f';
+import { createClassroom } from './classroom.js?v=20261031-classprogress';
 import { LivePublisher } from './publisher.js';
 import { MediaPipeline } from './pipeline.js?v=20260920a';
 import { mediaPreviewGeometry } from './mediaGeometry.js?v=20260920a';
-import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261030-html';
+import { CoursewareClient, coursewareFormatLabel } from './courseware.js?v=20261031-classprogress';
 import { mediaKind, prepareImageFile, ensureMediaUploaded } from './mediaFiles.mjs?v=20261012-ios3';
 import { AnnotationBoard, stylusBusy, PEN_WIDTH_LEVELS } from './annotation.js?v=20261022-start';
 import { openPdfDocument, renderPdfPage, destroyPdfDocument } from './pdfview.js?v=20261029-pdfcompat';
@@ -109,7 +109,14 @@ const state = {
 let viewerCoursewareViewport = null;
 
 // ---------------------------------------------------------------- 引导
-const classroom = createClassroom(state);
+const classroom = createClassroom(state, {
+  onChange: () => {
+    // 切换班级后，课件列表里的“上次进度”要换成新班级的进度。
+    if (state.joined && state.token && state.screen === 'CoursewareList') {
+      loadServerCourseware({ forManage: coursewareManageMode });
+    }
+  }
+});
 let campusChecking = false;
 
 // 校园服务自检的超时时间：超过就判为失败，老师可点“重新检测”。
@@ -2947,17 +2954,21 @@ function showCoursewareSource() {
 }
 
 let coursewareManageMode = false;
+let coursewareListRequest = 0;
 async function loadServerCourseware({ forManage = false } = {}) {
   coursewareManageMode = forManage;
   if (!state.coursewareClient) return;
+  const requestId = ++coursewareListRequest;
   state.screen = 'CoursewareList';
   showView('CoursewareList');
   $('cwListBody').innerHTML = '<p class="list-empty">正在加载服务器暂存课件...</p>';
 
   try {
-    const items = await state.coursewareClient.list();
+    const items = await state.coursewareClient.list(classroom.currentClassId());
+    if (requestId !== coursewareListRequest) return;
     renderCoursewareList(items, forManage);
   } catch (error) {
+    if (requestId !== coursewareListRequest) return;
     $('cwListBody').innerHTML = `<p class="list-empty">${error.message || '加载失败'}</p>`;
   }
 }
@@ -2967,8 +2978,15 @@ function renderCoursewareList(items, forManage) {
   coursewareListPreviews?.destroy();
   coursewareListPreviews = new ListPreviews(body);
   body.innerHTML = '';
+  const className = forManage ? '' : classroom.currentClassName();
+  if (className) {
+    const hint = document.createElement('p');
+    hint.className = 'list-scope';
+    hint.textContent = `当前班级：${className} · 课件进度按班级分别保存`;
+    body.appendChild(hint);
+  }
   if (items.length === 0) {
-    body.innerHTML = '<p class="list-empty">暂无课件</p>';
+    body.insertAdjacentHTML('beforeend', '<p class="list-empty">暂无课件</p>');
     return;
   }
 
@@ -3161,7 +3179,9 @@ function openCourseware(item) {
   }
 
   const saved = Number(item.playbackProgress?.page) || 1;
-  const startPage = saved > 1 && window.confirm('上次播放到第 ' + saved + ' 页。确定继续，取消从第一页开始。') ? saved : 1;
+  const savedClass = classroom.currentClassName();
+  const savedScope = savedClass ? `（${savedClass}）` : '';
+  const startPage = saved > 1 && window.confirm(`上次播放到第 ${saved} 页${savedScope}。确定继续，取消从第一页开始。`) ? saved : 1;
   // 改播课件时清掉图片视频队列，避免投屏界面残留切换按钮
   resetMediaCastState();
   stopLive({ notify: false });

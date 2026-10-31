@@ -362,3 +362,39 @@ test('playback progress persists per teacher, survives restart and stays private
   await reopened.savePlayback('alice',shared.url,1,20);
   assert.equal((await reopened.list('alice')).find(i=>i.id===shared.id).playbackProgress.page,1);
 });
+
+test('playback progress is kept separately for each class and only for its own teacher', async t => {
+  const f = await fixture(t);
+  const shared = await f.upload('class-shared.pdf', 'admin');
+  await f.store.savePlayback('alice', shared.url, 4, 20);
+  await f.store.savePlayback('bob', shared.url, 8, 20);
+  await f.store.savePlayback('alice', shared.url, 7, 20, 'class-1');
+  await f.store.savePlayback('alice', shared.url, 15, 20, 'class-2');
+  await f.store.savePlayback('bob', shared.url, 3, 20, 'class-1');
+
+  const reopened = createCoursewareStore({ root: f.root, prefix: '/myclass' });
+  const generic = (await reopened.list('alice')).find(item => item.id === shared.id);
+  assert.equal(generic.playbackProgress.page, 4);
+  assert.equal(generic.playbackByClass, undefined);
+  assert.equal((await reopened.list('alice', 'class-1')).find(item => item.id === shared.id).playbackProgress.page, 7);
+  assert.equal((await reopened.list('alice', 'class-2')).find(item => item.id === shared.id).playbackProgress.page, 15);
+  // Another class or another teacher never inherits the progress above.
+  assert.equal((await reopened.list('alice', 'class-3')).find(item => item.id === shared.id).playbackProgress, null);
+  assert.equal((await reopened.list('bob', 'class-1')).find(item => item.id === shared.id).playbackProgress.page, 3);
+  assert.equal((await reopened.list('bob', 'class-2')).find(item => item.id === shared.id).playbackProgress, null);
+
+  // Class IDs are user supplied, so they must never reach Object.prototype.
+  assert.equal(await reopened.savePlayback('alice', shared.url, 2, 20, '__proto__'), true);
+  assert.equal((await reopened.list('alice', '__proto__')).find(item => item.id === shared.id).playbackProgress.page, 2);
+  assert.equal({}.page, undefined);
+  assert.equal(await reopened.savePlayback('alice', shared.url, 2, 20, 'bad class'), false);
+  await assert.rejects(reopened.list('alice', 'bad class'), { status: 400 });
+
+  // Removing one class clears only that class for that teacher.
+  assert.equal(await reopened.removeClassPlayback('alice', 'class-1'), true);
+  assert.equal((await reopened.list('alice', 'class-1')).find(item => item.id === shared.id).playbackProgress, null);
+  assert.equal((await reopened.list('alice', 'class-2')).find(item => item.id === shared.id).playbackProgress.page, 15);
+  assert.equal((await reopened.list('alice')).find(item => item.id === shared.id).playbackProgress.page, 4);
+  assert.equal((await reopened.list('bob', 'class-1')).find(item => item.id === shared.id).playbackProgress.page, 3);
+  assert.equal(await reopened.removeClassPlayback('alice', 'class-1'), false);
+});

@@ -22,6 +22,18 @@ function normalizeLink(url) {
   catch { return ''; }
 }
 
+// Class IDs are UUIDs. Playback progress is kept per teacher and, when a class
+// is selected for the lesson, per class as well. An empty key means "no class"
+// and keeps the historical shared progress working unchanged.
+const CLASS_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+function classKey(value) {
+  if (value === undefined || value === null || value === '') return '';
+  return typeof value === 'string' && CLASS_ID_PATTERN.test(value) ? value : null;
+}
+function own(object, key) {
+  return Boolean(object) && Object.prototype.hasOwnProperty.call(object, key);
+}
+
 // One store per server process. All index mutations (including file publication
 // and removal) share this queue; readers see either the old or the new index.
 function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0, officeProfile = () => '',
@@ -324,7 +336,9 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     });
   }
 
-  async function list(userId) {
+  async function list(userId, classId = '') {
+    const classIdKey = classKey(classId);
+    if (classIdKey === null) throw storageError(400, '无效班级');
     const items = (await readIndex())
       .filter(item => !userId || !item.userId || item.userId === 'admin' || item.userId === 'legacy' || item.userId === userId)
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
@@ -341,8 +355,15 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
           throw error;
         }
       }
-      const { playbackByUser, ...publicItem } = item;
-      visible.push({ ...publicItem, playbackProgress: playbackByUser?.[userId || item.userId] || null });
+      const { playbackByUser, playbackByClass, ...publicItem } = item;
+      const ownerKey = userId || item.userId;
+      const classProgress = classIdKey && own(playbackByClass, ownerKey) && own(playbackByClass[ownerKey], classIdKey)
+        ? playbackByClass[ownerKey][classIdKey]
+        : null;
+      const progress = classIdKey
+        ? classProgress
+        : (own(playbackByUser, ownerKey) ? playbackByUser[ownerKey] : null);
+      visible.push({ ...publicItem, playbackProgress: progress || null });
       if (listLimit > 0 && visible.length >= listLimit) break;
     }
     return visible;
@@ -560,17 +581,32 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     }
   }
 
-  function savePlayback(userId, url, page, pageCount) {
-    if (!userId || !Number.isInteger(page) || !Number.isInteger(pageCount) ||
+  function savePlayback(userId, url, page, pageCount, classId = '') {
+    const classIdKey = classKey(classId);
+    if (!userId || classIdKey === null || !Number.isInteger(page) || !Number.isInteger(pageCount) ||
         page < 1 || pageCount < page || pageCount > 100000) return Promise.resolve(false);
     return mutate(async () => {
       const items = await readIndex();
       const item = items.find(entry => entry.url === url);
       if (!item || (item.userId && !['admin', 'legacy', userId].includes(item.userId))) return false;
-      const previous = item.playbackByUser?.[userId];
-      if (previous?.page === page && previous.pageCount === pageCount) return true;
-      item.playbackByUser = { ...item.playbackByUser,
-        [userId]: { page, pageCount, updatedAt: new Date().toISOString() } };
+      const progress = { page, pageCount, updatedAt: new Date().toISOString() };
+      if (classIdKey) {
+        const byClass = { ...(item.playbackByClass || {}) };
+        const userClasses = { ...(own(byClass, userId) ? byClass[userId] : {}) };
+        const previous = own(userClasses, classIdKey) ? userClasses[classIdKey] : null;
+        if (previous?.page === page && previous.pageCount === pageCount) return true;
+        Object.defineProperty(userClasses, classIdKey,
+          { value: progress, enumerable: true, configurable: true, writable: true });
+        Object.defineProperty(byClass, userId,
+          { value: userClasses, enumerable: true, configurable: true, writable: true });
+        item.playbackByClass = byClass;
+      } else {
+        const previous = own(item.playbackByUser, userId) ? item.playbackByUser[userId] : null;
+        if (previous?.page === page && previous.pageCount === pageCount) return true;
+        item.playbackByUser = { ...(item.playbackByUser || {}) };
+        Object.defineProperty(item.playbackByUser, userId,
+          { value: progress, enumerable: true, configurable: true, writable: true });
+      }
       // Keep retries inside the mutation queue: an older retry must never
       // overwrite a more recent page or another teacher's progress.
       for (let attempt = 0; ; attempt++) {
@@ -581,6 +617,30 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
         }
       }
       return true;
+    });
+  }
+
+  // A deleted class must not leave progress behind for a class id that will
+  // never be selectable again. Only the owning teacher's entries are touched.
+  function removeClassPlayback(userId, classId) {
+    const classIdKey = classKey(classId);
+    if (!userId || !classIdKey) return Promise.resolve(false);
+    return mutate(async () => {
+      const items = await readIndex();
+      let changed = false;
+      for (const item of items) {
+        if (!own(item.playbackByClass, userId)) continue;
+        const userClasses = item.playbackByClass[userId];
+        if (!own(userClasses, classIdKey)) continue;
+        delete userClasses[classIdKey];
+        changed = true;
+        if (!Object.keys(userClasses).length) {
+          delete item.playbackByClass[userId];
+          if (!Object.keys(item.playbackByClass).length) delete item.playbackByClass;
+        }
+      }
+      if (changed) await saveIndex(items);
+      return changed;
     });
   }
 
@@ -740,7 +800,7 @@ function createCoursewareStore({ root, prefix, convertOfficeToPdf, listLimit = 0
     });
   }
 
-  return { publish, list, remember, remove, rename, readIndex, savePlayback, hasLink, fileNotes,
+  return { publish, list, remember, remove, rename, readIndex, savePlayback, removeClassPlayback, hasLink, fileNotes,
     embeddedVideos, notes, saveNote, notesSupported, scanMissingFonts, regenerate };
 }
 

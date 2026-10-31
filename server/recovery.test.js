@@ -246,11 +246,39 @@ test('progress persistence uses the authenticated teacher and rejects stale view
   const state={type:'courseware.state',url:opened.url,page:4,pageCount:30,presentationRevision:opened.presentationRevision};
   f.viewer.sendJson(state);
   await f.teacher.take('courseware.state');
-  assert.deepEqual(saved,[['alice',opened.url,4,30]]);
+  assert.deepEqual(saved,[['alice',opened.url,4,30,'']]);
   f.viewer.sendJson({...state,page:1,presentationRevision:opened.presentationRevision-1});
   f.viewer.sendJson({type:'client.ping'});
   await f.viewer.take('server.pong');
   assert.equal(saved.length,1);
+});
+
+test('confirmed classroom selection scopes saved progress to that class until it is cleared', async t => {
+  const f = await fixture(t), saved = [];
+  f.manager.savePlayback = (...args) => { saved.push(args); return Promise.resolve(true); };
+  f.manager.rooms.get(f.room.code).teacherInfo = { id: 'alice', username: 'alice' };
+  f.send({ type: 'courseware.open', url: '/myclass/class-book.pdf', page: 1 });
+  const opened = await f.viewer.take('courseware.open');
+  const selection = { type: 'student.selection.state', requestId: '', classId: 'class-1',
+    mode: 'name', count: 50, confirmed: true };
+  f.viewer.sendJson(selection);
+  await f.teacher.take('student.selection.state');
+  const state = { type: 'courseware.state', url: opened.url, page: 7, pageCount: 30,
+    presentationRevision: opened.presentationRevision };
+  f.viewer.sendJson(state);
+  await f.teacher.take('courseware.state');
+  assert.deepEqual(saved.at(-1), ['alice', opened.url, 7, 30, 'class-1']);
+  // Selecting "no class" (or an unconfirmed selection) returns to the shared progress.
+  f.viewer.sendJson({ ...selection, classId: '', confirmed: true });
+  await f.teacher.take('student.selection.state');
+  f.viewer.sendJson({ ...state, page: 8 });
+  await f.teacher.take('courseware.state');
+  assert.deepEqual(saved.at(-1), ['alice', opened.url, 8, 30, '']);
+  f.viewer.sendJson({ ...selection, confirmed: false, error: '大屏未确认' });
+  await f.teacher.take('student.selection.state');
+  f.viewer.sendJson({ ...state, page: 9 });
+  await f.teacher.take('courseware.state');
+  assert.deepEqual(saved.at(-1), ['alice', opened.url, 9, 30, '']);
 });
 
 test('the shared range report never overwrites the teacher zoom and works after a legacy-shaped rejoin', async t => {

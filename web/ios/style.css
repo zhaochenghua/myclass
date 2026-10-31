@@ -611,6 +611,17 @@ button.file-thumbnail { cursor: pointer; }
   font-size: 0.9rem;
 }
 
+/* 当前班级提示：课件列表里的播放进度按班级分别保存，避免误以为是全学年统一进度。 */
+.list-scope {
+  margin: 0 0 0.4rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  color: var(--accent);
+  background: rgba(101, 240, 200, 0.12);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 /* ---------- 图片视频投屏 ---------- */
 .media-body {
   position: relative;

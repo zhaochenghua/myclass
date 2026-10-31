@@ -10,8 +10,9 @@ export class CoursewareClient {
     this.token = token;
   }
 
-  async list() {
-    const data = await this.#request('/courseware', { method: 'GET' });
+  async list(classId = '') {
+    const query = classId ? `?classId=${encodeURIComponent(classId)}` : '';
+    const data = await this.#request(`/courseware${query}`, { method: 'GET' });
     return Array.isArray(data?.items) ? data.items : [];
   }
 

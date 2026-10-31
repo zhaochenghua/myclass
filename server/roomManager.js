@@ -50,6 +50,8 @@ class RoomManager {
       viewerSocket,
       teacherSocket: null,
       teacherInfo: null,
+      // 当前课堂确认的任教班级；空字符串表示“不选择班级”，沿用通用进度。
+      classId: '',
       presentation: new PresentationState(),
       presentationRevision: 0,
       createdAt: now,
@@ -105,6 +107,7 @@ class RoomManager {
       room.presentation.reset();
       room.presentationRevision++;
       room.teacherInfo = null;
+      room.classId = '';
     }
     if (isOpen(room.teacherSocket)) {
       sendJson(room.viewerSocket, { type: 'teacher.online', ...room.teacherInfo });
@@ -134,7 +137,10 @@ class RoomManager {
       this.socketIndex.delete(room.teacherSocket);
     }
 
-    if (room.teacherInfo?.username !== teacherInfo?.username) room.presentation.reset();
+    if (room.teacherInfo?.username !== teacherInfo?.username) {
+      room.presentation.reset();
+      room.classId = '';
+    }
     room.teacherSocket = teacherSocket;
     room.teacherInfo = teacherInfo ? { id: teacherInfo.id, username: teacherInfo.username, token: teacherInfo.token,
       supportsStudentSelection: teacherInfo.supportsStudentSelection === true } : null;
@@ -225,6 +231,13 @@ class RoomManager {
     }
     const samePresentation = payload.type === 'courseware.open' && room.presentation.open?.url === payload.url;
     room.presentation.apply(payload, binding.role);
+    // The big screen is authoritative for the selected class. It reports the
+    // confirmation (or "no class") through student.selection.state, so progress
+    // saved below always belongs to the class actually used for this lesson.
+    if (payload.type === 'student.selection.state' && binding.role === 'viewer') {
+      room.classId = payload.confirmed === true && typeof payload.classId === 'string' &&
+        /^[A-Za-z0-9_-]{1,64}$/.test(payload.classId) ? payload.classId : '';
+    }
     if (savedNotes) {
       room.presentation.maxPoints = Infinity;
       room.presentation.strokes = [...savedNotes.strokes, ...savedNotes.active];
@@ -236,7 +249,7 @@ class RoomManager {
     // request. Old Android and iOS clients already produce these acknowledgements.
     if (payload.type === 'courseware.state' && binding.role === 'viewer' &&
         room.teacherInfo?.id && room.presentation.open?.url === payload.url && this.savePlayback) {
-      Promise.resolve(this.savePlayback(room.teacherInfo.id, payload.url, payload.page, payload.pageCount))
+      Promise.resolve(this.savePlayback(room.teacherInfo.id, payload.url, payload.page, payload.pageCount, room.classId))
         .catch(error => console.error('Failed to save courseware progress:', error.message));
     }
     const sent = samePresentation && room.viewerSocket?.supportsRecovery
