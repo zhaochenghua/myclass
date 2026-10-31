@@ -532,6 +532,7 @@ input::placeholder {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  min-width: 0;
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -558,9 +559,22 @@ input::placeholder {
   opacity: 0.7;
 }
 
-.file-thumbnail { display: flex; align-items: center; justify-content: center; flex: 0 0 96px; width: 96px; height: 54px; padding: 0; border: 0; overflow: hidden; border-radius: 6px; background: #203238; color: var(--muted); font-size: 0.7rem; }
+.file-thumbnail { display: flex; align-items: center; justify-content: center; flex: 0 0 96px; width: 96px; height: 72px; padding: 0; border: 0; overflow: hidden; border-radius: 6px; background: #203238; color: var(--muted); font-size: 0.7rem; }
 button.file-thumbnail { cursor: pointer; }
 .file-thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
+/* 网页 / 链接没有可渲染的页面，用固定 4:3 的色块缩略图补齐，双列时不会缺一格。 */
+.file-thumbnail.is-html,
+.file-thumbnail.is-link {
+  flex-direction: column;
+  gap: 0.08rem;
+  color: #f0fdfa;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.file-thumbnail.is-html { background: linear-gradient(135deg, #0f766e, #134e4a); }
+.file-thumbnail.is-link { background: linear-gradient(135deg, #1d4ed8, #1e3a8a); }
+.file-thumbnail.is-html::before { content: "HTML"; font-size: 0.58rem; font-weight: 700; opacity: 0.8; }
+.file-thumbnail.is-link::before { content: "URL"; font-size: 0.58rem; font-weight: 700; opacity: 0.8; }
 .cw-item-main.has-playback-progress { border-radius: 7px; background: linear-gradient(to right, rgba(101,240,200,0.20) var(--playback-progress), transparent var(--playback-progress)); }
 .cw-item-progress-label { display: block; margin-top: 0.25rem; color: var(--accent); font-size: 0.72rem; font-weight: 400; }
 .cw-item-progress-label[hidden] { display: none; }
@@ -608,13 +622,23 @@ button.file-thumbnail { cursor: pointer; }
 
 .cw-item-title {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.35rem;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
 }
-.cw-item-title > span:last-child { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* 文件名最多两行；长英文名没有空格时也强制断行，避免把双列卡片撑出边界。 */
+.cw-item-title > span:last-child {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
 
 .cw-item-meta {
   display: block;

@@ -3068,18 +3068,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     }
                     row.layoutParams = android.widget.GridLayout.LayoutParams().apply {
                         width = 0
-                        height = ViewGroup.LayoutParams.WRAP_CONTENT
+                        height = dp(84)
                         columnSpec = android.widget.GridLayout.spec(index % 2, 1, 1f)
                         setMargins(if (index % 2 == 0) 0 else dp(6), dp(2), if (index % 2 == 0) dp(6) else 0, dp(2))
                     }
                     addCoursewareThumbnail(row, item)
-                row.addView(coursewareProgressButton(item).apply {
-                        maxLines = 2
+                    row.addView(coursewareProgressButton(item).apply {
+                        maxLines = 3
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
                         layoutParams = LinearLayout.LayoutParams(
                             0,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
                             1f
                         ).apply { marginEnd = dp(4) }
                         setOnClickListener { openStoredCourseware(item, items) }
@@ -3144,7 +3144,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     }
                     addCoursewareThumbnail(row, item)
                 row.addView(coursewareProgressButton(item).apply {
-                        maxLines = 2
+                        maxLines = 3
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
                         layoutParams = LinearLayout.LayoutParams(
@@ -3455,18 +3455,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     }
                     row.layoutParams = android.widget.GridLayout.LayoutParams().apply {
                         width = 0
-                        height = ViewGroup.LayoutParams.WRAP_CONTENT
+                        height = dp(84)
                         columnSpec = android.widget.GridLayout.spec(index % 2, 1, 1f)
                         setMargins(if (index % 2 == 0) 0 else dp(6), dp(2), if (index % 2 == 0) dp(6) else 0, dp(2))
                     }
                     addCoursewareThumbnail(row, item)
-                row.addView(coursewareProgressButton(item).apply {
-                        maxLines = 2
+                    row.addView(coursewareProgressButton(item).apply {
+                        maxLines = 3
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
                         layoutParams = LinearLayout.LayoutParams(
                             0,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
                             1f
                         ).apply { marginEnd = dp(4) }
                         setOnClickListener {
@@ -3561,7 +3561,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     }
                     addCoursewareThumbnail(row, item)
                 row.addView(coursewareProgressButton(item).apply {
-                        maxLines = 2
+                        maxLines = 3
                         setSingleLine(false)
                         ellipsize = TextUtils.TruncateAt.END
                         layoutParams = LinearLayout.LayoutParams(
@@ -3975,8 +3975,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun formatCoursewareSize(size: Long): String =
         when {
             size <= 0L -> "大小未知"
-            size >= 1024L * 1024L -> "${size / 1024L / 1024L} MB"
-            else -> "${(size / 1024L).coerceAtLeast(1L)} KB"
+            size >= 1024L * 1024L -> "${size / 1024L / 1024L}\u00a0MB"
+            else -> "${(size / 1024L).coerceAtLeast(1L)}\u00a0KB"
         }
 
     private fun coursewareFormatLabel(item: StoredCoursewareItem): String {
@@ -4006,18 +4006,48 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private fun addCoursewareThumbnail(row: LinearLayout, item: StoredCoursewareItem) {
         val kind = mediaKindOf(item.url)
         val page = if (kind == CastMediaKind.Pdf) item.lastPage.coerceAtLeast(1) else null
-        val previewTitle = item.title
         val url = absoluteCoursewareUrl(item.url)
-        if (url != null && item.linkUrl.isBlank() && kind in listOf(CastMediaKind.Image, CastMediaKind.Pdf, CastMediaKind.Video)) {
-            row.addView(CoursewareThumbnail(this, url, dp(240), page, kind == CastMediaKind.Video).apply {
-                contentDescription = "预览：$previewTitle"
-                layoutParams = LinearLayout.LayoutParams(dp(96), dp(54)).apply { marginEnd = dp(8) }
-                setOnClickListener {
-                    previewManagementCourseware(item)
-                }
-            })
+        val source = item.url.substringBefore('?').substringBefore('#')
+        val isHtml = item.kind == "html" || source.endsWith(".html", ignoreCase = true) ||
+            source.endsWith(".htm", ignoreCase = true)
+        when {
+            item.linkUrl.isNotBlank() -> row.addView(coursewareThumbnailPlaceholder("链接", 0xff1d4ed8.toInt()))
+            isHtml -> row.addView(coursewareThumbnailPlaceholder("网页", 0xff0f766e.toInt()))
+            url != null && kind in listOf(CastMediaKind.Image, CastMediaKind.Pdf, CastMediaKind.Video) -> {
+                row.addView(CoursewareThumbnail(this, url, dp(240), page, kind == CastMediaKind.Video).apply {
+                    contentDescription = "预览：${item.title}"
+                    layoutParams = LinearLayout.LayoutParams(dp(96), dp(72)).apply { marginEnd = dp(8) }
+                    setOnClickListener {
+                        previewManagementCourseware(item)
+                    }
+                })
+            }
+            else -> {
+                val (rawLabel, color) = coursewareTypeBadge(item)
+                val label = rawLabel.replace("↗ ", "").replace("▶ ", "").ifBlank { "文件" }
+                row.addView(coursewareThumbnailPlaceholder(label, color))
+            }
         }
     }
+
+    /** 网页、链接和暂不支持预览的课件也用 4:3 占位图，保证双列列表的缩略图列始终对齐。 */
+    private fun coursewareThumbnailPlaceholder(label: String, color: Int): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            maxLines = 2
+            includeFontPadding = false
+            contentDescription = "$label 缩略图"
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat()
+                setColor(color)
+                setStroke(dp(1), Color.argb(0.25f, 1f, 1f, 1f))
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(96), dp(72)).apply { marginEnd = dp(8) }
+        }
 
     private fun coursewareProgressButton(item: StoredCoursewareItem): MaterialButton =
         CoursewareProgressButton(this).apply {
@@ -4041,7 +4071,9 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val title = if (item.linkUrl.isNotBlank()) {
             item.title
         } else {
-            "${item.title}  ${formatCoursewareSize(item.size)}"
+            val size = formatCoursewareSize(item.size)
+            // 长文件名先占满两行，再把大小放到第三行，避免“1 KB”被拆成“1 / KB”。
+            if (item.title.length > 18) "${item.title}\n$size" else "${item.title}  $size"
         }
         return android.text.SpannableString("$badge ${title}").apply {
             val flags = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE

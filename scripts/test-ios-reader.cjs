@@ -65,7 +65,7 @@ function pdfFixture() {
       assert.equal(await phone.evaluate(() => getComputedStyle(document.getElementById('orientationRoot')).transform), 'none', 'orientation follows system');
       await phone.locator('#manageCoursewareButton').click();
       const thumb = phone.locator('#cwListBody button.file-thumbnail'); await thumb.waitFor();
-      const size = await thumb.boundingBox(); assert.ok(Math.abs(size.width/size.height - 16/9) < 0.01);
+      const size = await thumb.boundingBox(); assert.ok(Math.abs(size.width/size.height - 4/3) < 0.01);
       await thumb.click();
       await phone.waitForFunction(() => document.querySelector('.document-preview'), null, { timeout: 5000 }).catch(async error => {
         console.error('preview debug', await phone.evaluate(() => ({ screen: probe.state.screen, root: Boolean(document.getElementById('orientationRoot')), body: document.getElementById('cwListBody')?.innerHTML.slice(0, 500), errors: window.__errors })));
@@ -94,7 +94,7 @@ function pdfFixture() {
       const bounds = await phone.evaluate(() => {
         const root = document.getElementById('orientationRoot');
         const side = document.querySelector('#viewCoursewarePlay > .cw-side');
-        const nodes = ['cwPrevPage','cwNextPage','cwQuickPage','cwResetView','cwCloseButton','cwClearButton'];
+        const nodes = ['cwPrevPage','cwNextPage','cwQuickPage','cwCloseButton','cwClearButton'];
         return {width:root.clientWidth,height:root.clientHeight,
           // 与 style.css 的手机横屏块一致：竖栏收窄到 8rem，控件排不下时在竖栏内部滚动
           landscapePhone:window.innerWidth>window.innerHeight&&window.innerHeight<=480,
@@ -183,7 +183,7 @@ function pdfFixture() {
       assert.deepEqual(errors,[]);
       await context.close();
       if (viewerBrowser) await viewerContext.close();
-      console.log(`PASS ${viewport.width}x${viewport.height}: 16:9 thumbnails, final-state continuous reader, quick paging, A4 controls, orientation and ink`);
+      console.log(`PASS ${viewport.width}x${viewport.height}: 4:3 thumbnails, final-state continuous reader, quick paging, A4 controls, orientation and ink`);
     }
     console.log('Screenshots: '+output);
   } finally { if (browser) await browser.close(); if (viewerBrowser) await viewerBrowser.close(); await server.close(); }

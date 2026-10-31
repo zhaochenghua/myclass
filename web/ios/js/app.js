@@ -3079,6 +3079,10 @@ function renderCoursewareList(items, forManage, className = '') {
       `${formatBytes(item.size)} · ${formatDate(item.createdAt)}`;
     const thumbnail = coursewareListPreviews.add(item, cwTypeText,
       item.linkUrl || item.kind === 'html' ? null : () => documentPreview.open(item));
+    if (thumbnail) {
+      if (item.linkUrl) thumbnail.classList.add('is-link');
+      else if (item.kind === 'html' || /\.html?(\?|$)/i.test(item.url || '')) thumbnail.classList.add('is-html');
+    }
     const progress = /\.pdf(?:[?#]|$)/i.test(item.url || '') ? playbackProgress(item) : null;
     if (progress) {
       main.classList.add('has-playback-progress');
