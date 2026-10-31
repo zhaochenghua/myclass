@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
-    <link rel="stylesheet" href="./style.css?v=20261031-classprogress" />
+    <link rel="stylesheet" href="./style.css?v=20261031-classmanage" />
   </head>
   <body>
     <div id="orientationRoot">
@@ -276,6 +276,10 @@
           <h2 class="list-title">服务器课件</h2>
           <button class="pill" id="cwListRefresh" type="button">刷新</button>
         </header>
+        <div class="list-filter" id="cwManageClassFilter" hidden>
+          <label for="cwManageClass">查看班级</label>
+          <select id="cwManageClass" aria-label="查看班级进度"></select>
+        </div>
         <div class="list-body" id="cwListBody"></div>
         <footer class="list-footer">
           <button class="btn btn-ghost" data-clipboard-link type="button">剪贴板链接</button>
@@ -425,7 +429,7 @@
     <div class="toast" id="toast" hidden></div>
     </div>
     <script src="../inkRenderer.js?v=20261027-ink-anchor"></script>
-    <script type="module" src="./js/app.js?v=20261031-classprogress"></script>
+    <script type="module" src="./js/app.js?v=20261031-classmanage"></script>
   </body>
 </html>
 

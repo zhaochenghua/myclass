@@ -160,6 +160,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     private data class TeachingClass(val id: String, val name: String, val size: Int)
     private var teachingClasses = emptyList<TeachingClass>()
     private var selectedTeachingClassId = ""
+    // 课件管理页独立选择的“查看班级”，不影响正在上课的班级选择。
+    private var managementClassId = ""
     private var studentDrawMode = "name"
     private var studentDrawCount = 50
     private var studentSelectionConfirmed = false
@@ -749,6 +751,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         authUsername = null
         teachingClasses = emptyList()
         selectedTeachingClassId = ""
+        managementClassId = ""
         studentSelectionConfirmed = false
         classPickerRoom = null
         classPickerDraft = null
@@ -792,7 +795,12 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         originalRoot?.let { findScroll(it)?.let { scroll -> coursewareListScrollY = scroll.scrollY } }
         Thread {
             runCatching {
-                fetchServerCoursewareListBlocking(if (server && studentSelectionConfirmed) selectedTeachingClassId else "")
+                val classId = when {
+                    management -> managementClassId
+                    server && studentSelectionConfirmed -> selectedTeachingClassId
+                    else -> ""
+                }
+                fetchServerCoursewareListBlocking(classId)
             }.onSuccess { items ->
                 runOnUiThread {
                     if (isDestroyed || serial != importListRefreshSerial || generation != authGeneration ||
@@ -1384,11 +1392,18 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         showScreenView(root)
 
         Thread {
+            val token = authToken
+            val classes = if (token != null) runCatching { fetchTeachingClassesBlocking(token) }
+                .getOrElse { teachingClasses } else emptyList()
+            if (managementClassId.isNotEmpty() && classes.none { it.id == managementClassId }) {
+                managementClassId = ""
+            }
             runCatching {
-                fetchServerCoursewareListBlocking()
+                fetchServerCoursewareListBlocking(managementClassId)
             }.onSuccess { items ->
                 runOnUiThread {
                     if (!isDestroyed && authGeneration == generation && currentScreen == Screen.CoursewareManagement) {
+                        teachingClasses = classes
                         showCoursewareManagementList(items)
                     }
                 }
@@ -1713,18 +1728,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
         val room = activeRoomCode ?: return
         classPickerLoading = true
         Thread {
-            val loaded = runCatching {
-                val request = Request.Builder().url("${serverBaseUrl().trimEnd('/')}/api/classes")
-                    .header("Authorization", "Bearer $token").build()
-                authHttpClient.newCall(request).execute().use { response ->
-                    if (response.code == 401) throw TokenExpiredException()
-                    if (!response.isSuccessful) throw IOException("班级加载失败（${response.code}）")
-                    val items = JSONObject(response.body?.string().orEmpty()).getJSONArray("items")
-                    List(items.length()) { i -> items.getJSONObject(i).let {
-                        TeachingClass(it.getString("id"), it.getString("name"), it.getJSONArray("students").length())
-                    } }
-                }
-            }
+            val loaded = runCatching { fetchTeachingClassesBlocking(token) }
             runOnUiThread {
                 classPickerLoading = false
                 if (isDestroyed || authToken != token || activeRoomCode != room || !roomJoined) return@runOnUiThread
@@ -1738,6 +1742,20 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
         }.start()
+    }
+
+    private fun fetchTeachingClassesBlocking(token: String): List<TeachingClass> {
+        val request = Request.Builder().url("${serverBaseUrl().trimEnd('/')}/api/classes")
+            .header("Authorization", "Bearer $token").build()
+        return authHttpClient.newCall(request).execute().use { response ->
+            if (response.code == 401) throw TokenExpiredException()
+            if (!response.isSuccessful) throw IOException("班级加载失败（${response.code}）")
+            val items = JSONObject(response.body?.string().orEmpty()).getJSONArray("items")
+            List(items.length()) { index ->
+                val item = items.getJSONObject(index)
+                TeachingClass(item.getString("id"), item.getString("name"), item.getJSONArray("students").length())
+            }
+        }
     }
 
     private fun showPhoneClassPicker() {
@@ -3084,7 +3102,7 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     marginStart = dp(20)
                 }
             }
-            compactLandscapeAction(backBtn, dp(58), dp(12))
+            compactLandscapeAction(backBtn, dp(58), dp(12), dp(168))
             rightPanel.addView(backBtn)
             rightPanel.addView(landscapeVersionLabel())
 
@@ -3396,12 +3414,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 }
             }
             leftPanel.addView(titleText(screenTitle, 22f))
-            if (classScope.isNotBlank()) leftPanel.addView(bodyText("当前班级：$classScope · 课件进度按班级分别保存").apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(4) }
-            })
+            if (management) {
+                leftPanel.addView(managementClassButton())
+            } else if (classScope.isNotBlank()) {
+                leftPanel.addView(bodyText("当前班级：$classScope · 课件进度按班级分别保存").apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(4) }
+                })
+            }
 
             if (items.isEmpty()) {
                 leftPanel.addView(bodyText(if (management) "暂无课件" else "服务器还没有暂存课件").apply {
@@ -3483,8 +3505,8 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                     marginStart = dp(20)
                 }
             }
-            compactLandscapeAction(uploadBtn, dp(58), dp(16))
-            compactLandscapeAction(backBtn, dp(58), dp(12))
+            compactLandscapeAction(uploadBtn, dp(58), dp(16), dp(168))
+            compactLandscapeAction(backBtn, dp(58), dp(12), dp(168))
             if (management) addPendingCoursewareUploadActions(rightPanel)
             rightPanel.addView(uploadBtn)
             rightPanel.addView(backBtn)
@@ -3499,12 +3521,16 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
                 setPadding(dp(28), dp(32), dp(28), dp(32))
             }
             root.addView(titleText(screenTitle, 28f))
-            if (classScope.isNotBlank()) root.addView(bodyText("当前班级：$classScope · 课件进度按班级分别保存").apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(4) }
-            })
+            if (management) {
+                root.addView(managementClassButton())
+            } else if (classScope.isNotBlank()) {
+                root.addView(bodyText("当前班级：$classScope · 课件进度按班级分别保存").apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(4) }
+                })
+            }
 
             if (items.isEmpty()) {
                 root.addView(bodyText(if (management) "暂无课件" else "服务器还没有暂存课件").apply {
@@ -3579,6 +3605,83 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
             root.addView(versionLabel())
             showScreenView(root)
         }
+    }
+
+    /**
+     * 课件管理页的班级筛选按钮。单独一行、单行省略，横屏左栏和竖屏窄屏都不会挤压标题。
+     */
+    private fun managementClassButton(): MaterialButton {
+        val className = teachingClasses.find { it.id == managementClassId }?.name
+        val label = if (className.isNullOrBlank()) "查看班级进度：不选择（通用进度）"
+        else "查看班级进度：$className"
+        return secondaryButton(label).apply {
+            isAllCaps = false
+            textSize = 14f
+            setSingleLine(true)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            insetTop = 0
+            insetBottom = 0
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(12), dp(9), dp(12), dp(9))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(44)
+            ).apply { topMargin = dp(8) }
+            setOnClickListener { showManagementClassPicker() }
+        }
+    }
+
+    private fun showManagementClassPicker() {
+        val token = authToken
+        if (teachingClasses.isEmpty()) {
+            if (token == null) {
+                toast("请先登录后查看班级进度")
+                return
+            }
+            toast("正在加载班级…")
+            val generation = authGeneration
+            Thread {
+                val result = runCatching { fetchTeachingClassesBlocking(token) }
+                runOnUiThread {
+                    if (isDestroyed || authToken != token || authGeneration != generation ||
+                        currentScreen != Screen.CoursewareManagement) return@runOnUiThread
+                    result.onSuccess { classes ->
+                        teachingClasses = classes
+                        if (managementClassId.isNotEmpty() && classes.none { it.id == managementClassId }) {
+                            managementClassId = ""
+                        }
+                        showManagementClassDialog(classes)
+                    }.onFailure {
+                        if (it is TokenExpiredException) onAuthenticationExpired(token)
+                        else toast(it.message ?: "班级加载失败")
+                    }
+                }
+            }.start()
+            return
+        }
+        showManagementClassDialog(teachingClasses)
+    }
+
+    private fun showManagementClassDialog(classes: List<TeachingClass>) {
+        val labels = arrayOf("不选择班级（通用进度）") + classes.map { "${it.name}（${it.size} 人）" }
+        val index = classes.indexOfFirst { it.id == managementClassId }
+        val checked = if (index >= 0) index + 1 else 0
+        AlertDialog.Builder(this)
+            .setTitle("查看班级进度")
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                dialog.dismiss()
+                val next = if (which == 0) "" else classes.getOrNull(which - 1)?.id.orEmpty()
+                if (next != managementClassId) {
+                    managementClassId = next
+                    showCoursewareManagement()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun addPendingCoursewareUploadActions(panel: LinearLayout) {
@@ -7617,13 +7720,13 @@ class MainActivity : AppCompatActivity(), SignalingClient.Callback {
     }
 
     /** 横屏列表右侧操作栏按最长按钮文字自适应，不再占据半个屏幕。 */
-    private fun compactLandscapeAction(button: MaterialButton, height: Int, topMargin: Int) {
+    private fun compactLandscapeAction(button: MaterialButton, height: Int, topMargin: Int, width: Int = 0) {
         button.minWidth = 0
         button.minimumWidth = 0
         button.setSingleLine(true)
         button.setPadding(dp(12), 0, dp(12), 0)
         button.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
+            if (width > 0) width else ViewGroup.LayoutParams.WRAP_CONTENT,
             height
         ).apply { this.topMargin = topMargin }
     }

@@ -111,9 +111,10 @@ let viewerCoursewareViewport = null;
 // ---------------------------------------------------------------- 引导
 const classroom = createClassroom(state, {
   onChange: () => {
-    // 切换班级后，课件列表里的“上次进度”要换成新班级的进度。
-    if (state.joined && state.token && state.screen === 'CoursewareList') {
-      loadServerCourseware({ forManage: coursewareManageMode });
+    // 切换上课班级后，播放列表里的“上次进度”要换成新班级的进度；
+    // 课件管理页有独立的查看班级，不跟着变。
+    if (!coursewareManageMode && state.joined && state.token && state.screen === 'CoursewareList') {
+      loadServerCourseware({ forManage: false });
     }
   }
 });
@@ -314,6 +315,7 @@ async function apiMe() {
 
 function clearAuth() {
   classroom.reset();
+  resetManageClasses();
   state.token = null;
   state.username = null;
   storage.remove('token');
@@ -353,6 +355,7 @@ async function performAuth(isRegister) {
 
     state.token = payload.token;
     state.username = payload.username;
+    resetManageClasses();
     storage.set('token', payload.token);
     storage.set('username', payload.username);
     state.coursewareClient?.setToken(payload.token);
@@ -2955,34 +2958,95 @@ function showCoursewareSource() {
 
 let coursewareManageMode = false;
 let coursewareListRequest = 0;
-async function loadServerCourseware({ forManage = false } = {}) {
+// 课件管理页独立选择“查看哪个班的进度”，不影响正在上课的班级。
+let manageClasses = [];
+let manageClassesLoaded = false;
+let manageClassId = '';
+let manageClassesRequest = 0;
+
+function resetManageClasses() {
+  manageClasses = [];
+  manageClassesLoaded = false;
+  manageClassId = '';
+  manageClassesRequest += 1;
+}
+
+function renderManageClassOptions() {
+  const select = $('cwManageClass');
+  if (!select) return;
+  select.replaceChildren(new Option('不选择班级（通用进度）', ''),
+    ...manageClasses.map(item => new Option(`${item.name}（${(item.students || []).length} 人）`, item.id)));
+  select.value = manageClassId;
+}
+
+async function ensureManageClasses() {
+  if (manageClassesLoaded) return manageClasses;
+  if (!state.token) {
+    manageClassesLoaded = true;
+    manageClasses = [];
+    renderManageClassOptions();
+    return manageClasses;
+  }
+  const requestId = ++manageClassesRequest;
+  const response = await fetch(`${state.apiBase}/classes`, {
+    headers: { Authorization: `Bearer ${state.token}` },
+    cache: 'no-store'
+  });
+  if (!response.ok) {
+    throw new Error(response.status === 401 ? '登录已过期，请重新登录' : '班级加载失败，请重试');
+  }
+  const data = await response.json();
+  if (requestId !== manageClassesRequest) return manageClasses;
+  manageClasses = Array.isArray(data.items) ? data.items : [];
+  manageClassesLoaded = true;
+  if (manageClassId && !manageClasses.some(item => item.id === manageClassId)) manageClassId = '';
+  renderManageClassOptions();
+  return manageClasses;
+}
+
+async function loadServerCourseware({ forManage = false, classId = null } = {}) {
   coursewareManageMode = forManage;
   if (!state.coursewareClient) return;
   const requestId = ++coursewareListRequest;
   state.screen = 'CoursewareList';
   showView('CoursewareList');
+  const manageFilter = $('cwManageClassFilter');
+  if (manageFilter) manageFilter.hidden = !forManage;
+  if (forManage) {
+    try {
+      await ensureManageClasses();
+      if (requestId !== coursewareListRequest) return;
+    } catch (error) {
+      if (requestId === coursewareListRequest) toast(error.message || '班级加载失败，仍显示通用进度', { warn: true });
+    }
+  }
+  const requestedClassId = classId !== null ? classId : (forManage ? manageClassId : classroom.currentClassId());
+  const requestedClassName = forManage
+    ? (manageClasses.find(item => item.id === requestedClassId)?.name || '')
+    : classroom.currentClassName();
   $('cwListBody').innerHTML = '<p class="list-empty">正在加载服务器暂存课件...</p>';
 
   try {
-    const items = await state.coursewareClient.list(classroom.currentClassId());
+    const items = await state.coursewareClient.list(requestedClassId);
     if (requestId !== coursewareListRequest) return;
-    renderCoursewareList(items, forManage);
+    renderCoursewareList(items, forManage, requestedClassName);
   } catch (error) {
     if (requestId !== coursewareListRequest) return;
     $('cwListBody').innerHTML = `<p class="list-empty">${error.message || '加载失败'}</p>`;
   }
 }
 
-function renderCoursewareList(items, forManage) {
+function renderCoursewareList(items, forManage, className = '') {
   const body = $('cwListBody');
   coursewareListPreviews?.destroy();
   coursewareListPreviews = new ListPreviews(body);
   body.innerHTML = '';
-  const className = forManage ? '' : classroom.currentClassName();
   if (className) {
     const hint = document.createElement('p');
     hint.className = 'list-scope';
-    hint.textContent = `当前班级：${className} · 课件进度按班级分别保存`;
+    hint.textContent = forManage
+      ? `查看班级：${className} · 仅显示该班课件进度`
+      : `当前班级：${className} · 课件进度按班级分别保存`;
     body.appendChild(hint);
   }
   if (items.length === 0) {
@@ -3559,7 +3623,15 @@ function bindStaticEvents() {
   });
   $('userMenuAdmin').addEventListener('click', openAdminConsole);
   $('userMenuSwitch').addEventListener('click', switchUserAccount);
-  $('manageCoursewareButton').addEventListener('click', () => loadServerCourseware({ forManage: true }));
+  $('manageCoursewareButton').addEventListener('click', () => {
+    // 重新进入课件管理时刷新班级列表，后台刚改过班级也能看到。
+    manageClassesLoaded = false;
+    loadServerCourseware({ forManage: true });
+  });
+  $('cwManageClass').addEventListener('change', () => {
+    manageClassId = $('cwManageClass').value;
+    loadServerCourseware({ forManage: true, classId: manageClassId });
+  });
 
   $('menuCamera').addEventListener('click', () => openCameraLive());
   $('menuMedia').addEventListener('click', () => showMediaSource());
@@ -3673,7 +3745,10 @@ function bindStaticEvents() {
   $('cwFileInput').addEventListener('change', (event) => uploadCourseware(event.target.files?.[0]));
 
   $('cwListBack').addEventListener('click', () => showMenu());
-  $('cwListRefresh').addEventListener('click', () => loadServerCourseware({ forManage: coursewareManageMode }));
+  $('cwListRefresh').addEventListener('click', () => {
+    if (coursewareManageMode) manageClassesLoaded = false;
+    loadServerCourseware({ forManage: coursewareManageMode });
+  });
   $('cwListUpload').addEventListener('click', () => pickCoursewareFile());
   $('cwListFileInput').addEventListener('change', (event) => uploadCourseware(event.target.files?.[0]));
 
